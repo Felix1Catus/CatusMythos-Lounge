@@ -236,3 +236,22 @@ than hidden. What's not done yet: a from-scratch test suite exercising the
 merged scripts together (each source's own tests still apply to its own
 scripts), and the `kimi-mythos` / non-Claude engine variant, which is the
 next module once this one is solid.
+
+Since v0.1, a live engagement surfaced and fixed two real behavioral bugs,
+not just merge-seam issues:
+
+- `vuln-chain-composer`'s chain-correlation templates used to escalate
+  every category-matched chain straight to CRITICAL regardless of whether
+  any supporting evidence existed — a username-disclosure finding once
+  auto-became a reported CVSS 10.0 "account takeover." Every chain now
+  carries a `confidence` field (`"confirmed"` only when the finding data
+  actually supports the specific claim) and severity amplification is
+  gated on it.
+- `swarm-operator` only ever read 2 of the doctrine's 14 protocols at
+  startup and had no structural check against fixating on one bug class —
+  it's now required to read all 14 (the creative-mutation and
+  error-as-oracle protocols, P09/P10, were always there and just weren't
+  being consulted), runs a breadth checklist across ~13 vulnerability
+  classes before going deep on any one, and has an explicit capability
+  check so it stops and hands back cleanly when a step needs a live
+  browser session instead of attempting a tool call it doesn't have.

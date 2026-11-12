@@ -24,6 +24,71 @@ def warn(msg):
     print(f"[!] {msg}")
 
 
+import re as _re
+
+# A chain's whole point is "primitive A, when actually chained to primitive B,
+# becomes worse than either alone" -- but every template below used to escalate
+# straight to CRITICAL/HIGH the moment the required FINDING CATEGORIES existed,
+# with several conditions hardcoded to always pass (`cloud_hosted`,
+# `has_auth_system` both just returned True). That's a template match, not a
+# proven chain, and it is exactly what produced a CVSS 10.0 "Account Takeover"
+# on a real engagement where no credential was ever actually found -- the
+# underlying finding was a username disclosure, not a leaked secret.
+#
+# Fix: every chain now carries a `confidence` field. "unconfirmed" (the
+# default) keeps the PRIMARY FINDING's OWN reported severity -- it is reported
+# as a hypothesis/lead worth investigating, not as the amplified severity.
+# "confirmed" is only set when the template's own evidence check (below)
+# finds something in the finding data that actually supports the specific
+# chain claim, and only then does calculate_impact.py apply the CVSS
+# override / amplified severity.
+_CREDENTIAL_PATTERNS = _re.compile(
+    r"(?i)(password\s*[:=]|api[_-]?key\s*[:=]|secret[_-]?key\s*[:=]|"
+    r"AKIA[0-9A-Z]{16}|-----BEGIN\s+(RSA|OPENSSH|PGP|PRIVATE)|"
+    r"bearer\s+[a-z0-9._-]{20,}|authorization\s*:\s*\S{20,}|"
+    r"client_secret\s*[:=])"
+)
+
+
+def _finding_text(f):
+    """All the free-text fields worth scanning for real evidence, joined."""
+    parts = [
+        str(f.get("evidence", "")), str(f.get("note", "")), str(f.get("title", "")),
+        json.dumps(f.get("raw", {})) if f.get("raw") else "",
+    ]
+    return " ".join(parts)
+
+
+def _credential_evidence_present(matched_findings):
+    """For the info-disclosure->credential-reuse chain: is there an actual
+    credential-shaped string in the evidence, or just 'information was
+    disclosed' (a username, a version string, an email address, ...)?"""
+    for f in matched_findings.get("info", []):
+        if _CREDENTIAL_PATTERNS.search(_finding_text(f)):
+            return True
+    return False
+
+
+def _cloud_metadata_evidence_present(findings):
+    """For SSRF->cloud chain: does any finding's own evidence actually show
+    the metadata endpoint was reached (not just 'this looks cloud-hosted')?"""
+    for f in findings:
+        if _re.search(r"169\.254\.169\.254|metadata\.google\.internal|/latest/meta-data",
+                       _finding_text(f) + f.get("url", ""), _re.I):
+            return True
+    return False
+
+
+def _auth_system_evidence_present(findings):
+    """For SQLi->account-takeover chain: is there an actual discovered login/
+    auth surface in this engagement's own findings, not just 'most apps have
+    one'?"""
+    return any(
+        _re.search(r"login|signin|sign-in|/auth|/wp-login|/admin", f.get("url", ""), _re.I)
+        for f in findings
+    )
+
+
 # Chain templates: (vuln_a_category, vuln_b_category) -> chain description
 CHAIN_TEMPLATES = [
     {
@@ -215,11 +280,16 @@ def find_chains(findings):
                 condition_met = len(all_domains) >= 1
 
         elif condition == "cloud_hosted":
-            # Assume cloud-hosted (common scenario)
+            # This gate decides whether to SURFACE the hypothesis at all, not
+            # whether to trust it -- stays permissive (SSRF is itself worth
+            # flagging as a lead regardless), but it no longer silently
+            # becomes the reason a CRITICAL gets reported: see `confidence`
+            # below, which checks for REAL metadata-endpoint evidence before
+            # any severity amplification happens.
             condition_met = True
 
         elif condition == "has_auth_system":
-            condition_met = True  # Most apps have auth
+            condition_met = True  # same: a plausibility gate, not proof -- see `confidence` below
 
         elif condition == "has_oauth":
             # Check if any finding mentions OAuth/SSO
@@ -234,13 +304,41 @@ def find_chains(findings):
         if not condition_met:
             continue
 
+        # Does this SPECIFIC chain have real supporting evidence, or is it
+        # purely a category-name match? Only the templates we have an actual
+        # evidence check for can ever be "confirmed" -- everything else stays
+        # "unconfirmed" (a lead to investigate, not a finding to report at
+        # the amplified severity) until a human verifies it.
+        if template["name"] == "Info Disclosure + Credential Reuse = Account Takeover":
+            confidence = "confirmed" if _credential_evidence_present(matched_findings) else "unconfirmed"
+        elif template["name"] == "SSRF to Cloud Infrastructure Compromise":
+            confidence = "confirmed" if _cloud_metadata_evidence_present(findings) else "unconfirmed"
+        elif template["name"] == "SQLi to Credential Theft to Account Takeover":
+            confidence = "confirmed" if _auth_system_evidence_present(findings) else "unconfirmed"
+        else:
+            # No evidence-check implemented yet for this template -- stay
+            # honest about that rather than silently trusting the category
+            # match the way every template used to.
+            confidence = "unconfirmed"
+
         # Build concrete chains from matched findings
         primary_category = template["requires"][0][0]
         for finding in matched_findings.get(primary_category, []):
+            amplified_severity = "CRITICAL" if "CRITICAL" in template["impact_amplifier"] else "HIGH"
             chain = {
                 "name": template["name"],
                 "description": template["description"],
                 "impact_amplification": template["impact_amplifier"],
+                "confidence": confidence,
+                "confidence_note": (
+                    "Evidence in the matched finding(s) supports this specific chain claim."
+                    if confidence == "confirmed" else
+                    "This is a PATTERN MATCH on finding categories, not a proven chain -- "
+                    "no evidence in the finding data confirms the chain's premise "
+                    "(e.g. no actual credential string found, no metadata-endpoint hit "
+                    "observed). Treat as a lead to manually verify, not a confirmed "
+                    "finding at the amplified severity."
+                ),
                 "primary_finding": {
                     "id": finding["id"],
                     "type": finding["type"],
@@ -252,7 +350,10 @@ def find_chains(findings):
                 "steps": [],
                 "feasibility": 7,  # Default, adjusted below
                 "impact": 9,
-                "overall_severity": "CRITICAL" if "CRITICAL" in template["impact_amplifier"] else "HIGH",
+                # Only amplify severity when the chain is actually confirmed --
+                # otherwise report it at the primary finding's own reported
+                # severity, which is what it's known to be worth right now.
+                "overall_severity": amplified_severity if confidence == "confirmed" else finding["severity"],
             }
 
             # Add supporting findings

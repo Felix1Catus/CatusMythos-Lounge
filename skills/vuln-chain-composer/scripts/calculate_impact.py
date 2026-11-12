@@ -221,8 +221,18 @@ def calculate_chain_cvss(chain):
     """Calculate CVSS for a chain based on its combined impact."""
     chain_name = chain.get("name", "")
 
-    # Check if we have a specific amplification rule
-    rule = AMPLIFICATION_RULES.get(chain_name)
+    # Check if we have a specific amplification rule -- but ONLY apply its
+    # severity override when correlate.py actually confirmed the chain with
+    # real evidence (chain["confidence"] == "confirmed"). An "unconfirmed"
+    # chain (the default -- a category-name pattern match, nothing more)
+    # falls through to the generic heuristic below, which scores off the
+    # chain's own (unamplified) overall_severity instead of blanket-applying
+    # a hardcoded CRITICAL CVSS vector to every category match. This is the
+    # fix for a real false positive: an engagement's username-disclosure
+    # finding matched "Info Disclosure + Credential Reuse = Account
+    # Takeover" on category alone and was reported as CVSS 10.0 / CRITICAL
+    # with no credential ever actually found.
+    rule = AMPLIFICATION_RULES.get(chain_name) if chain.get("confidence") == "confirmed" else None
     if rule:
         metrics = rule["cvss_override"]
         scope = metrics.get("S", "U")
@@ -274,6 +284,12 @@ def calculate_chain_cvss(chain):
         justification_parts.append("Scope changed: chain crosses trust boundaries")
     if metrics["C"] == "H":
         justification_parts.append("High confidentiality impact from combined chain effect")
+
+    if chain.get("confidence") == "unconfirmed":
+        justification_parts.append(
+            "UNCONFIRMED CHAIN: this is a category-name pattern match, not a verified "
+            "exploit chain -- " + chain.get("confidence_note", "no supporting evidence was found.")
+        )
 
     return {
         "cvss_score": score,
