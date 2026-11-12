@@ -3,6 +3,12 @@
 Active Reconnaissance Module - recon-dominator
 DNS brute-force, zone transfers, and virtual host discovery.
 Author: orizon.one
+
+Wildcard-DNS suppression in dns_bruteforce() merged in from
+Masriyan/Claude-Code-CyberSecurity-Skill's skills/01-recon-osint/scripts/
+subdomain_enum.py (MIT, see NOTICE-MASRIYAN.md) — without it, a domain with
+a wildcard A record makes every single brute-force candidate "resolve",
+drowning real subdomains in false positives.
 """
 
 import argparse
@@ -42,8 +48,20 @@ def resolve_dns(hostname, timeout=3):
         return []
 
 
+def detect_wildcard_dns(domain, timeout=3):
+    """Resolve a random, almost-certainly-nonexistent subdomain to see if the
+    zone wildcards everything to the same IP(s). Returns the set of wildcard
+    IPs (empty set if no wildcard is present)."""
+    probe = f"wildcard-probe-{int(time.time())}-nonexistent.{domain}"
+    ips = resolve_dns(probe, timeout)
+    if ips:
+        warn(f"Wildcard DNS detected on {domain} (resolves to {', '.join(ips)}) — "
+             f"brute-force matches resolving ONLY to these IPs will be suppressed as false positives.")
+    return set(ips)
+
+
 def dns_bruteforce(domain, wordlist_path, threads=50, timeout=3):
-    """Brute-force subdomains using a wordlist."""
+    """Brute-force subdomains using a wordlist, suppressing wildcard-only false positives."""
     log(f"Starting DNS brute-force on {domain}...")
 
     wordlist = Path(wordlist_path)
@@ -55,12 +73,14 @@ def dns_bruteforce(domain, wordlist_path, threads=50, timeout=3):
     words = [w.strip() for w in words if w.strip() and not w.startswith("#")]
     log(f"Loaded {len(words)} words from wordlist")
 
+    wildcard_ips = detect_wildcard_dns(domain, timeout)
+
     found = {}
 
     def check_subdomain(word):
         hostname = f"{word}.{domain}"
         ips = resolve_dns(hostname, timeout)
-        if ips:
+        if ips and not (wildcard_ips and set(ips) <= wildcard_ips):
             return (hostname, ips)
         return None
 
@@ -77,7 +97,8 @@ def dns_bruteforce(domain, wordlist_path, threads=50, timeout=3):
                 found[hostname] = ips
                 success(f"Found: {hostname} -> {', '.join(ips)}")
 
-    success(f"DNS brute-force complete: {len(found)} subdomains found")
+    success(f"DNS brute-force complete: {len(found)} subdomains found"
+            + (" (wildcard-only matches suppressed)" if wildcard_ips else ""))
     return found
 
 

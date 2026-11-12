@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 """
 Technology Fingerprinting Module - recon-dominator
-Detects web technologies, frameworks, CMS, and security headers.
+Detects web technologies, frameworks, CMS, WAF/CDN, analytics, and security headers.
 Author: orizon.one
+
+WAF/CDN/analytics detection merged in from Masriyan/Claude-Code-CyberSecurity-Skill's
+skills/01-recon-osint/scripts/tech_fingerprint.py (MIT, see NOTICE-MASRIYAN.md), reimplemented
+against stdlib urllib instead of `requests` so this skill keeps its zero-pip-dependency design.
 """
 
 import argparse
@@ -97,7 +101,30 @@ BODY_SIGNATURES = [
     (r"jenkins", "Jenkins"),
     (r"gitlab", "GitLab"),
     (r"minio", "MinIO"),
+    (r"connect\.facebook\.net|fbq\(", "Facebook Pixel"),
 ]
+
+# WAF signatures: header/cookie substring -> WAF name (merged from Masriyan's collection)
+WAF_SIGNATURES = {
+    "cf-ray": "Cloudflare WAF",
+    "__cfduid": "Cloudflare WAF",
+    "x-amzn-requestid": "AWS WAF",
+    "x-akamai": "Akamai",
+    "akamaighost": "Akamai",
+    "x-sucuri-id": "Sucuri",
+    "x-sucuri-cache": "Sucuri",
+    "mod_security": "ModSecurity",
+    "noyb": "ModSecurity",
+}
+
+# CDN signatures: specific header name -> CDN name (checked via exact header presence)
+CDN_HEADER_SIGNATURES = {
+    "cf-cache-status": "Cloudflare",
+    "x-amz-cf-id": "AWS CloudFront",
+    "x-fastly-request-id": "Fastly",
+    "x-cdn": None,  # value itself names the CDN
+    "x-akamai-transformed": "Akamai",
+}
 
 COOKIE_SIGNATURES = {
     "PHPSESSID": "PHP",
@@ -157,6 +184,24 @@ def fingerprint_host(host):
             for cookie_name, tech in COOKIE_SIGNATURES.items():
                 if cookie_name.lower() in cookies.lower():
                     technologies.add(tech)
+
+            # WAF detection (header + cookie substring match)
+            combined_lower = (" ".join(f"{k}:{v}" for k, v in headers.items()) + " " + cookies).lower()
+            wafs = set()
+            for sig, waf_name in WAF_SIGNATURES.items():
+                if sig in combined_lower:
+                    wafs.add(waf_name)
+            if wafs:
+                details["waf"] = sorted(wafs)
+
+            # CDN detection (specific header presence)
+            headers_lower = {k.lower(): v for k, v in headers.items()}
+            cdns = set()
+            for hdr, cdn_name in CDN_HEADER_SIGNATURES.items():
+                if hdr in headers_lower:
+                    cdns.add(cdn_name or headers_lower[hdr])
+            if cdns:
+                details["cdn"] = sorted(cdns)
 
             # Security headers analysis
             security = {}
@@ -231,10 +276,16 @@ def main():
         futures = {executor.submit(fingerprint_host, host): host for host in hosts}
         for future in as_completed(futures):
             result = future.result()
+            extra_bits = []
+            if result["details"].get("waf"):
+                extra_bits.append(f"WAF: {', '.join(result['details']['waf'])}")
+            if result["details"].get("cdn"):
+                extra_bits.append(f"CDN: {', '.join(result['details']['cdn'])}")
+            extra = f" [{' | '.join(extra_bits)}]" if extra_bits else ""
             if result["technologies"]:
-                success(f"{result['host']}: {', '.join(result['technologies'])}")
+                success(f"{result['host']}: {', '.join(result['technologies'])}{extra}")
             else:
-                log(f"{result['host']}: no technologies detected")
+                log(f"{result['host']}: no technologies detected{extra}")
             results.append(result)
 
     # Build tech matrix

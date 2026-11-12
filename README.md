@@ -90,22 +90,33 @@ DOMAIN INPUT
     │
     ▼
 recon-dominator        subdomain enum, port scan, OSINT, dorking, Wayback
-    │                  + folded-in: Masriyan dns_recon.py, subdomain_enum.py
+    │                  + Masriyan's WAF/CDN/analytics detection merged into tech_fingerprint.py
+    │                  + Masriyan's wildcard-DNS suppression merged into active_recon.py
+    │                  + folded-in as-is: dns_recon.py (SPF/DMARC/reverse-DNS, zero overlap)
     ├──► webapp-exploit-hunter   SQLi, XSS, SSRF, SSTI, IDOR, auth bypass, upload, race
-    │        + folded-in: Masriyan owasp_scanner.py
+    │        + Masriyan's server-version-disclosure check merged into auth_tester.py
     ├──► api-breaker             API discovery, BOLA/BFLA, JWT, mass assignment, GraphQL
-    │        + folded-in: Masriyan api_security_tester.py
+    │        (assessed Masriyan's api_security_tester.py — every check it ran was already
+    │         covered more thoroughly by Felix's own scripts; nothing to add)
     └──► cloud-pivot-finder      cloud detection, bucket/takeover/CI-CD/serverless exposure
-             + folded-in: Masriyan cloud_auditor.py, iac_scanner.py
+             + folded-in as-is: cloud_auditor.py, iac_scanner.py (different access model —
+               authenticated cloud posture + at-rest IaC, genuinely complementary)
                  │
                  ▼
          attack-path-architect   asset/trust mapping, MITRE ATT&CK trees, kill chains
-             + folded-in: Masriyan mitre_mapper.py, engagement_planner.py
+             + folded-in as-is: mitre_mapper.py (ATT&CK technique DB + SIEM queries),
+               engagement_planner.py — both zero-overlap new capability
                  │
                  ▼
          vuln-chain-composer     cross-domain correlation, exploit chains, CVSS, reports
-             + folded-in: Masriyan cvss_calculator.py, dependency_auditor.py, config_auditor.py
+             + Masriyan's spec-correct CVSS round-up merged into calculate_impact.py
+             + folded-in as-is: cvss_calculator.py, dependency_auditor.py, config_auditor.py
 ```
+
+Every one of those merge decisions — what got ported into an existing
+script vs. shipped alongside it vs. left out entirely, and why — is
+assessed and recorded file-by-file in [MERGE_MAP.md](MERGE_MAP.md), not
+just asserted here.
 
 ## Everything else (Masriyan's domain coverage, shipped standalone)
 

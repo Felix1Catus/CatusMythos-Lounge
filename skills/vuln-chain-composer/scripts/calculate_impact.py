@@ -3,11 +3,19 @@
 Impact Calculator - vuln-chain-composer
 Recalculates CVSS and severity when vulnerabilities are chained.
 Author: orizon.one
+
+Round-up fixed per the CVSS v3.1 spec's integer algorithm, ported from
+Masriyan/Claude-Code-CyberSecurity-Skill's cvss_calculator.py (MIT, see
+NOTICE-MASRIYAN.md): the original `math.ceil(score * 10) / 10` under-scores
+results whose true value sits exactly on a floating-point representation
+error just below a 0.1 boundary (e.g. a true 7.0 stored as 6.999999999998
+ceils to 7.0 correctly here, but a true 7.05 stored as 7.0499999999997 due
+to float error would wrongly ceil to 7.0 instead of 7.1). The spec's
+round(value * 100000) integer approach sidesteps that representation error.
 """
 
 import argparse
 import json
-import math
 from datetime import datetime
 
 
@@ -177,8 +185,23 @@ def calculate_cvss_score(metrics, scope):
     else:
         score = min(impact + exploitability, 10.0)
 
-    # Round up to one decimal
-    return math.ceil(score * 10) / 10
+    # Round up to one decimal, per the CVSS v3.1 spec's exact integer algorithm
+    # (not plain math.ceil(score*10)/10 — see module docstring for why).
+    return cvss_round_up(score)
+
+
+def cvss_round_up(value):
+    """CVSS v3.1 spec Roundup(x): round UP to 1 decimal unless already exact.
+
+    Ordinary round-half-up / math.ceil(x*10)/10 is not equivalent and can
+    under-score a result that floating point stored just below a 0.1
+    boundary. This integer-math form, from the CVSS v3.1 specification,
+    sidesteps that.
+    """
+    int_input = round(value * 100000)
+    if int_input % 10000 == 0:
+        return int_input / 100000.0
+    return (int_input // 10000 + 1) / 10.0
 
 
 def score_to_severity(score):
