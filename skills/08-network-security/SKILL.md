@@ -91,7 +91,7 @@ tshark -r capture.pcap --export-objects smb,./smb_files/
 
 # Run automated analysis
 python scripts/pcap_analyzer.py --file capture.pcap --output analysis.json
-python scripts/pcap_analyzer.py --file traffic.pcapng --dns --http --top-talkers 20
+python scripts/pcap_analyzer.py --file traffic.pcapng --top-talkers 20
 ```
 
 **Traffic Analysis Checklist:**
@@ -367,10 +367,13 @@ Checkpoints:
 ## Script Reference
 
 ### `pcap_analyzer.py`
+DNS analysis and beaconing detection both run automatically (no flag
+needed for beaconing; DNS is on by default, `--no-dns` turns it off).
+There is no `--http` flag.
 ```bash
 python scripts/pcap_analyzer.py --file capture.pcap --output analysis.json
-python scripts/pcap_analyzer.py --file traffic.pcapng --dns --http --top-talkers 20
-python scripts/pcap_analyzer.py --file capture.pcap --detect-beaconing --output beacons.json
+python scripts/pcap_analyzer.py --file traffic.pcapng --top-talkers 20 --output beacons.json
+python scripts/pcap_analyzer.py --file capture.pcap --no-dns --output analysis.json
 ```
 
 ---

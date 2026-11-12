@@ -135,7 +135,7 @@ class AlertTriager:
             result = self.classify_alert(alert)
             triaged.append(result)
             logger.info(
-                "[%s] %s — %s → %s (Assigned: %s)",
+                "[%s] %s - %s -> %s (Assigned: %s)",
                 result["alert_id"],
                 result["category"],
                 result["original_severity"],
@@ -174,10 +174,10 @@ def _run_demo() -> int:
     out = AlertTriager().triage_batch(alerts)
     t = {a["alert_id"]: a for a in out["triaged_alerts"]}
     checks = [
-        ("ransomware → malware category", t["A1"]["category"] == "malware"),
-        ("critical asset escalates HIGH→CRITICAL", t["A1"]["adjusted_severity"] == "CRITICAL"),
+        ("ransomware -> malware category", t["A1"]["category"] == "malware"),
+        ("critical asset escalates HIGH->CRITICAL", t["A1"]["adjusted_severity"] == "CRITICAL"),
         ("CRITICAL SLA is 15 min", t["A1"]["sla_minutes"] == 15),
-        ("scan → reconnaissance", t["A2"]["category"] == "reconnaissance"),
+        ("scan -> reconnaissance", t["A2"]["category"] == "reconnaissance"),
         ("scanner/test flagged likely FP", t["A3"]["false_positive_likelihood"] == "HIGH"),
     ]
     ok = all(p for _, p in checks)

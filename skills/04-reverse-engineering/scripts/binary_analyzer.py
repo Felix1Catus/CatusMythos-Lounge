@@ -414,9 +414,10 @@ def main():
     )
     parser.add_argument("--file", "-f", help="Binary file to analyze")
     parser.add_argument("--output", "-o", help="Output file (JSON)")
-    parser.add_argument("--strings", action="store_true", default=True, help="Extract strings")
-    parser.add_argument("--entropy", action="store_true", default=True, help="Calculate entropy")
+    parser.add_argument("--strings", action="store_true", default=True, help="Extract strings (on by default)")
+    parser.add_argument("--entropy", action="store_true", default=True, help="Calculate entropy (on by default)")
     parser.add_argument("--no-strings", action="store_true", help="Skip string extraction")
+    parser.add_argument("--no-entropy", action="store_true", help="Skip entropy calculation")
     parser.add_argument("--demo", action="store_true", help="Run an offline self-test and exit")
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args()
@@ -435,7 +436,7 @@ def main():
     analyzer = BinaryAnalyzer(args.file)
     results = analyzer.run(
         include_strings=not args.no_strings,
-        include_entropy=args.entropy,
+        include_entropy=not args.no_entropy,
     )
 
     if args.output:

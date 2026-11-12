@@ -1078,8 +1078,16 @@ def main():
                 cfg = load_config(L)
                 prog = cfg.get('program') or ''
                 seenp = Path.home() / '.lounge' / f'{a.seat}.{prog}.seen'
-                if not seenp.exists():
-                    seenp = Path.home() / '.lounge' / f'{a.seat}.seen'
+                # Do NOT fall back to the program-agnostic {seat}.seen file
+                # here: seq is local to each program's own events.jsonl
+                # (starts at 1), so a leftover cursor from a different,
+                # longer-running program this seat worked earlier can
+                # exceed the NEW program's entire seq range. follow would
+                # then find nothing and print QUIET forever even while
+                # peers are actively emitting HYPO/REFLECT/PUSH. Falling
+                # through to the recent-events default below (same as the
+                # except branch) is the safe choice when there's no
+                # per-program cursor yet.
                 a.since = int(seenp.read_text().strip())
             except Exception:
                 a.since = max(0, _last_seq(L) - 30)

@@ -87,11 +87,11 @@ strings -a suspicious_binary | grep -E "(http|/etc|password|key|secret|flag)"
 readelf -a suspicious_binary
 objdump -d suspicious_binary | head -100
 
-# PE analysis
-python scripts/binary_analyzer.py --file malware.exe --strings --imports
+# PE analysis (imports are extracted automatically for PE files -- no flag needed)
+python scripts/binary_analyzer.py --file malware.exe
 
-# Entropy analysis (high entropy = packed/encrypted)
-python scripts/binary_analyzer.py --file binary --entropy
+# Entropy-only (skip string extraction; high entropy = packed/encrypted)
+python scripts/binary_analyzer.py --file binary --no-strings
 ```
 
 **Binary Triage Checklist:**
@@ -331,15 +331,18 @@ When analyzing binaries, Claude produces:
 ## Script Reference
 
 ### `binary_analyzer.py`
+Strings and entropy are both on by default (`--no-strings`/`--no-entropy`
+turn them off); PE imports are extracted automatically, there's no
+`--imports` flag.
 ```bash
 # Full static analysis
 python scripts/binary_analyzer.py --file suspicious.elf --output analysis.json
 
-# Extract strings and imports only
-python scripts/binary_analyzer.py --file malware.exe --strings --imports
+# PE file -- imports come back in the output automatically
+python scripts/binary_analyzer.py --file malware.exe --output analysis.json
 
-# Entropy analysis (detect packing/encryption)
-python scripts/binary_analyzer.py --file firmware.bin --entropy
+# Entropy only, skip string extraction (detect packing/encryption)
+python scripts/binary_analyzer.py --file firmware.bin --no-strings
 ```
 
 ---

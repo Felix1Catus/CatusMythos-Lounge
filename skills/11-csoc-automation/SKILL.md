@@ -139,7 +139,7 @@ Step 4: Apply triage matrix
 ```bash
 # Automated triage with script
 python scripts/alert_triager.py --alerts alerts.json --output triage_results.json
-python scripts/alert_triager.py --alerts siem_export.csv --playbook default --auto-assign
+python scripts/alert_triager.py --alerts siem_export.json --verbose
 ```
 
 ### 2. Incident Playbook Creation
@@ -339,7 +339,7 @@ SOC Contact: soc@company.com | +1-555-SOC-HELP
 **When the user asks to generate a shift report:**
 
 ```bash
-python scripts/alert_triager.py --report shift --shift night --date 2025-05-28 --output report.md
+python scripts/report_generator.py --shift night --date 2025-05-28 --output report.md
 ```
 
 **Shift Handover Report Template:**
@@ -437,13 +437,14 @@ python scripts/alert_triager.py --report shift --shift night --date 2025-05-28 -
 ### `alert_triager.py`
 ```bash
 python scripts/alert_triager.py --alerts alerts.json --output triage_results.json
-python scripts/alert_triager.py --alerts siem_export.csv --playbook default --auto-assign
+python scripts/alert_triager.py --alerts siem_export.json --verbose
 ```
 
 ### `report_generator.py`
+Per-shift only — there is no `--metrics`/monthly-aggregation mode.
 ```bash
 python scripts/report_generator.py --shift night --date 2025-05-28 --output report.md
-python scripts/report_generator.py --metrics monthly --date 2025-05 --output metrics.json
+python scripts/report_generator.py --shift day --date 2025-05-28 --format json --output report.json
 ```
 
 ---

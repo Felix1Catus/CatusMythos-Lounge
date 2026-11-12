@@ -111,12 +111,17 @@ def load_prog(seat):
 
 
 def load_seen(seat, prog=None):
-    for p in (seen_path(seat, prog), seen_path(seat)):
-        try:
-            return int(p.read_text().strip())
-        except Exception:
-            continue
-    return 0
+    # Do NOT fall back to the program-agnostic seen_path(seat) here: seq is
+    # local to each program's own events.jsonl (starts at 1), so a leftover
+    # cursor from a different, earlier program this seat worked can exceed
+    # the new program's entire seq range -- peer_events() would then see
+    # "since" set past every real event and report nothing even while
+    # peers are actively emitting. 0 (show everything so far) is the safe
+    # default when there's no cursor yet for THIS program.
+    try:
+        return int(seen_path(seat, prog).read_text().strip())
+    except Exception:
+        return 0
 
 
 def save_seen(seat, n, prog=None):
