@@ -1,0 +1,21 @@
+{
+  "name": "catusmythos-lounge",
+  "version": "0.1.0",
+  "description": "Merged offensive/defensive security toolkit for Claude Code: Felix1Catus's claude-code-pentest pipeline (recon -> exploit -> chain -> report), Masriyan's 22-domain Claude-Code-CyberSecurity-Skill collection, and the mythos-lounge doctrine engine + multi-seat collaboration protocol, combined into one plugin.",
+  "author": {
+    "name": "CatusMythos-Lounge contributors"
+  },
+  "homepage": "https://github.com/Felix1Catus/CatusMythos-Lounge",
+  "license": "MIT",
+  "keywords": [
+    "security",
+    "pentest",
+    "bug-bounty",
+    "red-team",
+    "blue-team",
+    "claude-code",
+    "skills"
+  ],
+  "skills": "./skills",
+  "agents": "./agents"
+}

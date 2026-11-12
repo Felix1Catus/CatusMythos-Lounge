@@ -1,0 +1,16 @@
+# Runtime state — never commit engagement data
+targets/
+router_seen/
+*.log
+STATE/
+.lounge-runtime/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db

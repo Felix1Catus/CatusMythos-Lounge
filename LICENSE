@@ -1,0 +1,33 @@
+MIT License
+
+Copyright (c) 2026 the CatusMythos-Lounge contributors
+
+This repository is a merge of three independently-licensed MIT works. The
+merge layer itself (this LICENSE, the doctrine/ and lounge/ integration code
+authored for this project, MERGE_MAP.md, and this README) is released under
+the MIT License below. The bundled skill content under skills/ retains the
+copyright and license of its original authors — see NOTICE.md and
+THIRD_PARTY_NOTICES.md before redistributing. Do not remove or alter the
+attribution in NOTICE.md, LICENSE-FELIX1CATUS-ORIZON.md, LICENSE-MASRIYAN.md,
+or NOTICE-MASRIYAN.md; doing so breaks the license terms those works were
+received under.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software, AND the attribution
+requirements in NOTICE.md and NOTICE-MASRIYAN.md shall be preserved in any
+redistribution, fork, or derivative work.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
