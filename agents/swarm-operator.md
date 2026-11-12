@@ -138,6 +138,22 @@ write-up/PoC). This is the step that answers "what is plausibly vulnerable
    read the actual reference URL(s) (WebFetch) to understand the exact
    precondition and exploitation mechanics — don't try to reinvent a PoC
    from the CVE title alone when a real write-up is one fetch away.
+   **"Recent exploits/write-ups" is a separate, equally real priority item,
+   not a synonym for this one** — `cve_lookup.py` answers "what CVE IDs
+   match this version," which is necessarily backward-looking to whenever
+   NVD published. The actual ask was recent (2024-2026) bug-bounty
+   write-ups and researcher blog posts — real chaining *techniques* and WAF
+   bypass *mechanisms*, independent of any specific CVE. That's encoded as
+   runnable logic, not a reading list: `vuln-chain-composer`'s capability
+   vocabulary (`redirect_into_allowlist`, `org_membership_granted`,
+   `cookie_scope_write`, `scope_violation`, `waf_bypass_capable`, etc. — see
+   its SKILL.md) and `webapp-exploit-hunter/scripts/waf_bypass_tester.py`
+   were built directly from that research
+   (`vuln-chain-composer/research_notes/Vuln chaining and WAF bypass
+   patterns/` and the synthesized report in its `reports/` dir). Any
+   finding blocked by a named WAF (403/406/429 or a vendor block page) is
+   not a dead end — run `waf_bypass_tester.py` against it before giving up
+   on that payload.
 2. **The surface-specific vulnerability classes that actually apply** given
    what recon found — not a fixed list run blind. Derive this from the
    fingerprint: a brochure site with one contact form and no authenticated

@@ -7,6 +7,7 @@ Author: orizon.one
 
 import argparse
 import json
+import re
 import socket
 import subprocess
 import ssl
@@ -40,6 +41,81 @@ TOP_1000_PORTS = list(range(1, 1001)) + [
     8000, 8008, 8080, 8081, 8443, 8888, 9000, 9090, 9200, 9300, 9443,
     10000, 10250, 11211, 27017, 28017
 ]
+
+
+# Service/OS-level version fingerprinting -- "what if the host OS/service
+# itself is exploitable" is a different question than "what WordPress
+# plugin is running", and nothing was asking it: SSH, FTP, SMTP banners and
+# the HTTP Server/X-Powered-By headers all routinely carry an exact product
+# + version (and often an OS hint), captured here already via tcp_connect's
+# banner grab and http_probe's header read, but never parsed into anything
+# cve_lookup.py could act on until now.
+_SSH_BANNER_RE = re.compile(r"SSH-[\d.]+-OpenSSH[_-]([\d.]+\w*)", re.I)
+_SSH_OS_HINT_RE = re.compile(r"(Ubuntu|Debian|CentOS|FreeBSD|Red ?Hat|Fedora|Windows)[- ]?([\w.]*)", re.I)
+_FTP_BANNER_RES = [
+    ("vsftpd", re.compile(r"\(vsFTPd ([\d.]+)\)", re.I)),
+    ("proftpd", re.compile(r"ProFTPD ([\d.]+\w*)", re.I)),
+    ("pureftpd", re.compile(r"Pure-?FTPd ?\(?\[?v?([\d.]+)\]?\)?", re.I)),
+    ("filezilla-server", re.compile(r"FileZilla Server ([\d.]+)", re.I)),
+]
+_SMTP_BANNER_RES = [
+    ("exim", re.compile(r"Exim ([\d.]+)", re.I)),
+    ("sendmail", re.compile(r"Sendmail ([\d.]+)", re.I)),
+]
+_HTTP_SERVER_RE = re.compile(r"^([A-Za-z][\w.-]*)/([\d][\w.]*)", re.I)
+_HTTP_SERVER_OS_HINT_RE = re.compile(r"\((Ubuntu|Debian|CentOS|Red ?Hat|Win32|Win64|FreeBSD|Unix)\)", re.I)
+_X_POWERED_BY_RE = re.compile(r"^([A-Za-z][\w.]*)[/ ]([\d][\w.]*)", re.I)
+
+
+def parse_service_version(port, banner, http_info=None):
+    """Turn a raw banner / HTTP headers into {kind, name, version} entries,
+    the same shape tech_fingerprint.py's versioned_components uses, so
+    cve_lookup.py can consume either source identically. Best-effort: a
+    banner with no recognizable product/version yields nothing rather than
+    a guess."""
+    components = []
+    banner = banner or ""
+
+    if port == 22:
+        m = _SSH_BANNER_RE.search(banner)
+        if m:
+            components.append({"kind": "os-service", "name": "openssh", "version": m.group(1)})
+        os_m = _SSH_OS_HINT_RE.search(banner)
+        if os_m:
+            components.append({
+                "kind": "os-hint", "name": os_m.group(1).replace(" ", ""),
+                "version": os_m.group(2) or "unknown",
+            })
+
+    elif port == 21:
+        for name, pattern in _FTP_BANNER_RES:
+            m = pattern.search(banner)
+            if m:
+                components.append({"kind": "os-service", "name": name, "version": m.group(1)})
+                break
+
+    elif port == 25:
+        for name, pattern in _SMTP_BANNER_RES:
+            m = pattern.search(banner)
+            if m:
+                components.append({"kind": "os-service", "name": name, "version": m.group(1)})
+                break
+
+    if http_info:
+        server = http_info.get("server", "") or ""
+        m = _HTTP_SERVER_RE.match(server.strip())
+        if m:
+            components.append({"kind": "os-service", "name": m.group(1).lower(), "version": m.group(2)})
+        os_m = _HTTP_SERVER_OS_HINT_RE.search(server)
+        if os_m:
+            components.append({"kind": "os-hint", "name": os_m.group(1).replace(" ", ""), "version": "unknown"})
+
+        xpb = http_info.get("x_powered_by", "") or ""
+        m = _X_POWERED_BY_RE.match(xpb.strip())
+        if m:
+            components.append({"kind": "os-service", "name": m.group(1).lower(), "version": m.group(2)})
+
+    return components
 
 
 def tcp_connect(host, port, timeout=3):
@@ -165,6 +241,26 @@ def scan_host(host, ports, timeout=3):
     web_info = https_info or http_info
     waf = detect_waf(web_info)
 
+    # Service/OS-level version fingerprinting -- feeds cve_lookup.py the
+    # same way tech_fingerprint.py's versioned_components does, except this
+    # is the host/service layer (SSH, FTP, SMTP, the web server binary
+    # itself) rather than the web-app/plugin layer. "What if the host OS is
+    # exploitable" starts here, not at the WordPress plugin list.
+    versioned_components = []
+    seen = set()
+    for p in open_ports:
+        for comp in parse_service_version(p["port"], p.get("banner", "")):
+            key = (comp["name"], comp["version"])
+            if key not in seen:
+                seen.add(key)
+                versioned_components.append(comp)
+    if web_info:
+        for comp in parse_service_version(None, "", http_info=web_info):
+            key = (comp["name"], comp["version"])
+            if key not in seen:
+                seen.add(key)
+                versioned_components.append(comp)
+
     return {
         "host": host,
         "ip": ip,
@@ -172,6 +268,7 @@ def scan_host(host, ports, timeout=3):
         "http": http_info,
         "https": https_info,
         "waf_cdn": waf,
+        "versioned_components": versioned_components,
     }
 
 

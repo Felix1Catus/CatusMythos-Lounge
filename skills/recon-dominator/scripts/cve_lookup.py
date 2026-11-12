@@ -76,11 +76,17 @@ def _parse_version(v):
     return tuple(int(p) for p in parts) if parts else (0,)
 
 
-def _version_in_range(version, start_incl=None, start_excl=None, end_incl=None, end_excl=None):
+def _version_in_range(version, start_incl=None, start_excl=None, end_incl=None, end_excl=None,
+                       exact_version=None):
     """Compare a discovered version against NVD's own CPE match range
     fields when present. Returns True/False/None (None = NVD didn't publish
     a usable range for this match, can't determine -- report as 'unclear',
     never silently assume affected OR patched)."""
+    if exact_version is not None:
+        # No range fields at all, but the CPE string itself names one exact
+        # affected version (e.g. CVE-2011-2523's vsftpd 2.3.4 backdoor) --
+        # equality, not a range comparison.
+        return _parse_version(version) == _parse_version(exact_version)
     if start_incl is None and start_excl is None and end_incl is None and end_excl is None:
         return None
     v = _parse_version(version)
@@ -148,11 +154,24 @@ def _matches_component(cve_item, product_name):
                 cpe_parts = criteria.split(":")
                 cpe_product = cpe_parts[4].replace("_", " ") if len(cpe_parts) > 4 else ""
                 if needle in cpe_product or cpe_product in needle:
+                    # Some CPE matches are a RANGE (versionStart/EndIncluding/
+                    # Excluding) -- most CVEs look like this. Others are an
+                    # EXACT version with no range fields at all: the CPE
+                    # string's own 6th field (cpe:2.3:a:vendor:product:
+                    # VERSION:...) IS the affected version, no range math
+                    # needed -- e.g. CVE-2011-2523 (the vsftpd 2.3.4
+                    # backdoor) only ever affected exactly that one tampered
+                    # build, not a version range, and NVD models it that
+                    # way. Treating "no range fields" as "can't determine"
+                    # was wrong for this (common) case -- it's determinable,
+                    # just via equality instead of a range comparison.
+                    exact_version = cpe_parts[5] if len(cpe_parts) > 5 and cpe_parts[5] not in ("*", "-") else None
                     return True, {
                         "start_incl": cpe_match.get("versionStartIncluding"),
                         "start_excl": cpe_match.get("versionStartExcluding"),
                         "end_incl": cpe_match.get("versionEndIncluding"),
                         "end_excl": cpe_match.get("versionEndExcluding"),
+                        "exact_version": exact_version,
                         "vulnerable_flag": cpe_match.get("vulnerable", True),
                     }
     return False, None
@@ -240,6 +259,7 @@ def lookup_component(name, version, max_results=200, recent_years=5):
                 version,
                 version_range.get("start_incl"), version_range.get("start_excl"),
                 version_range.get("end_incl"), version_range.get("end_excl"),
+                version_range.get("exact_version"),
             )
         else:
             # NVD often hasn't published structured CPE match data for a
@@ -293,25 +313,41 @@ def main():
     parser = argparse.ArgumentParser(
         description="CVE / public-exploit lookup for fingerprinted components"
     )
-    parser.add_argument("--input", "-i", required=True,
-                         help="tech_fingerprint.py JSON output (reads versioned_components)")
+    parser.add_argument("--input", "-i", required=True, nargs="+",
+                         help="One or more JSON outputs to read versioned_components from -- "
+                              "tech_fingerprint.py (web-app/plugin layer, nested under "
+                              "result.details.versioned_components) and/or port_scanner.py "
+                              "(host/service layer: SSH/FTP/SMTP/web-server-binary versions, "
+                              "nested directly under result.versioned_components). Pass both to "
+                              "cover the whole stack in one run -- the host OS/service layer is a "
+                              "different, equally real question from \"what plugin version is this\".")
     parser.add_argument("--output", "-o", help="Output JSON file")
     parser.add_argument("--recent-years", type=int, default=5,
                          help="A CVE published within this many years is flagged 'is_recent' (default: 5)")
     args = parser.parse_args()
 
-    with open(args.input) as f:
-        fp_data = json.load(f)
-
     components = []
-    for result in fp_data.get("results", []):
-        for comp in result.get("details", {}).get("versioned_components", []):
-            components.append(comp)
+    for input_path in args.input:
+        with open(input_path) as f:
+            fp_data = json.load(f)
+        for result in fp_data.get("results", []):
+            # tech_fingerprint.py nests under details.versioned_components;
+            # port_scanner.py has it directly on the result -- accept either
+            # without forcing one script's output shape onto the other.
+            components.extend(result.get("details", {}).get("versioned_components", []))
+            components.extend(result.get("versioned_components", []))
     # De-dupe across hosts (a shared plugin version across subdomains should
-    # only cost one NVD query, not one per host).
+    # only cost one NVD query, not one per host). "os-hint" entries (e.g. an
+    # OS name guessed from a banner with no real version number, kind
+    # os-hint, version "unknown") are informational -- worth keeping in the
+    # saved output for a human to see, but useless and noisy as an actual
+    # NVD query (searching "ubuntu" with no version returns thousands of
+    # irrelevant CVEs and there's no version to range-match against).
     seen = set()
     unique_components = []
     for c in components:
+        if c.get("kind") == "os-hint" or c.get("version") == "unknown":
+            continue
         key = (c["name"], c["version"])
         if key not in seen:
             seen.add(key)

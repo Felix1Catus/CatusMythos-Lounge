@@ -49,6 +49,23 @@ CVSS_VALUES = {
 
 # Severity impact amplification rules
 AMPLIFICATION_RULES = {
+    "AI Agent Excessive Agency Enables Blocked CVE Precondition": {
+        "original_severity": "MEDIUM",  # the blocked CVE alone, precondition unmet
+        "chain_severity": "CRITICAL",
+        "cvss_override": {
+            # AC:H (reaching this needs directing/prompt-injecting the agent first,
+            # a real extra step, not a one-shot exploit) but otherwise full impact
+            # once the underlying CVE (typically RCE-class, since that's the kind
+            # of CVE worth gating behind a disabled feature in the first place)
+            # fires -- PR:N/UI:N since the agent itself is commonly unauthenticated.
+            "AV": "N", "AC": "H", "PR": "N", "UI": "N",
+            "S": "C", "C": "H", "I": "H", "A": "H",
+        },
+        "justification": "An AI agent/chatbot with backend admin tool access can be directed "
+                         "(via prompt injection or its own exposed interface) to perform the exact "
+                         "action a version-matched CVE needs enabled, turning an otherwise-blocked "
+                         "vulnerability (unpatched but precondition unmet) into a live one.",
+    },
     "Self-XSS + CSRF = Weaponized Stored XSS": {
         "original_severity": "LOW",
         "chain_severity": "HIGH",

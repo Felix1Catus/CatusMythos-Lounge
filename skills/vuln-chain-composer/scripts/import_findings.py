@@ -8,8 +8,22 @@ Author: orizon.one
 import argparse
 import json
 import glob
+import re as _re
 from pathlib import Path
 from datetime import datetime
+
+
+def _finding_blob(finding):
+    """All the free-text fields on a RAW (pre-normalize) finding dict worth
+    pattern-matching against -- evidence/note/title plus the whole raw dict
+    as JSON, so category-inference regexes see real content, not just the
+    'type' field."""
+    parts = [
+        str(finding.get("evidence", "")), str(finding.get("note", "")),
+        str(finding.get("title", "")), str(finding.get("url", "")),
+        json.dumps(finding),
+    ]
+    return " ".join(parts)
 
 
 def log(msg):
@@ -47,6 +61,13 @@ SEVERITY_MAP = {
     "open_redirect": "LOW",
     "info_disclosure": "LOW",
     "missing_headers": "INFO",
+    "blockedcve": "MEDIUM",  # a version-matched, unpatched CVE whose precondition isn't met yet
+    "agenttoolaccess": "LOW",  # the access existing isn't itself a vuln; the chain is
+    "promptinjection": "MEDIUM",  # untrusted content an agent ingests; impact depends what it enables
+    "wafbypass": "LOW",  # a demonstrated bypass technique; impact depends what it unblocks
+    "hostheadertrust": "LOW",
+    "cicdexposure": "MEDIUM",
+    "cloudresourceaccess": "MEDIUM",
 }
 
 # OWASP API Top 10 / Web Top 10 mapping
@@ -106,22 +127,66 @@ def normalize_finding(finding, source_tool):
         "poc_curl": finding.get("poc_curl", ""),
         "source_tool": source_tool,
         "chainable_as": [],  # Populated in correlation step
+        # The complement of chainable_as: what precondition this finding's
+        # OWN exploitability depends on, from the same capability
+        # vocabulary. correlate.py's generic chain-discovery walks this
+        # against every OTHER finding's chainable_as -- A enables X, B
+        # requires X => A->B is a candidate chain -- instead of needing a
+        # hand-written named template for every pair. Not every finding
+        # type has a real, currently-modeled precondition; [] means
+        # "structurally reachable as-is, nothing else needed" rather than
+        # "unknown".
+        "requires": [],
         "raw": finding,
     }
 
-    # Determine what this finding enables (for chaining)
+    # Determine what this finding ENABLES for a follow-on finding (its
+    # contribution to a chain as the earlier step) and what it REQUIRES to
+    # become reachable/exploitable (its contribution as the later step).
+    # correlate.py's generic chain-discovery walks every finding's enables
+    # against every OTHER finding's requires over this same vocabulary --
+    # A enables X, B requires X => A->B is a candidate chain, found by
+    # graph matching rather than needing a named template per pair.
     if "sqli" in vuln_type:
         normalized["chainable_as"] = ["data_access", "credential_theft", "rce_potential"]
     elif "xss" in vuln_type:
-        normalized["chainable_as"] = ["session_theft", "phishing", "keylogging"]
+        normalized["chainable_as"] = ["session_theft", "phishing", "keylogging", "cookie_scope_write"]
+        if "self" in vuln_type or "post_only" in vuln_type or "postonly" in vuln_type:
+            # Self-XSS / POST-only XSS can't reach a victim on its own -- it
+            # needs something else to deliver it (CSRF, or a method-confusion
+            # bug that lets the POST-only sink be hit via GET). See
+            # web_app_chaining_patterns.md pattern 7 (PortSwigger 2025).
+            normalized["requires"].append("delivery_mechanism")
+    elif "methodconfusion" in vuln_type or "method_confusion" in vuln_type:
+        normalized["chainable_as"] = ["delivery_mechanism"]
     elif "ssrf" in vuln_type:
         normalized["chainable_as"] = ["internal_access", "cloud_metadata", "port_scan"]
+        # Pattern 1 (web_app_chaining_patterns.md): an SSRF that's actually
+        # gated by a destination allowlist can be unlocked by a separate
+        # open-redirect finding whose target happens to land inside that
+        # allowlist -- a real, evidence-checked connection
+        # (_redirect_unlocks_ssrf in correlate.py), not just a category tag.
+        if _re.search(r"allow[\s_-]?list|whitelist|blocked|denied|filter", _finding_blob(finding), _re.I):
+            normalized["requires"].append("redirect_into_allowlist")
     elif "idor" in vuln_type or "bola" in vuln_type:
         normalized["chainable_as"] = ["data_access", "privilege_escalation"]
+        normalized["requires"] = ["authentication_bypass"]  # most IDORs still need SOME valid session
+        # Pattern 10 (web_app_chaining_patterns.md): an IDOR that grants
+        # group/org/team membership can unlock a SECOND IDOR (e.g. a
+        # password/email-change endpoint) that only checks membership, not
+        # identity. Only tag the enabling side when the evidence actually
+        # talks about group/org/team; only tag the requiring side when it
+        # talks about an account-management action -- so the graph edge
+        # still needs _org_membership_evidence_present to confirm.
+        blob = _finding_blob(finding)
+        if _re.search(r"\b(group|org(?:anization)?|team|member(?:ship)?)\b", blob, _re.I):
+            normalized["chainable_as"].append("org_membership_granted")
+        if _re.search(r"password|email|role|permission|invite", blob, _re.I):
+            normalized["requires"].append("org_membership_granted")
     elif "jwt" in vuln_type or "auth" in vuln_type:
         normalized["chainable_as"] = ["authentication_bypass", "impersonation"]
     elif "takeover" in vuln_type:
-        normalized["chainable_as"] = ["phishing", "session_theft", "cookie_theft"]
+        normalized["chainable_as"] = ["phishing", "session_theft", "cookie_theft", "cookie_scope_write"]
     elif "bucket" in vuln_type or "storage" in vuln_type:
         normalized["chainable_as"] = ["data_access", "data_modification"]
     elif "ssti" in vuln_type:
@@ -129,7 +194,54 @@ def normalize_finding(finding, source_tool):
     elif "upload" in vuln_type:
         normalized["chainable_as"] = ["rce", "webshell"]
     elif "redirect" in vuln_type:
-        normalized["chainable_as"] = ["phishing", "token_theft"]
+        normalized["chainable_as"] = ["phishing", "token_theft", "redirect_into_allowlist"]
+    elif "blockedcve" in vuln_type:
+        normalized["chainable_as"] = ["rce_potential", "precondition_dependent"]
+        normalized["requires"] = ["precondition_enabler"]  # the one thing standing between it and live
+    elif "agenttoolaccess" in vuln_type:
+        normalized["chainable_as"] = ["precondition_enabler", "excessive_agency"]
+        # novel_2025_2026_techniques.md 1.1-1.4 (EchoLeak/AgentFlayer/CurXecute):
+        # an agent's tool/connector access only becomes an attacker-reachable
+        # chain when something ELSE gets attacker-controlled instructions in
+        # front of it (a scope violation). Tag it as needing that, same
+        # discipline as blockedcve needing precondition_enabler.
+        normalized["requires"].append("scope_violation")
+    elif "promptinjection" in vuln_type or "scopeviolation" in vuln_type:
+        # The untrusted-content side of the EchoLeak/AgentFlayer/ForcedLeak/
+        # CurXecute/calendar-invite class: an injection point an AI agent
+        # ingests from a lower-trust scope (email, calendar, ticket, shared
+        # doc, Slack channel, MCP tool description).
+        normalized["chainable_as"] = ["scope_violation"]
+    elif "wafbypass" in vuln_type or "waf_bypass" in vuln_type:
+        # Output of waf_bypass_tester.py (webapp-exploit-hunter): a
+        # demonstrated technique that gets a payload past the WAF. On its
+        # own it's not a vuln; it's what turns a "findings blocked by WAF"
+        # entry into a live chain.
+        normalized["chainable_as"] = ["waf_bypass_capable"]
+    elif "hostheadertrust" in vuln_type or "host_header" in vuln_type:
+        normalized["chainable_as"] = ["cache_poisoning", "ssrf_via_host_header"]
+    elif "cicdexposure" in vuln_type or "ci_cd" in vuln_type:
+        # cloud_api_chaining_patterns.md pattern 3: bot-counts-as-approver +
+        # no branch protection + no deploy gate = PR-write implies prod RCE.
+        normalized["chainable_as"] = ["deploy_access", "rce_potential"]
+    elif "cloudresourceaccess" in vuln_type or "iamrole" in vuln_type:
+        # cloud_api_chaining_patterns.md pattern 1: the lateral-movement step
+        # after SSRF reaches cloud metadata -- requires that an SSRF (or
+        # anything else) already proved metadata/IMDS reachability.
+        normalized["chainable_as"] = ["data_access", "lateral_movement"]
+        normalized["requires"] = ["cloud_metadata"]
+
+    # Cross-cutting: ANY finding whose own evidence says a payload got
+    # blocked/filtered by a WAF (regardless of its vuln_type) now needs a
+    # demonstrated bypass technique to actually be deliverable --
+    # waf_bypass_tester.py findings grant exactly that capability. This is
+    # what lets "XSS payload blocked by Cloudflare" + "parameter-pollution
+    # WAF bypass confirmed on this target" become a chain, per
+    # waf_bypass_mechanisms.md.
+    if _re.search(r"\bwaf\b.*(block|filter|reject|denied|403)|cloudflare|akamai|imperva|"
+                  r"aws\s*waf|azure\s*waf|mod_?security", _finding_blob(finding), _re.I):
+        if "waf_bypass_capable" not in normalized["requires"]:
+            normalized["requires"].append("waf_bypass_capable")
 
     return normalized
 

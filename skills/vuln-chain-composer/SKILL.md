@@ -62,6 +62,74 @@ Analyze relationships between findings:
 - Self-XSS + CSRF = weaponized stored XSS affecting other users
 - Rate limit bypass + brute-force + OTP bypass = authentication bypass
 
+**AI-Agent Chains:**
+- An AI agent/chatbot with backend admin tool access + a version-matched
+  CVE that's unpatched but currently blocked by one missing precondition
+  (e.g. an RCE-via-file-upload CVE with no File Upload field enabled on
+  any form) = direct or prompt-inject the agent into performing the exact
+  action the CVE needs enabled, then exploit it
+
+**The list above (and the 11 `CHAIN_TEMPLATES`) are EXAMPLES of the kind of
+chain this skill produces, not the mechanism that produces creative
+chaining.** The named templates are a thin, hand-written convenience layer
+for a handful of previously-seen patterns. The actual chaining brain is
+`discover_generic_chains()`: every finding is tagged with what it
+`chainable_as` (what it ENABLES a follow-on finding to do) and what it
+`requires` (what precondition it needs to become exploitable), over a
+shared capability vocabulary. Any two findings whose enables/requires sets
+overlap become a candidate chain — found by graph matching, not because
+someone wrote a template for that exact pair. This is what lets the tool
+notice a combination its author never specifically imagined (e.g. a JWT
+`alg:none` bypass combined with an IDOR that "requires a valid session" —
+nobody wrote that template, the graph found it because JWT-bypass enables
+`authentication_bypass` and IDOR requires it). **Adding a new named
+template is the LAST resort, not the first** — if a chain can be expressed
+as a capability pair instead, it belongs in the vocabulary
+(`import_findings.py`) and, if it needs a non-trivial evidence check, in
+`_GENERIC_CONFIDENCE_CHECKS` (`correlate.py`), so it generalizes to every
+future finding with that tag instead of staying a one-off.
+
+The vocabulary is not fixed — it is built from real 2024-2026 bug bounty
+writeups and researcher disclosures (see `research_notes/Vuln chaining and
+WAF bypass patterns/` and `reports/Vuln chaining and WAF bypass
+patterns.md` in this plugin's root), not invented wholesale. Capability
+pairs currently implemented from that research, beyond the original set
+(`data_access`, `credential_theft`, `authentication_bypass`,
+`internal_access`, `cloud_metadata`, `precondition_enabler`, ...):
+
+- `redirect_into_allowlist` — an open redirect's target lands inside an
+  SSRF's own destination allowlist, unlocking an otherwise-filtered SSRF
+  (PortSwigger/web-app research pattern 1).
+- `org_membership_granted` — an IDOR that leaks group/org/team membership
+  unlocks a second IDOR (e.g. a role/password/email-change endpoint) that
+  only checks membership, not identity (pattern 10).
+- `cookie_scope_write` — XSS or subdomain takeover writing a cookie scoped
+  to the parent domain, checked against a second finding sharing that
+  parent domain (cookie-tossing into an OAuth flow, pattern 4).
+- `delivery_mechanism` — self-XSS/POST-only XSS needs something else (CSRF,
+  or a method-confusion bug) to actually deliver the payload to a victim
+  (pattern 7).
+- `waf_bypass_capable` — any finding whose evidence says a payload was
+  blocked by a named WAF now requires a demonstrated bypass technique
+  (`webapp-exploit-hunter/scripts/waf_bypass_tester.py`'s
+  `wafbypass_*` findings grant exactly this) before it's actually
+  deliverable.
+- `scope_violation` — an agent/chatbot's tool-use access (`agenttoolaccess`)
+  is only a reachable chain once something else gets attacker-controlled
+  instructions in front of it from a lower-trust channel (email, calendar
+  invite, ticket, Slack, MCP tool description) — the EchoLeak/AgentFlayer/
+  ForcedLeak/CurXecute class of 2025-2026 AI-agent chains.
+- `deploy_access` / `lateral_movement` — CI/CD approval-quorum and
+  exposed-artifact chains, and the SSRF-reaches-metadata → IAM-credential →
+  lateral-movement chain, as reusable graph edges rather than one-off
+  narratives.
+
+Both mechanisms report every chain with a `confidence` field
+(`"confirmed"` only when real evidence in the finding data — not just the
+category/capability tag — supports the specific claim; `"unconfirmed"`
+otherwise, reported as a lead with the finding's own severity, not an
+inflated one).
+
 ### Step 3: Chain Construction
 
 ```bash
