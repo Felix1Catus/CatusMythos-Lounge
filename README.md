@@ -93,6 +93,10 @@ recon-dominator        subdomain enum, port scan, OSINT, dorking, Wayback
     │                  + Masriyan's WAF/CDN/analytics detection merged into tech_fingerprint.py
     │                  + Masriyan's wildcard-DNS suppression merged into active_recon.py
     │                  + folded-in as-is: dns_recon.py (SPF/DMARC/reverse-DNS, zero overlap)
+    │                  + new: cve_lookup.py — turns tech_fingerprint.py's versioned-component
+    │                    output into version-matched NVD CVE hypotheses with real write-up
+    │                    links, so exploitation is driven by what's actually fingerprinted,
+    │                    not a blind sweep across every vulnerability class
     ├──► webapp-exploit-hunter   SQLi, XSS, SSRF, SSTI, IDOR, auth bypass, upload, race
     │        + Masriyan's server-version-disclosure check merged into auth_tester.py
     ├──► api-breaker             API discovery, BOLA/BFLA, JWT, mass assignment, GraphQL

@@ -75,6 +75,50 @@ Detect:
 - JavaScript frameworks (React, Angular, Vue)
 - Third-party services and integrations
 - HTTP security headers (or lack thereof)
+- **Versioned components** (`versioned_components` in the output): for
+  WordPress-style sites, the exact plugin/theme/core version extracted from
+  enqueued-asset `?ver=` query strings — e.g. `/wp-content/plugins/
+  elementor-pro/assets/css/widget-gallery.min.css?ver=4.0.4` names both the
+  component (`elementor-pro`) and its version (`4.0.4`) with no
+  authentication needed to read it. This is what Step 5b below acts on.
+
+### Step 5b: CVE / Public-Exploit Lookup — THIS is what should drive exploitation choices, not a blind vuln-class sweep
+
+```bash
+python scripts/cve_lookup.py --input {tech_fingerprint_output.json} --output cve_lookup_results.json
+```
+
+Takes every versioned component Step 5 found and queries NVD's public CVE
+database for each one, comparing the *discovered* version against each
+CVE's *actual published affected-version range* (structured CPE match data
+when NVD has it, a description-text heuristic as a fallback when NVD
+hasn't enriched the CVE with CPE data yet — recent CVEs often haven't).
+Each hit carries NVD's own reference URLs, which routinely include the
+real write-up/advisory/PoC, not just the bare CVE ID — this is the "use
+public write-ups and recent exploits" step, automated rather than manual.
+
+**This is the step that should determine what webapp-exploit-hunter/
+api-breaker/cloud-pivot-finder actually spend probe budget on.** A plugin
+with a version-matched CRITICAL unauthenticated-RCE CVE and a public PoC
+is a concrete hypothesis worth verifying the precondition for (does the
+vulnerable feature/endpoint exist and is it enabled on *this* install?) —
+that's a fundamentally different, better-targeted probing choice than
+running every exploit-class script against every discovered host
+regardless of what's actually running there. Only fall back to the
+broader vulnerability-class sweep (webapp-exploit-hunter's own battery)
+for surface this step found nothing CVE-specific for, or to catch unknown/
+zero-day-class issues a version lookup can never find.
+
+Each result is labeled honestly by confidence — `"nvd-cpe-match"` (NVD's
+own structured data says this), `"description-text-heuristic"` (parsed
+from the CVE's prose, verify against the linked write-up before trusting
+it), or no range data at all (manual check needed) — and
+`version_appears_affected` is a **hypothesis to verify live**, never a
+confirmed finding on its own; the actual vulnerable feature/endpoint still
+needs to be checked (e.g. "is the Elementor Forms File Upload field
+actually enabled on any form on this site?" — a real install can have a
+vulnerable plugin version with the vulnerable feature turned off, which
+makes it currently non-exploitable despite being unpatched).
 
 ### Step 6: OSINT Correlation
 

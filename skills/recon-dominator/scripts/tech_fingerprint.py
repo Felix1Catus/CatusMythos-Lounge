@@ -159,6 +159,54 @@ def fetch_page(url, timeout=10):
         return None, None
 
 
+# WordPress (and WP-plugin-shaped sites generally) enqueue scripts/styles with
+# a `?ver=X.Y.Z` cache-busting query string that is also the real plugin/
+# theme/core version -- e.g. `/wp-content/plugins/elementor-pro/assets/css/
+# modules/sticky.min.css?ver=4.0.4` names both the plugin ("elementor-pro")
+# and its exact version in one URL, with no authentication needed to read it.
+_WP_PLUGIN_VER_RE = re.compile(
+    r"wp-content/plugins/([a-zA-Z0-9_.-]+)/[^\"'\s]*\?ver=([0-9][0-9a-zA-Z.+_-]*)"
+)
+_WP_THEME_VER_RE = re.compile(
+    r"wp-content/themes/([a-zA-Z0-9_.-]+)/[^\"'\s]*\?ver=([0-9][0-9a-zA-Z.+_-]*)"
+)
+_WP_CORE_VER_RE = re.compile(
+    r"wp-includes/[^\"'\s]*\?ver=([0-9][0-9a-zA-Z.+_-]*)"
+)
+
+
+def extract_versioned_components(body):
+    """Pull {name, version, kind} tuples out of a page's enqueued-asset
+    query strings. One entry per unique (name, version) pair -- a plugin's
+    own assets are usually all pinned to the same version, so this
+    naturally de-dupes without losing anything."""
+    seen = set()
+    components = []
+
+    for name, version in _WP_PLUGIN_VER_RE.findall(body):
+        key = ("wp-plugin", name, version)
+        if key not in seen:
+            seen.add(key)
+            components.append({"kind": "wordpress-plugin", "name": name, "version": version})
+
+    for name, version in _WP_THEME_VER_RE.findall(body):
+        key = ("wp-theme", name, version)
+        if key not in seen:
+            seen.add(key)
+            components.append({"kind": "wordpress-theme", "name": name, "version": version})
+
+    core_matches = _WP_CORE_VER_RE.findall(body)
+    # wp-includes assets occasionally carry a bundled library's own version
+    # rather than core's -- only trust this as "WordPress core" when there
+    # are at least 2 matches AND they all agree on one version (one
+    # mismatched asset among several is a stronger signal than a single
+    # match that could be the one exception).
+    if len(core_matches) >= 2 and len(set(core_matches)) == 1:
+        components.append({"kind": "wordpress-core", "name": "wordpress", "version": core_matches[0]})
+
+    return components
+
+
 def fingerprint_host(host):
     """Fingerprint a single host."""
     technologies = set()
@@ -236,6 +284,17 @@ def fingerprint_host(host):
                 gen_match = re.search(r'<meta[^>]+name=["\']generator["\'][^>]+content=["\']([^"\']+)', body, re.I)
                 if gen_match:
                     technologies.add(gen_match.group(1))
+
+                # Versioned components: WordPress (and similar CMS) enqueue
+                # scripts/styles with a `?ver=X.Y.Z` cache-busting query
+                # string that happens to also be the plugin/theme/core
+                # version -- the same technique that manually found Elementor
+                # 4.3.5 / Elementor Pro 4.0.4 on a real engagement. Feeds
+                # cve_lookup.py, which needs an actual version number per
+                # component, not just "this technology is present".
+                versioned = extract_versioned_components(body)
+                if versioned:
+                    details["versioned_components"] = versioned
 
             break  # Got response, no need to try other scheme
 

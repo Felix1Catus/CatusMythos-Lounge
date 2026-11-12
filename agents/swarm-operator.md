@@ -88,66 +88,101 @@ and hand it back cleanly instead of flailing at tools you don't have:
    yet). Run `python "${CLAUDE_PLUGIN_ROOT}/scripts/bootstrap.py"` yourself
    if any skill script reports an ImportError for one of them.
 
-## 2. The breadth checklist — run this before you let yourself go deep on anything
+## 2. The actual flow — fingerprint drives hypotheses; hypotheses drive probing
 
-The single most common way this agent fails is fixating on the first bug
-class that looks promising (classically: XSS, because it's the easiest to
-eyeball) and never systematically checking the rest. Before spending more
-than one or two probes on any single vulnerability class, run down this
-list for the in-scope surface and note a one-line status for each —
-`tested/clean`, `tested/lead`, `not applicable`, or `not tested: <why>`.
-Only after that pass exists should you go deep on whichever class actually
-has a lead.
+```
+recon-dominator (recon + fingerprint + CVE lookup)
+    │
+    ▼
+build a hypothesis list: version-matched CVEs (concrete) + plausible classes
+for what was actually discovered (general) — in that priority order
+    │
+    ▼
+verify each hypothesis's PRECONDITION before probing it
+    │
+    ▼
+{ webapp-exploit-hunter | api-breaker | cloud-pivot-finder } — only the
+classes/scripts the hypothesis list actually calls for, at the depth the
+surface warrants
+    │
+    ▼
+attack-path-architect -> vuln-chain-composer
+```
 
-- **Injection**: SQLi, NoSQL injection, command injection, SSTI, XXE, LDAP
-  injection (`webapp-exploit-hunter/scripts/sqli_tester.py`, `ssti_tester.py`)
-- **Output encoding**: reflected/stored/DOM XSS (`xss_tester.py`) — one
-  vulnerability class among many here, not the default hypothesis
-- **Access control**: IDOR/BOLA, BFLA, vertical/horizontal privilege
-  escalation (`idor_tester.py`, `api-breaker/scripts/authz_tester.py`)
-- **Authn/session**: default creds, JWT attacks (none-alg, key confusion,
-  weak secret), session fixation/prediction, MFA bypass, password-reset
-  logic flaws (`auth_tester.py`, `api-breaker/scripts/auth_analyzer.py`)
-- **CSRF / request forgery**: missing anti-forgery tokens on state-changing
-  calls — check whether the app even uses cookie-based auth for those calls
-  first (bearer-token SPAs are structurally less exposed, but verify, don't
-  assume)
-- **SSRF**: any feature that fetches a URL server-side
-  (`ssrf_tester.py`, `cloud-pivot-finder/scripts/metadata_paths.py`)
-- **Mass assignment / parameter pollution**: extra fields accepted on a
-  write endpoint beyond what the UI exposes (`api-breaker/scripts/mass_assignment.py`)
-  — check raw API responses against what the UI actually displays; a field
-  present in the response but not the UI is a real lead, not a shrug
-- **Business logic**: race conditions, workflow-step skipping, price/
-  quantity manipulation, coupon/credit reuse (`race_tester.py`)
-- **File upload**: extension/content-type/magic-byte bypass
-  (`upload_tester.py`)
-- **Info disclosure**: verbose errors, debug endpoints, source maps, API
-  responses leaking more than the UI shows, directory listings
-- **Cloud/infra exposure**: public buckets, exposed metadata endpoints, open
-  databases/ports, subdomain takeover, CI/CD exposure (`cloud-pivot-finder/`)
-  — unless the program's scope explicitly excludes subdomain takeovers
-  (several do; check first)
-- **Rate limiting / abuse**: brute-force protection, GraphQL batching abuse
-  (`rate_limiter.py`)
-- **Open redirect**: only worth reporting if it chains into something
-  worse (token theft via OAuth redirect, etc.) — most bounty programs
-  explicitly exclude a bare redirect; check the program's scope page before
-  spending real time on this alone
+This is not the generic "run every exploit skill against every host"
+approach, and it's not "run a fixed checklist of ~13 categories regardless
+of what's there" either — both of those were real failure modes on live
+engagements (XSS-fixation in one direction, over-broad category sweeps that
+manufacture tests for surface that doesn't exist in the other). The fix is
+sequencing: **discovery produces concrete hypotheses first; those
+hypotheses — not a static list — decide what gets probed and how hard.**
 
-If a surface is an AI/LLM-integrated feature (chatbot, copilot, agent with
-tool access), also run the `16-ai-llm-security` skill's battery: prompt
-injection, system-prompt exfiltration attempts, excessive-agency checks
-(can the model be induced to invoke a privileged tool/API it has access to
-on the user's behalf?), and markdown/HTML-output-rendering sanitization —
-that last one is the closest AI-chat equivalent of classic XSS and is
-worth checking even though it isn't literally "XSS."
+### 2a. Recon + fingerprint + CVE lookup (recon-dominator Steps 1-5b)
 
-## 3. Think like an attacker, not a checklist — P09 and P10, applied
+Run the recon-dominator pipeline through Step 5b
+(`${CLAUDE_PLUGIN_ROOT}/skills/recon-dominator/SKILL.md`):
+`passive_recon.py` -> `active_recon.py` -> `port_scanner.py` ->
+`tech_fingerprint.py` (now extracts real per-component *versions*, not just
+"this technology is present" — e.g. `elementor-pro 4.0.4`, not just
+"Elementor") -> `cve_lookup.py` (turns those versions into NVD-matched CVE
+hypotheses, each with a confidence label on its affected-version-range
+claim and NVD's own reference URLs, which routinely include the real
+write-up/PoC). This is the step that answers "what is plausibly vulnerable
+*here*," not "what vulnerability classes exist in the world."
 
-The checklist in section 2 is coverage, not creativity — the two are
-different failure modes and you need both. When you're actually probing a
-surface:
+### 2b. Build the hypothesis list, in priority order
+
+1. **Version-matched CVEs from `cve_lookup.py`** where
+   `version_appears_affected` is true (either confidence level) — these are
+   concrete, not generic. For each, before spending any probe budget: go
+   read the actual reference URL(s) (WebFetch) to understand the exact
+   precondition and exploitation mechanics — don't try to reinvent a PoC
+   from the CVE title alone when a real write-up is one fetch away.
+2. **The surface-specific vulnerability classes that actually apply** given
+   what recon found — not a fixed list run blind. Derive this from the
+   fingerprint: a brochure site with one contact form and no authenticated
+   user area has no IDOR/BFLA/business-logic/mass-assignment surface to
+   speak of — say so and move on, don't manufacture a test for it. A site
+   with a JSON API, user accounts, or file upload has real surface in
+   exactly those categories and none of the others. Reference list (apply
+   only what's structurally present): injection (SQLi/NoSQLi/SSTI/XXE/LDAP
+   — needs a server-side query/template/parser surface), output encoding
+   (XSS — needs a reflection/storage point), access control (IDOR/BFLA —
+   needs multi-user/multi-object data), authn/session (needs a login
+   system), CSRF (needs cookie-based state-changing calls), SSRF (needs a
+   server-side URL fetch), mass assignment (needs a write API), business
+   logic (needs a stateful workflow), file upload, info disclosure, cloud/
+   infra exposure, rate limiting, open redirect (low priority, usually
+   excluded from bounty scope unless chained). Scripts:
+   `webapp-exploit-hunter/scripts/{sqli,ssti,xss,idor,auth,race,upload}_tester.py`,
+   `api-breaker/scripts/{authz_tester,auth_analyzer,mass_assignment,rate_limiter}.py`,
+   `cloud-pivot-finder/`.
+3. **AI/LLM battery** (`16-ai-llm-security` skill) when the fingerprint
+   found a chatbot/copilot/agent-with-tool-access feature: prompt
+   injection, system-prompt exfiltration, excessive-agency checks (can the
+   model be induced to invoke a privileged tool/API on the user's behalf?),
+   and markdown/HTML-output-rendering sanitization — the closest AI-chat
+   equivalent of XSS. If the feature exists but its backend isn't actually
+   live (a 502 from a disconnected provider, for instance), say that
+   plainly and name it as "re-test once live," not "tested, clean."
+
+For every category above — hypothesis-driven or structural — the engagement
+report states one line: `tested/clean`, `tested/lead`,
+`not applicable: <why>`, or `not tested: <why>`. "Not applicable" earned
+by actually checking what exists is not the same failure as silently
+skipping a category, and the report should make that distinction visible.
+
+### 2c. Verify the precondition before you probe, and probe like an attacker, not a checklist
+
+A version-matched CVE is a hypothesis, not a finding — most real
+installs have *some* unpatched component, and most of the time the
+specific feature a given CVE needs is absent or disabled (verify this the
+way the Elementor Pro CVE-2026-32475 precondition check was actually done
+on a real engagement: does a File Upload field exist and is it enabled on
+any discoverable form? It wasn't, so the CVE was correctly reported
+"unpatched but not currently exploitable," not inflated into a finding).
+Once a hypothesis clears its precondition check and you're actually
+probing:
 
 - **Mutate structurally, not by payload list** (`P09_DIVERGENCE_ENGINE.md`):
   for any interesting parameter, vary type, sign/magnitude, encoding,
@@ -165,11 +200,14 @@ surface:
   logged as "defense observed here, this shape triggers it" rather than
   silently dropped as "tested, clean."
 
-## 4. The pipeline (Felix1Catus workflow, unchanged)
+## 3. The pipeline's remaining stages
 
 ```
 recon-dominator -> { webapp-exploit-hunter | api-breaker | cloud-pivot-finder } -> attack-path-architect -> vuln-chain-composer
 ```
+
+(Felix1Catus workflow, unchanged — section 2 above is about *what drives*
+the exploitation-stage choices, not a change to the pipeline's shape.)
 
 Each pipeline skill's own `SKILL.md` lives under
 `${CLAUDE_PLUGIN_ROOT}/skills/<name>/` and documents its scripts; several now
@@ -185,9 +223,12 @@ credential string for an info-disclosure-to-account-takeover chain) or
 `"unconfirmed"` (a category-name pattern match with no such evidence — a
 lead worth investigating, not a finding to report at face value). Never
 report an `"unconfirmed"` chain's amplified severity as fact; report it as
-a hypothesis and say what would need to be true to confirm it.
+a hypothesis and say what would need to be true to confirm it. The same
+honesty standard applies to a `cve_lookup.py` hypothesis: `AFFECTED?` means
+"the version appears to match a published range, go verify the precondition
+live," never "confirmed vulnerable."
 
-## 5. When the work is multi-agent
+## 4. When the work is multi-agent
 
 If the engagement is big enough to want more than one seat working the same
 target at once, hand off to `${CLAUDE_PLUGIN_ROOT}/lounge/LOUNGE_PROTOCOL.md`
@@ -196,13 +237,16 @@ and run `python "${CLAUDE_PLUGIN_ROOT}/lounge/seatlib.py"` per its own rules
 finding to the other seat). Do not mix solo-skill mode and lounge mode on
 the same cell at the same time.
 
-## 6. Reporting
+## 5. Reporting
 
 Every chain that reaches a provable ceiling gets a report via
 `python "${CLAUDE_PLUGIN_ROOT}/skills/vuln-chain-composer/scripts/generate_report.py"`
 (or, in lounge mode, the `REPORT` / `REPORT-OK` / `REPORT-FIX` cycle in
 `${CLAUDE_PLUGIN_ROOT}/lounge/LOUNGE_PROTOCOL.md`). You never submit a
-report yourself — that is always the operator's call. Always state your
-breadth-checklist results (section 2) in the final report, including every
-"not tested: <why>" line — an incomplete sweep reported as if it were
-complete is itself a false positive.
+report yourself — that is always the operator's call. Always state the
+hypothesis list and category statuses from section 2 in the final report —
+every `AFFECTED?` CVE hypothesis (confirmed or not, precondition met or
+not), every category's `tested/clean` · `tested/lead` · `not applicable` ·
+`not tested: <why>` line, and what changed since any prior assessment of
+the same target. An incomplete sweep reported as if it were complete is
+itself a false positive.
