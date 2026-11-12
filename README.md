@@ -163,6 +163,30 @@ Read `doctrine/CLAUDE_ENFORCEMENT.md` first.
 
 ## Installation
 
+### As a Claude Code plugin (recommended — wires in the `swarm-operator` agent alongside the skills)
+
+This repo is both the marketplace and the plugin it lists
+(`.claude-plugin/marketplace.json` + `.claude-plugin/plugin.json` at its
+root), so one command adds the marketplace and installs the plugin:
+
+```bash
+/plugin install catusmythos-lounge --marketplace Felix1Catus/CatusMythos-Lounge
+```
+
+Or as two steps, from inside Claude Code or a shell:
+
+```bash
+claude plugin marketplace add Felix1Catus/CatusMythos-Lounge
+claude plugin install catusmythos-lounge@catusmythos-lounge-marketplace
+```
+
+The doctrine (`doctrine/`) and lounge (`lounge/`) layers aren't part of the
+plugin manifest — they're invoked directly by the skills/agent, not loaded
+as plugin components — so they come along for free with the clone a plugin
+install creates; nothing extra to wire up.
+
+### Skills only, without the plugin machinery
+
 ```bash
 git clone https://github.com/Felix1Catus/CatusMythos-Lounge.git
 cd CatusMythos-Lounge
@@ -175,12 +199,6 @@ cp -r skills/* ~/.claude/skills/
 mkdir -p .claude/skills
 cp -r /path/to/CatusMythos-Lounge/skills/* .claude/skills/
 ```
-
-As a Claude Code plugin (recommended — keeps the doctrine/lounge layers and
-the `swarm-operator` agent wired in alongside the skills): point your
-plugin marketplace config at this repo, or drop it under
-`~/.claude/plugins/` as-is — `.claude-plugin/plugin.json` declares
-`skills/` and `agents/`.
 
 ### Requirements
 

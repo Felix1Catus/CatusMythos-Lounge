@@ -1,0 +1,23 @@
+{
+  "name": "catusmythos-lounge-marketplace",
+  "description": "Marketplace for the catusmythos-lounge plugin — a merged Claude Code security toolkit (claude-code-pentest pipeline + Claude-Code-CyberSecurity-Skill's 22 domains + the mythos-lounge doctrine engine and multi-seat protocol).",
+  "owner": {
+    "name": "CatusMythos-Lounge contributors",
+    "url": "https://github.com/Felix1Catus/CatusMythos-Lounge"
+  },
+  "plugins": [
+    {
+      "name": "catusmythos-lounge",
+      "source": "./",
+      "description": "Merged pentest pipeline + 22-domain security skill collection + doctrine engine and multi-seat lounge protocol.",
+      "category": "security",
+      "tags": [
+        "security",
+        "pentest",
+        "bug-bounty",
+        "red-team",
+        "blue-team"
+      ]
+    }
+  ]
+}

@@ -17,5 +17,5 @@
     "skills"
   ],
   "skills": "./skills",
-  "agents": "./agents"
+  "agents": "./agents/swarm-operator.md"
 }
