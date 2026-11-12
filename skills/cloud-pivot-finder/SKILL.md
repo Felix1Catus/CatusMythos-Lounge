@@ -42,14 +42,41 @@ python scripts/bucket_enum.py --domain {target_domain} --provider {aws|gcp|azure
 - {company}-assets, {company}-uploads, {company}-data
 - {project}-{env} combinations
 
-**Per-provider testing:**
-- **S3**: Check for public ListBucket, GetObject, PutObject
-- **GCS**: Check for allUsers/allAuthenticatedUsers permissions
-- **Azure Blob**: Check for public container access
+**Per-provider testing** (built with real depth across all three, not just a
+single endpoint check per provider — see 2024-2026 incidents below):
+- **S3**: Direct + region-redirect retry (a bucket outside `us-east-1`
+  301s with the real region in `x-amz-bucket-region`; treating that as
+  "doesn't exist" silently drops most real-world buckets).
+- **GCS**: Object-listing AND the JSON API's IAM policy
+  (`storage.objects.list` test for `allUsers`), since the realistic GCS
+  misconfiguration is public *read* with listing off, not public listing.
+- **Azure Blob**: Account-level `?comp=list` AND, when the account itself
+  is locked (403), per-container enumeration against common container
+  names — a locked account with one wide-open container is the realistic
+  Azure misconfiguration; testing only the account root misses it.
+- **Cross-provider, every accessible bucket/container**: fetch a handful
+  of the listed files and regex-scan them for credential-shaped strings
+  (AWS keys, Azure `AccountKey=`/connection strings, GCP service-account
+  JSON, private keys). This is the actual shape of real 2025-2026
+  incidents — "8 Minutes to AWS Admin" (long-lived keys in an open S3
+  bucket plus an over-privileged Lambda role) and a honeypot that caught
+  attackers dumping 15,000 stolen credentials into an open bucket — the
+  storage service being public isn't the finding, a live secret sitting
+  in it is.
+- **Cross-provider, unclaimed names**: when a name from `--custom-names`
+  (a REAL discovered reference — a dangling CNAME, a hardcoded asset URL,
+  a CI config value — not a blind guess) doesn't exist on a provider, flag
+  it as claimable. This is Unit 42's 2026 "bucket namespace hijacking"
+  finding: deleted/unclaimed bucket names across AWS, GCS, *and* Azure can
+  be re-registered by an attacker to intercept logs, backups, or served
+  assets. Blind brute-force guesses are never reported as claimable —
+  almost any string is technically unclaimed, so that signal is only real
+  when something on the target still points at the exact name.
 
 For each accessible bucket:
 1. List contents (if ListBucket allowed)
-2. Check for sensitive files (.env, credentials, backups, database dumps)
+2. Check for sensitive files (.env, credentials, backups, database dumps) —
+   now automated by the credential scan above, not manual-only
 3. Test write access (attempt to upload test file, delete immediately)
 4. Check bucket policy for overly permissive configurations
 
