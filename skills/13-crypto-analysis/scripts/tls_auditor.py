@@ -257,8 +257,19 @@ class TLSAuditor:
             vulns.append({"severity": "CRITICAL", "title": "Certificate expired", "remediation": "Renew certificate immediately"})
         elif cert.get("expiring_soon"):
             vulns.append({"severity": "MEDIUM", "title": "Certificate expiring soon", "remediation": "Renew certificate before expiration"})
-        if not cert.get("valid") and "error" in cert:
-            vulns.append({"severity": "HIGH", "title": "Certificate validation failed", "remediation": cert["error"]})
+        elif not cert.get("valid"):
+            # elif, not a separate `if`: an expired cert is already flagged
+            # CRITICAL above -- don't also flag it HIGH here. And don't
+            # require "error" to be present: an invalid cert with no error
+            # string attached was previously invisible in this list (while
+            # still being directly penalized in _calculate_grade, which is
+            # exactly the kind of mismatch that caused the double-count bug
+            # this function's caller used to have).
+            vulns.append({
+                "severity": "HIGH",
+                "title": "Certificate validation failed",
+                "remediation": cert.get("error", "Certificate did not pass validation"),
+            })
 
         # Weak cipher
         cipher = results.get("cipher_suites", {})
@@ -272,32 +283,22 @@ class TLSAuditor:
 
         return vulns
 
+    # Severity -> grade-score deduction. _calculate_grade scores from the
+    # vulnerabilities list ALONE: it used to also apply separate direct
+    # deductions for the exact same conditions _assess_vulnerabilities()
+    # flags (weak protocol, expired/invalid cert, weak cipher), silently
+    # double-penalizing every one of them, while MEDIUM-severity vulns
+    # (cert expiring soon, missing HSTS) were never scored at all because
+    # that old deduction loop only handled CRITICAL/HIGH. One source of
+    # truth now: every vulnerability counts exactly once, at its own weight.
+    _GRADE_WEIGHTS = {"CRITICAL": 40, "HIGH": 20, "MEDIUM": 10, "LOW": 5}
+
     def _calculate_grade(self, results: Dict) -> str:
-        """Calculate overall TLS grade (A-F)."""
+        """Calculate overall TLS grade (A-F) from the vulnerabilities list."""
         score = 100
-
-        # Protocol deductions
-        for proto, status in results.get("protocol_support", {}).items():
-            if status == "SUPPORTED" and proto in WEAK_PROTOCOLS:
-                score -= 20
-
-        # Certificate deductions
-        cert = results.get("certificate", {})
-        if cert.get("expired"):
-            score -= 50
-        if not cert.get("valid"):
-            score -= 30
-
-        # Cipher deductions
-        if results.get("cipher_suites", {}).get("strength") == "WEAK":
-            score -= 25
-
-        # Vulnerability deductions
         for vuln in results.get("vulnerabilities", []):
-            if vuln["severity"] == "CRITICAL":
-                score -= 20
-            elif vuln["severity"] == "HIGH":
-                score -= 10
+            score -= self._GRADE_WEIGHTS.get(vuln.get("severity"), 0)
+        score = max(score, 0)
 
         if score >= 90:
             return "A"

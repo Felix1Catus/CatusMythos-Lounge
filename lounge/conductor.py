@@ -50,13 +50,31 @@ def _fan(L, exclude, msg):
 def _rotate(L):
     p = L / 'events.jsonl'
     try:
-        if p.exists() and p.stat().st_size >= 10_000_000:
+        if not (p.exists() and p.stat().st_size >= 10_000_000):
+            return
+    except OSError:
+        return
+    # Every writer to events.jsonl (seatlib._emit) takes the 'events' lock
+    # first. Moving the file here without it means a write landing right at
+    # rotation time can be appended to the file *after* it's already been
+    # renamed to the archive -- that event is then never read back by
+    # _read_new(), which only looks at the live events.jsonl. Take the same
+    # lock, and release it before emitting ROTATE (seatlib._emit acquires it
+    # again internally -- holding it across that call would deadlock).
+    if not seatlib._acquire(L / 'lock', 'events', timeout=30.0, stale=30.0):
+        return  # another writer has it; rotate next cycle instead of racing
+    dst = None
+    try:
+        if p.exists() and p.stat().st_size >= 10_000_000:  # recheck under the lock
             (L / 'archive').mkdir(exist_ok=True)
             dst = L / 'archive' / f'events-{int(time.time())}.jsonl'
             shutil.move(str(p), str(dst))
-            _emit(L, 'ROTATE', '', '', f'archived to {dst.name}')
     except Exception:
-        pass
+        dst = None
+    finally:
+        seatlib._release(L / 'lock', 'events')
+    if dst is not None:
+        _emit(L, 'ROTATE', '', '', f'archived to {dst.name}')
 
 def _read_new(L, since):
     out, bad = [], []
@@ -213,7 +231,12 @@ def cycle(L):
         # auto-GATE: any event implying a human-gated action
         if PROD_WRITE_RE.search(note) and t not in ('GATE', 'GATE-RESUMED'):
             gid = f'gate-{ev["seq"]}'
-            gates[gid] = cell
+            # Store the NORMALIZED cell: claim() normalizes its cell before the
+            # `if cell in gates.values()` check below, but emit's --cell is
+            # whatever raw string the caller typed. Storing the raw form here
+            # lets a later claim on a differently-cased/spaced cell slip the
+            # exact-string match and bypass the freeze.
+            gates[gid] = seatlib.normalize_cell(cell)
             _emit(L, 'GATE', cell, '', f'{gid} frozen (prod/gated action by {seat})')
 
         if t == 'SEAT':
@@ -325,7 +348,7 @@ def cycle(L):
             _emit(L, 'WAIT', '', '', '429 storm: global cool 120s')
         elif t == 'GATE':
             gid = note or f'gate-{ev["seq"]}'
-            gates[gid] = cell
+            gates[gid] = seatlib.normalize_cell(cell)  # see note above the other gates[gid] assignment
             _emit(L, 'GATE', cell, '', f'{gid} frozen awaiting operator')
         seatlib.sync_obligation(L, ev)
 

@@ -16,6 +16,7 @@ import ctypes
 import hashlib
 import json
 import os
+import re
 import select
 import shutil
 import sys
@@ -42,11 +43,28 @@ def lounge_dir():
                 return parent
     return Path.home() / 'targets' / '_shared' / 'lounge'
 
+def _pid_alive(pid):
+    """Liveness check for a PID, not just "does the lock dir look old".
+
+    os.kill(pid, 0) sends no signal on POSIX and (per CPython's nt_kill)
+    checks STILL_ACTIVE via GetExitCodeProcess on Windows without
+    terminating anything — portable liveness probe either way.
+    """
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # exists, just not ours to signal
+    except OSError:
+        return False
+    return True
+
 # ---- filesystem mutex (mkdir atomic, stale-break) ---------------------------
 def _acquire(lockdir, name, timeout=30.0, stale=30.0):
     path = Path(lockdir) / f'{name}.lock'
     start = time.time()
-    warned = False
+    broke_once = False
     while True:
         try:
             path.mkdir()
@@ -58,13 +76,26 @@ def _acquire(lockdir, name, timeout=30.0, stale=30.0):
             mt = path.stat().st_mtime
         except FileNotFoundError:
             continue
-        if time.time() - mt > stale and not warned:
-            warned = True
+        if time.time() - mt > stale and not broke_once:
+            # The lock dir's own mtime only says WHEN it was created, not
+            # whether its holder is still working — a holder stuck in a
+            # single slow _emit()/token() call past `stale` is still alive.
+            # Only break the lock when its recorded owner PID is provably
+            # dead (or the owner marker is missing/corrupt, which shouldn't
+            # happen on a lock we created ourselves and is itself a sign
+            # something already went wrong).
+            owner_pid = None
             try:
-                shutil.rmtree(path)
-                continue
-            except OSError:
-                pass
+                owner_pid = int((path / 'owner').read_text().split()[0])
+            except Exception:
+                owner_pid = None
+            if owner_pid is None or not _pid_alive(owner_pid):
+                broke_once = True
+                try:
+                    shutil.rmtree(path)
+                    continue
+                except OSError:
+                    pass
         if time.time() - start > timeout:
             return False
         time.sleep(0.02)
@@ -93,6 +124,28 @@ def normalize_cell(cell):
         path = path.split('?', 1)[0].rstrip('/') or '/'
         rest = path + ((' ' + extra[0]) if extra else '')
     return (method + (' ' + rest if rest else '')).strip()
+
+_SAFE_COMPONENT_RE = re.compile(r'^[A-Za-z0-9_.-]+$')
+
+def _safe_component(value, what='identifier'):
+    """Reject anything that isn't a plain filename-safe token.
+
+    Seat ids and program names are interpolated directly into filesystem
+    paths (hb/<seat>.json, inbox/<seat>.jsonl, seats/<seat>.pid,
+    ~/.lounge/<seat>.<program>.seen, ...) all over this module. Nothing
+    upstream validates them -- seat_launcher.sh's role dispatch is a case
+    statement that falls through to a default for an unrecognized name, it
+    never rejects one -- so a seat id like '../../../tmp/x' or one
+    containing '/' escapes the intended directory. Call this at the one
+    place each identifier enters this module from the outside (CLI args,
+    or a caller-supplied string) rather than trusting it implicitly.
+    """
+    s = str(value)
+    if not s or '..' in s or not _SAFE_COMPONENT_RE.match(s):
+        raise ValueError(
+            f"unsafe {what}: {s!r} -- only letters, digits, '_', '-', '.' are allowed"
+        )
+    return s
 
 def cell_tokens(cell):
     return normalize_cell(cell).split()
@@ -138,13 +191,31 @@ _CEILING_RE = _re.compile(
 )
 
 def _conductor_alive(L):
-    """True only if conductor.pid is a live conductor.py, not a recycled pid."""
+    """True if conductor.pid names a live process, and — where we can check —
+    that process is actually a conductor.py, not a recycled pid.
+
+    /proc only exists on Linux. The identity check (reading cmdline) is a
+    bonus correctness check there; its absence elsewhere must not make this
+    function unconditionally return False, or every join() on macOS/Windows/
+    a no-procfs container spawns a brand new conductor on top of a perfectly
+    live one.
+    """
     try:
         pid = int((Path(L) / 'conductor.pid').read_text().strip())
-        os.kill(pid, 0)
-        cmd = open(f'/proc/{pid}/cmdline', 'rb').read().replace(b'\x00', b' ').decode('utf-8', 'replace')
     except Exception:
         return False
+    if not _pid_alive(pid):
+        return False
+    cmdline_path = Path(f'/proc/{pid}/cmdline')
+    if not cmdline_path.exists():
+        # No procfs to check identity against (not Linux, or a sandboxed
+        # container without it) — the pidfile + liveness check is the best
+        # available signal, so trust it rather than assuming dead.
+        return True
+    try:
+        cmd = cmdline_path.read_bytes().replace(b'\x00', b' ').decode('utf-8', 'replace')
+    except Exception:
+        return True  # procfs raced/vanished mid-read; the pid was alive a moment ago
     return 'conductor.py' in cmd
 
 def obligation_path(L):
@@ -569,7 +640,7 @@ def claim_owner(L, program, cell):
 
 # ---- inbox ------------------------------------------------------------------
 def _inbox_path(L, seat):
-    return L / 'inbox' / f'{seat}.jsonl'
+    return L / 'inbox' / f'{_safe_component(seat, "seat id")}.jsonl'
 
 def inbox_send(L, seat, msg):
     p = _inbox_path(L, seat)
@@ -595,6 +666,7 @@ def inbox_read(L, seat, clear=False):
 
 # ---- heartbeat --------------------------------------------------------------
 def heartbeat(L, seat, wip=0, role=None):
+    seat = _safe_component(seat, "seat id")
     (L / 'hb').mkdir(parents=True, exist_ok=True)
     extra = {}
     if role:
@@ -624,8 +696,8 @@ def alive_seats(L, dead_s=None):
     return out
 
 def hb_alive(L, seat, dead_s=90):
-    p = L / 'hb' / f'{seat}.json'
     try:
+        p = L / 'hb' / f'{_safe_component(seat, "seat id")}.json'
         ts = json.loads(p.read_text()).get('ts', 0)
     except Exception:
         return False
@@ -791,6 +863,14 @@ def main():
 
     a = ap.parse_args()
     L = Path(a.lounge) if a.lounge else lounge_dir()
+
+    # Validate once, here, before any path is built from these identifiers
+    # anywhere downstream (hb/<seat>.json, inbox/<seat>.jsonl, seats/<seat>.pid,
+    # ~/.lounge/<seat>.<program>.seen, ...). Neither argparse nor
+    # seat_launcher.sh's role-dispatch case statement rejects an unsafe value.
+    a.seat = _safe_component(a.seat, "seat id")
+    if getattr(a, 'program', None):
+        a.program = _safe_component(a.program, "program name")
 
     # Read-only commands must not refresh a dead seat. hb-loop and shots do.
     if a.cmd not in ('hb-loop', 'next', 'board', 'follow', 'status', 'tail', 'inbox'):

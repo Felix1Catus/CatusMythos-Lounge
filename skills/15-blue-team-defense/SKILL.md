@@ -575,8 +575,10 @@ Get-Service | Where-Object {$_.Status -eq "Running"} | Select-Object Name,Displa
 
 ```bash
 python scripts/hardening_checker.py --os ubuntu --output report.json
-python scripts/hardening_checker.py --os windows --cis-level 1 --output report.json
+python scripts/hardening_checker.py --os centos --output report.json
 ```
+
+(`hardening_checker.py` only implements Linux checks — `--os windows` and `--cis-level`/`--fix-mode` are not real flags; see the script's own `--help`.)
 
 ### 5. Patch Management Strategy
 
@@ -727,10 +729,13 @@ Given findings from [Engagement Date] assessment:
 ## Script Reference
 
 ### `hardening_checker.py`
+Linux only (`--os ubuntu|centos|auto` — `auto` detects the host OS and
+errors if it isn't Linux; `--os windows` errors, there is no Windows
+checker implemented). `--cis-level`/`--fix-mode` are not real flags.
 ```bash
 python scripts/hardening_checker.py --os ubuntu --output report.json
-python scripts/hardening_checker.py --os ubuntu --cis-level 1 --fix-mode
-python scripts/hardening_checker.py --os windows --cis-level 1 --output report.json
+python scripts/hardening_checker.py --os auto --verbose
+python scripts/hardening_checker.py --demo
 ```
 
 ---

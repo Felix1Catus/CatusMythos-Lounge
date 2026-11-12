@@ -102,8 +102,12 @@ OBJECTIVE: Remote Code Execution on production
 
 ### Step 5: Chaining Opportunity Analysis
 
+There is no separate `find_chains.py` — `generate_attack_tree.py` already
+produces chain opportunities (`generate_chain_opportunities()`) as part of
+its own output when given a trust map:
+
 ```bash
-python scripts/find_chains.py --attack-tree {tree_file} --trust-map {trust_map}
+python scripts/generate_attack_tree.py --input {classified_assets.json} --trust-map {trust_map.json} --output {tree_file.json}
 ```
 
 Identify where vulnerabilities on different assets can be chained:
@@ -142,8 +146,12 @@ Score each attack path on:
 
 ### Step 7: Report Generation
 
+There is no `generate_attack_report.py` in this skill — per the pipeline,
+attack-path-architect's output feeds into vuln-chain-composer, which owns
+final report generation:
+
 ```bash
-python scripts/generate_attack_report.py --project {name}
+python ../vuln-chain-composer/scripts/generate_report.py --input {chains_with_impact.json} --format all --output-dir {reports_dir}
 ```
 
 Output:

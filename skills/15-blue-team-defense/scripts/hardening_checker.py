@@ -236,6 +236,23 @@ def main():
     if args.demo:
         sys.exit(_run_demo())
 
+    # --os was accepted by argparse but never actually read: this tool only
+    # has LinuxHardeningChecker, so `--os windows` (SKILL.md's own example
+    # command) used to silently run Linux-only checks against sshd_config/
+    # sysctl/systemctl on a Windows box -- nearly every check SKIPs -- and
+    # still claimed `"os": "Linux"` in the output. Fail loudly instead of
+    # producing a mislabeled, mostly-empty report.
+    if args.os == "windows":
+        parser.error(
+            "--os windows is not supported: only LinuxHardeningChecker is "
+            "implemented. Run this on the Linux host being audited."
+        )
+    if args.os == "auto" and platform.system() != "Linux":
+        parser.error(
+            f"--os auto detected {platform.system()}, but only Linux checks "
+            "are implemented. Run this tool on the Linux host being audited."
+        )
+
     checker = LinuxHardeningChecker()
     results = checker.run()
 
