@@ -151,7 +151,7 @@ attack-path-architect's output feeds into vuln-chain-composer, which owns
 final report generation:
 
 ```bash
-python ../vuln-chain-composer/scripts/generate_report.py --input {chains_with_impact.json} --format all --output-dir {reports_dir}
+python "${CLAUDE_PLUGIN_ROOT}/skills/vuln-chain-composer/scripts/generate_report.py" --input {chains_with_impact.json} --format all --output-dir {reports_dir}
 ```
 
 Output:
