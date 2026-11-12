@@ -27,14 +27,14 @@ Three real projects, combined so each covers what the others miss:
    — a 6-skill, 43-script, zero-dependency pipeline that takes a domain from
    recon through exploitation to a bug-bounty-ready report. **Its workflow is
    this repo's execution backbone, unchanged.**
-2. **[Masriyan/Claude-Code-CyberSecurity-Skill](https://github.com/Masriyan/Claude-Code-CyberSecurity-Skill)**
+ 
    — 22 skills covering the rest of security work the pipeline doesn't touch:
    malware analysis, reverse engineering, incident response, mobile, OT/ICS,
    cryptography, GRC/compliance, supply chain, threat intel, purple team,
    blue team defense, AI/LLM security, and more. **Its domain breadth is
    added wholesale**, and the four places it overlaps the pipeline had their
    *scripts* folded in rather than shipping a redundant second tool.
-3. **mythos-lounge** — a doctrine engine (evidence-first discipline, probe
+2. **mythos-lounge** — a doctrine engine (evidence-first discipline, probe
    budgets, report-only-when-real) and a multi-seat collaboration protocol
    (`seatlib.py`) that lets several agents hunt one target in the same
    window without duplicating work. **This is the governance and
