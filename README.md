@@ -67,11 +67,12 @@ the MIT terms each source shipped with.
                                     │ enforced on every mode
                     ┌───────────────▼───────────────┐
                     │  agents/swarm-operator.md       │
-                    │  single-seat entry point, runs    │
-                    │  the pipeline solo sequentially     │
+                    │  solo sequential (default), or    │
+                    │  native parallel: static-partition │
+                    │  fan-out/fan-in, same session       │
                     └───────────────┬───────────────┘
                                     │ or hand off to, for
-                                    │ multi-agent/multi-day work
+                                    │ true multi-model/multi-day work
                     ┌───────────────▼───────────────┐
                     │    lounge/   (coordination)    │
                     │  seatlib.py claim/token/push    │
@@ -285,7 +286,31 @@ rather than deleted outright, since it documents real ideas someone running
 a standalone setup might still want. `vuln-chain-composer`'s capability-graph
 chaining engine and `webapp-exploit-hunter`'s `waf_bypass_tester.py` were
 both built from a 100-writeup research pass on 2024-2026 bug-bounty
-disclosures (`research_notes/Vuln chaining and WAF bypass patterns/`) —
-further research-driven passes per kept skill, and a native in-process
-multi-agent mode inside `swarm-operator` (alongside, not replacing, the
-lounge), are in progress.
+disclosures (`research_notes/Vuln chaining and WAF bypass patterns/`).
+
+`swarm-operator` then gained a native in-process multi-agent mode
+(alongside, not replacing, the lounge) after a dedicated competitive-
+landscape research pass (`research_notes/Web pentest agent competitive
+landscape/`) — a static work partition across parallel subagents, no live
+channel between them while they run, one merge+skeptic-review step at the
+end. This is deliberately NOT a from-scratch invention: it's the
+parallel-crawling literature's well-quantified "firewall mode" (Cho &
+Garcia-Molina, WWW 2002), chosen over lounge's live "exchange mode" when an
+engagement fits in one session. One real constraint shaped the design and
+is worth knowing if you're reading `swarm-operator.md`'s own text:
+**the agent cannot spawn its own subagents** — tested directly (a
+delegation tool was added to its declared tool list and it tried to use it;
+the tool was simply never available at runtime regardless of what was
+declared), not assumed. The fan-out happens one level up, from whatever
+invokes the agent — it computes the partition and writes a plain JSON
+ledger, then hands the dispatch instructions back rather than attempting
+it itself. Per the research, the merge/skeptic step matters more than the
+partitioning mechanism: a controlled study found up to 71.5% of LLM
+pentest agents' self-reported exploit "successes" are invalid under an
+actual evidence check, which is why that step re-derives every finding's
+confidence from its recorded evidence rather than trusting a slice's own
+narration.
+
+Further research-driven depth passes per kept skill (recon-dominator,
+`16-ai-llm-security`, api-breaker, cloud-pivot-finder, attack-path-architect)
+are next.

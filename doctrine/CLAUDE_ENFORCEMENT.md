@@ -11,6 +11,28 @@ head every session — the only channel proven to be live.**
 Owner: Claude. Not mirrored. Not built by sync_mirrors.sh.
 Blocks are CL-A…CL-F to avoid collision with the shared BLOCK A–F in the core.
 
+**Scoping note for this plugin (added during the web-pentest-refocus pass):**
+this file documents real operational history from a standalone, multi-CLI
+"mythos" install (`~/.claude/mythos/`, `~/targets/_shared/`, `~/research/`,
+`~/.kimi-code/`, `sync_mirrors.sh`) that is NOT part of this plugin's own
+distribution — see `${CLAUDE_PLUGIN_ROOT}/standalone-advanced/README.md` for
+what that external system is. **CL-A, CL-C, and CL-E** describe discipline
+that applies directly in this plugin as-is (verdict linting, rate doctrine,
+chain completeness) — follow them literally. **CL-B, CL-D, CL-F, CL-G, and
+CL-H** each name a specific external script or path
+(`~/.claude/mythos/selfprod.sh`, `~/targets/_shared/probe.sh`,
+`~/targets/_shared/TOOLS.md`, `~/.claude/mythos/rquery.sh`,
+`~/.claude/mythos/doctrine/protocols/`, `~/.claude/mythos/install_protocols.sh`,
+`~/.claude/mythos/prefile_gate.sh`) that will not exist in a normal plugin
+install — **do not attempt to run them, they will simply fail with "no such
+file."** The underlying discipline each describes is still real and worth
+applying by hand within this plugin (self-audit your own notes for
+"untested/skipped/never/TODO" before any blocked/closed/done report per
+CL-B; use absolute tool paths and truncate-before-write temp files per CL-D;
+query `${CLAUDE_PLUGIN_ROOT}/doctrine/protocols/` directly for P01-P14 per
+CL-G, which already works unmodified since those files ARE bundled here) —
+just without the specific external tooling CL-B/D/F/G/H's own text names.
+
 ---
 
 ## CL-A — DEFINITION OF CLOSED

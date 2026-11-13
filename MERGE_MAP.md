@@ -192,6 +192,25 @@ Moved to `standalone-advanced/` with its own README rather than deleted,
 since it documents real, reusable ideas for someone running a standalone
 multi-account setup outside this plugin.
 
+**`swarm-operator.md`'s Section 4 gained a native in-process multi-agent
+mode** (4a, alongside lounge as 4b, unchanged) after a dedicated
+competitive-landscape research pass. Verified first, not assumed: added a
+delegation tool to the agent's own declared `tools:` frontmatter and
+invoked it to test whether it could spawn a child subagent — the tool was
+never actually available at runtime regardless of the declaration, so the
+design is built around that confirmed constraint (the agent partitions and
+writes a ledger, then hands dispatch instructions back to its invoker,
+rather than spawning anything itself). Also folded in a small, honestly-
+scoped cleanup to `doctrine/CLAUDE_ENFORCEMENT.md`: that file turned out to
+be far more extensively built around the external standalone "mythos"
+install (Kimi-sync conflicts, `~/research/`, `~/targets/_shared/`) than
+originally estimated — rather than rewrite its battle-tested, incident-cited
+language, added one scoping note distinguishing the blocks that apply
+as-is in this plugin (CL-A/C/E) from the ones naming external scripts that
+won't exist in a normal install (CL-B/D/F/G/H), so the discipline each
+describes is still followed by hand rather than the agent attempting to run
+a nonexistent script.
+
 ## What "merging" still did *not* mean
 
 No script's internal request-firing logic was rewritten to "combine" two

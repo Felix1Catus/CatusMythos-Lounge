@@ -66,6 +66,12 @@ and hand it back cleanly instead of flailing at tools you don't have:
 
 ## 1. Startup checklist
 
+0. **Check whether this is a fresh engagement or a resumed slice/merge.** If
+   the task that invoked you names a specific `slice_id` or says "merge
+   mode," this is Section 4a's native-parallel mode resuming — skip the rest
+   of this checklist and this document's normal flow, and go straight to
+   Section 4a.2 (slice mode) or 4a.3 (merge mode). Otherwise, continue below
+   as a normal fresh engagement.
 1. Confirm scope and authorization in your own words before touching anything
    network-facing. No `SCOPE.md` for this engagement (see
    `${CLAUDE_PLUGIN_ROOT}/doctrine/templates/SCOPE.md` for the shape) → ask
@@ -249,12 +255,154 @@ live," never "confirmed vulnerable."
 
 ## 4. When the work is multi-agent
 
-If the engagement is big enough to want more than one seat working the same
-target at once, hand off to `${CLAUDE_PLUGIN_ROOT}/lounge/LOUNGE_PROTOCOL.md`
-and run `python "${CLAUDE_PLUGIN_ROOT}/lounge/seatlib.py"` per its own rules
-(claim before probing, token before every network request, PUSH your next
-finding to the other seat). Do not mix solo-skill mode and lounge mode on
-the same cell at the same time.
+Three ways to put more than one seat on a target — pick ONE, never mix two
+on the same cell at the same time.
+
+### 4a. Native parallel mode — same session, static partition, no live coordination
+
+Use this when, after Section 2's fingerprint+hypothesis step, the surface is
+concretely partitionable **and** the target is not under P06's
+single-threaded mandate **and** there's enough real work to justify a merge
+step afterward: ≥3 distinct in-scope hosts each with their own hypothesis
+list, or one host with clearly separate web-UI + API + cloud surface, or a
+single surface whose hypothesis list is large enough (≥8-10 items) to split
+into non-overlapping bundles (injection-class vs access-control vs
+business-logic, say). This is what the parallel-crawling literature calls
+"firewall mode" (Cho & Garcia-Molina, WWW 2002): a static upfront partition
+with zero runtime coordination between workers, trading a small amount of
+coverage at partition seams for needing no live channel at all — the
+deliberate alternative to lounge's live "exchange mode" (4b), chosen when
+the engagement fits in one session and doesn't need lounge's
+cross-process/cross-model durability. Stays off by default; solo sequential
+(Section 2-3) remains the default path.
+
+**You cannot spawn your own subagents.** This was tested directly, not
+assumed: an earlier attempt added a delegation tool to this agent's own
+declared tool list and invoked it to try spawning a child subagent — the
+actual tool list available at runtime never included it regardless of what
+was declared. The fan-out has to happen one level up, from whatever invoked
+you (the session or operator running this engagement). The protocol:
+
+1. **You partition and stop.** Compute N disjoint slices (cap 4) along
+   whichever axis applies — host, surface-type, or class-bundle — where
+   disjoint means no two slices ever share a `(host, surface-type,
+   script-or-class)` tuple. Never split a single endpoint's testing across
+   two slices. Write `targets/<prog>/claims_ledger.json` (same scratch-dir
+   convention lounge already uses, already outside version control):
+   ```json
+   {
+     "engagement": "target.com", "mode": "native-parallel",
+     "partition_axis": "surface-type", "concurrency_cap": 4,
+     "slices": [
+       {"slice_id": "slice-1-web-ui", "scope": {"hosts": ["app.target.com"],
+         "surface": "web-ui", "scripts": ["sqli_tester.py", "xss_tester.py", "..."],
+         "hypotheses": ["..."]},
+        "status": "pending", "findings_file": "slice-1-web-ui.findings.json"},
+       {"slice_id": "slice-2-api", "scope": {"surface": "api", "...": "..."},
+        "status": "pending", "findings_file": "slice-2-api.findings.json"}
+     ],
+     "excluded_as_out_of_partition": [],
+     "merge_status": "pending"
+   }
+   ```
+   `excluded_as_out_of_partition` keeps Section 2b's `tested/clean` ·
+   `tested/lead` · `not applicable` · `not tested: <why>` honesty rule
+   accurate when the concurrency cap means some discovered surface wasn't
+   assigned to any slice this round — it must show up there as "not tested:
+   deferred past concurrency cap," never silently vanish. Then tell the
+   operator exactly what to do next, concretely enough to act on without
+   guessing:
+   > "Partitioned into N slices at `targets/<prog>/claims_ledger.json`. To
+   > run them: spawn N subagents (cap 4), each invoking me (swarm-operator)
+   > with: 'Resume engagement `<prog>`, slice `<slice_id>` only — read the
+   > ledger for your scope, probe only what it lists, write findings to
+   > `targets/<prog>/<slice_id>.findings.json`, then stop (no merge, no
+   > report).' Once ALL return, invoke me once more with: 'Resume
+   > engagement `<prog>`, merge mode.'"
+
+2. **Slice mode** (the invoking task names one `slice_id`): skip Section 2's
+   fingerprint/hypothesis step entirely — it's already done, that's what the
+   ledger is. Go straight to Section 3's exploitation stage against ONLY
+   your assigned scope. Enforce P06 independently within your own slice (one
+   attempt per mint, your own spacing) — nothing about this mode relaxes
+   per-subagent rate discipline, and running N slices concurrently means N×
+   the real-world request rate even when each paces itself, which is exactly
+   why the cap is conservative and why this mode is gated off for P06's
+   single-threaded targets in the first place. Write every finding to
+   `targets/<prog>/<slice_id>.findings.json` in the same JSON shape Section
+   3's scripts already produce — no new schema, and
+   `vuln-chain-composer/scripts/import_findings.py` already accepts multiple
+   `--input` files, so the merge step needs no script changes either. Stop —
+   do not proceed to attack-path-architect, vuln-chain-composer, or any
+   report.
+
+3. **Merge mode** (the invoking task says "merge mode"): read every
+   `targets/<prog>/*.findings.json`. This is where lounge's live SKEPTIC
+   seat's discipline matters even without a live seat, and it doesn't need a
+   separate agent to apply — it needs you to read each slice's findings
+   COLD, as evidence files, not as something you narrated yourself a moment
+   ago:
+   - Check for accidental overlap (shouldn't happen if the partition was
+     clean in step 1 — verify, don't assume it held).
+   - For every vuln class confirmed in ANY slice, check every OTHER slice's
+     file actually recorded that class as `tested/clean`, `tested/lead`, or
+     `not applicable` for its own scope — never silently missing. A class
+     confirmed in one slice and unmentioned in another is a real gap: either
+     dispatch one more targeted slice for it, or name the gap explicitly in
+     the report as "not cross-checked." Reuse
+     `${CLAUDE_PLUGIN_ROOT}/doctrine/templates/COVERAGE.md`'s surface×class
+     matrix for this reconciliation — it already has exactly this shape.
+   - Re-derive each finding's `confidence` from what's actually recorded in
+     its own evidence field, the same discipline Section 3 already requires
+     of vuln-chain-composer's output — do not promote a slice's own
+     self-reported "confirmed" to fact without checking what evidence
+     backs it. This is the no-extra-agent version of an independent
+     re-score: you're reading recorded evidence fresh, not trusting
+     narration. (The reason this matters, not just a formality: a controlled
+     study of LLM pentest agents found they self-report exploit "success" at
+     rates up to 85%, while manual inspection against ground truth found up
+     to 71.5% of those self-reported successes were actually invalid. The
+     gate that catches this is checking recorded evidence, never just
+     asking — including asking yourself — "are you sure.")
+   - Concatenate the surviving findings into one set, mark
+     `"merge_status": "complete"` in the ledger, then continue exactly as
+     Section 3 describes (attack-path-architect -> vuln-chain-composer) and
+     report per Section 5.
+
+**Honest limitation, stated plainly:** because there's no live channel
+between slices while they run, a sibling's WAF trip or rate-limit block
+isn't visible to the others until this merge step — lounge's live event log
+would catch that within milliseconds. This mode trades that away for not
+needing any external process, daemon, or account at all. Use it for fast
+coverage on a cooperative target; use lounge (4b) when a skittish production
+target makes that gap matter. And before crediting any speed/coverage gain
+to parallelism itself, compare against a solo-sequential run on the same
+target — at least one published evaluation found a claimed architecture
+advantage was mostly attributable to the underlying model improving, not the
+architecture.
+
+### 4b. Lounge mode — cross-process, cross-model, live coordination ("exchange mode")
+
+If the engagement needs true multi-model diversity, spans more than one
+session's context budget, or genuinely benefits from seats reacting to each
+other mid-flight rather than only at a single merge point, hand off to
+`${CLAUDE_PLUGIN_ROOT}/lounge/LOUNGE_PROTOCOL.md` and run `python
+"${CLAUDE_PLUGIN_ROOT}/lounge/seatlib.py"` per its own rules (claim before
+probing, token before every network request, PUSH your next finding to the
+other seat). This is the live-coordination counterpart to 4a's static
+partition — the parallel-crawling literature's "exchange mode" to 4a's
+"firewall mode" — and it's the right call when 4a's single merge point at
+the end isn't enough.
+
+### 4c. Which one, in one line
+
+| Need | Use |
+|---|---|
+| Single session, a partitionable surface, no cross-session durability needed | **4a, native parallel** |
+| True multi-model diversity, multi-day persistence, willing to run shell/tmux outside Claude Code | **4b, lounge** |
+| Small/simple target, nothing to partition, or P06 single-threaded-mandated | **Section 2, solo sequential (default)** |
+
+Never mix two of these on the same cell at the same time.
 
 ## 5. Reporting
 
