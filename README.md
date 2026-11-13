@@ -1,13 +1,13 @@
 <p align="center">
   <h1 align="center">CatusMythos-Lounge</h1>
   <p align="center">
-    <strong>A merged Claude Code security toolkit: one pipeline, 24 skills, a doctrine engine, and a multi-seat collaboration protocol.</strong>
+    <strong>A web/API/cloud pentest toolkit for Claude Code: one recon-to-report pipeline, a doctrine engine, and solo / native-multi-agent / multi-seat-lounge orchestration.</strong>
   </p>
   <p align="center">
     <img src="https://img.shields.io/badge/python-3.8+-blue.svg" alt="Python 3.8+">
     <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License: MIT">
     <img src="https://img.shields.io/badge/Claude-Code-blueviolet.svg" alt="Claude Code">
-    <img src="https://img.shields.io/badge/skills-24-orange.svg" alt="24 Skills">
+    <img src="https://img.shields.io/badge/skills-8-orange.svg" alt="8 Skills">
   </p>
 </p>
 
@@ -28,18 +28,27 @@ Three real projects, combined so each covers what the others miss:
    recon through exploitation to a bug-bounty-ready report. **Its workflow is
    this repo's execution backbone, unchanged.**
 2. **[Masriyan/Claude-Code-CyberSecurity-Skill](https://github.com/Masriyan/Claude-Code-CyberSecurity-Skill)**
-   — 22 skills covering the rest of security work the pipeline doesn't touch:
-   malware analysis, reverse engineering, incident response, mobile, OT/ICS,
-   cryptography, GRC/compliance, supply chain, threat intel, purple team,
-   blue team defense, AI/LLM security, and more. **Its domain breadth is
-   added wholesale**, and the four places it overlaps the pipeline had their
-   *scripts* folded in rather than shipping a redundant second tool.
+   — originally 22 skills covering general security work; this repo keeps
+   only the two that extend the web-pentest focus — **`16-ai-llm-security`**
+   (prompt injection, agent/RAG security — modern web apps increasingly ship
+   AI features) and a trimmed **`03-exploit-development`** (the CVE-PoC
+   workflow and payload generation, for turning a confirmed finding into a
+   deliverable). The other 16 non-web domain skills (malware analysis,
+   reverse engineering, mobile, OT/ICS, GRC, red-team-ops, and so on) were
+   dropped to keep this plugin focused — see
+   [MERGE_MAP.md](MERGE_MAP.md) for what was removed and why. A handful of
+   its scripts that genuinely had zero overlap with the pipeline were folded
+   directly into pipeline skills instead of shipping a redundant tool.
 3. **mythos-lounge** — a doctrine engine (evidence-first discipline, probe
    budgets, report-only-when-real) and a multi-seat collaboration protocol
-   (`seatlib.py`) that lets several agents hunt one target in the same
-   window without duplicating work. **This is the governance and
-   coordination layer** that sits above both skill sets, usable solo or as
-   a table of seats.
+   (`seatlib.py`) that lets several agents — optionally different AI
+   CLIs/accounts entirely — hunt one target in the same window without
+   duplicating work. **This is the governance and coordination layer** that
+   sits above the skill set, usable solo, as a native in-process
+   multi-agent mode (`swarm-operator`'s own fan-out/fan-in, no external
+   processes needed), or as a full table of lounge seats. An older,
+   bus-based variant of this idea that never got fully ported in lives in
+   [standalone-advanced/](standalone-advanced/README.md) for reference.
 
 See [MERGE_MAP.md](MERGE_MAP.md) for the exact, file-by-file account of what
 was combined, what was kept separate, and why — nothing was silently
@@ -52,35 +61,41 @@ the MIT terms each source shipped with.
 ```
                     ┌─────────────────────────────┐
                     │   doctrine/   (governance)   │
-                    │  P01-P14 protocols, bootkit   │
-                    │  role cards, probe budgets,   │
-                    │  evidence-first, resume hooks  │
+                    │  P01-P14 protocols, probe     │
+                    │  budgets, evidence-first       │
                     └───────────────┬───────────────┘
-                                    │ enforced on every seat
+                                    │ enforced on every mode
+                    ┌───────────────▼───────────────┐
+                    │  agents/swarm-operator.md       │
+                    │  single-seat entry point, runs    │
+                    │  the pipeline solo sequentially     │
+                    └───────────────┬───────────────┘
+                                    │ or hand off to, for
+                                    │ multi-agent/multi-day work
                     ┌───────────────▼───────────────┐
                     │    lounge/   (coordination)    │
                     │  seatlib.py claim/token/push    │
-                    │  — solo seat, or a table of     │
-                    │  several seats on one target     │
+                    │  — a table of seats, optionally  │
+                    │  different AI CLIs/accounts       │
                     └───────────────┬───────────────┘
                                     │ drives
           ┌─────────────────────────┼─────────────────────────┐
           ▼                         ▼                          ▼
 ┌─────────────────────┐  ┌───────────────────────┐  ┌───────────────────────┐
-│  skills/ pipeline     │  │  skills/ domain breadth │  │  agents/ entry points  │
-│  (Felix1Catus)         │  │  (Masriyan, 18 skills)  │  │  swarm-operator, etc.  │
-│                        │  │                         │  │                        │
-│  recon-dominator        │  │  03 exploit-dev ...     │  └───────────────────────┘
-│    -> webapp-exploit-   │  │  22 purple-team         │
-│       hunter            │  │                         │
-│    -> api-breaker       │  │  (03-22 minus the 4     │
-│    -> cloud-pivot-      │  │  the pipeline overlaps; │
-│       finder             │  │  their scripts were     │
-│    -> attack-path-       │  │  folded into the        │
-│       architect           │  │  pipeline instead)      │
-│    -> vuln-chain-        │  │                         │
-│       composer            │  │                         │
-└─────────────────────┘  └───────────────────────┘
+│  skills/ pipeline     │  │  skills/ 03, 16         │  │  agents/ entry points  │
+│  (Felix1Catus)         │  │  (trimmed PoC-dev +     │  │  swarm-operator        │
+│                        │  │   AI/LLM security)      │  │                        │
+│  recon-dominator        │  └───────────────────────┘  └───────────────────────┘
+│    -> webapp-exploit-   │
+│       hunter            │
+│    -> api-breaker       │
+│    -> cloud-pivot-      │
+│       finder             │
+│    -> attack-path-       │
+│       architect           │
+│    -> vuln-chain-        │
+│       composer            │
+└─────────────────────┘
 ```
 
 ## The pipeline (unchanged from Felix1Catus / Orizon-eu)
@@ -92,29 +107,25 @@ DOMAIN INPUT
 recon-dominator        subdomain enum, port scan, OSINT, dorking, Wayback
     │                  + Masriyan's WAF/CDN/analytics detection merged into tech_fingerprint.py
     │                  + Masriyan's wildcard-DNS suppression merged into active_recon.py
-    │                  + folded-in as-is: dns_recon.py (SPF/DMARC/reverse-DNS, zero overlap)
-    │                  + new: cve_lookup.py — turns tech_fingerprint.py's versioned-component
+    │                  + cve_lookup.py — turns tech_fingerprint.py's versioned-component
     │                    output into version-matched NVD CVE hypotheses with real write-up
     │                    links, so exploitation is driven by what's actually fingerprinted,
     │                    not a blind sweep across every vulnerability class
-    ├──► webapp-exploit-hunter   SQLi, XSS, SSRF, SSTI, IDOR, auth bypass, upload, race
+    ├──► webapp-exploit-hunter   SQLi, XSS, SSRF, SSTI, IDOR, auth bypass, upload, race, WAF bypass
     │        + Masriyan's server-version-disclosure check merged into auth_tester.py
     ├──► api-breaker             API discovery, BOLA/BFLA, JWT, mass assignment, GraphQL
     │        (assessed Masriyan's api_security_tester.py — every check it ran was already
     │         covered more thoroughly by Felix's own scripts; nothing to add)
     └──► cloud-pivot-finder      cloud detection, bucket/takeover/CI-CD/serverless exposure
-             + folded-in as-is: cloud_auditor.py, iac_scanner.py (different access model —
-               authenticated cloud posture + at-rest IaC, genuinely complementary)
                  │
                  ▼
          attack-path-architect   asset/trust mapping, MITRE ATT&CK trees, kill chains
-             + folded-in as-is: mitre_mapper.py (ATT&CK technique DB + SIEM queries),
-               engagement_planner.py — both zero-overlap new capability
+             + mitre_mapper.py (ATT&CK technique DB), engagement_planner.py —
+               promoted from a Masriyan domain skill that was otherwise removed
                  │
                  ▼
          vuln-chain-composer     cross-domain correlation, exploit chains, CVSS, reports
              + Masriyan's spec-correct CVSS round-up merged into calculate_impact.py
-             + folded-in as-is: cvss_calculator.py, dependency_auditor.py, config_auditor.py
 ```
 
 Every one of those merge decisions — what got ported into an existing
@@ -122,28 +133,21 @@ script vs. shipped alongside it vs. left out entirely, and why — is
 assessed and recorded file-by-file in [MERGE_MAP.md](MERGE_MAP.md), not
 just asserted here.
 
-## Everything else (Masriyan's domain coverage, shipped standalone)
+## Everything else (the two Masriyan skills kept, both web-pentest-relevant)
+
+This plugin was narrowed from 24 skills to 8 to stay focused on web/API/cloud
+pentesting. 16 general-security domain skills (malware analysis, reverse
+engineering, incident response, mobile, OT/ICS, cryptography, GRC/compliance,
+supply chain, threat intel, purple team, blue/red-team ops, network security,
+log analysis, SOC automation, threat hunting) were removed — see
+[MERGE_MAP.md](MERGE_MAP.md) for the full list and reasoning. Two survived,
+both because they extend the pipeline's own surface rather than covering an
+unrelated domain:
 
 | # | Skill | Domain |
 |---|---|---|
-| 03 | exploit-development | PoC templates, payload generation |
-| 04 | reverse-engineering | Binary triage, firmware RE, protocol reversing |
-| 05 | malware-analysis | Static/dynamic analysis, YARA, IOC extraction |
-| 06 | threat-hunting | ATT&CK mapping, hunt hypotheses, Sigma rules |
-| 07 | incident-response | PICERL, evidence collection, memory forensics |
-| 08 | network-security | PCAP analysis, IDS/IPS rules, firewall auditing |
-| 11 | csoc-automation | Alert triage, playbooks, shift reporting |
-| 12 | log-analysis | SIEM queries, Sigma rules, correlation |
-| 13 | crypto-analysis | TLS auditing, cipher/hash analysis |
-| 14 | red-team-ops | Engagement planning, C2, AD attacks, OPSEC |
-| 15 | blue-team-defense | Hardening, detection engineering, baselines |
-| 16 | ai-llm-security | Prompt injection, OWASP LLM Top 10, RAG/agent security |
-| 17 | mobile-security | Android/iOS, MASVS/MASTG, APK/IPA triage |
-| 18 | ot-ics-security | Purdue model, Modbus/DNP3/S7, IEC 62443 |
-| 19 | grc-compliance | Risk scoring, NIST/ISO/SOC2 crosswalk |
-| 20 | supply-chain-security | SBOM, dependency confusion, CI/CD hardening |
-| 21 | threat-intelligence | IOC pipeline, STIX/MISP, Diamond/Kill Chain |
-| 22 | purple-team | Adversary emulation, detection coverage |
+| 03 | exploit-development | CVE-PoC workflow + payload generation for a finding the pipeline already confirmed (trimmed — the binary-exploitation/AV-evasion content was removed) |
+| 16 | ai-llm-security | Prompt injection, OWASP LLM Top 10, RAG/agent security — for the chatbot/agent features modern web apps increasingly ship |
 
 ## The lounge (multi-seat mode)
 
@@ -151,19 +155,28 @@ When one target is big enough to want several agents working it
 concurrently without re-firing the same request, `lounge/seatlib.py` gives
 every seat claim/token/push primitives: claim an exact cell before probing
 it, pull a rate-limit token before every network request, and push your
-next finding to the other live seats the moment a class flips. Read
+next finding to the other live seats the moment a class flips. Each seat is
+its own OS process — optionally a different AI CLI/account entirely (Grok,
+a separate Claude Code account, a DeepSeek-backed variant) — coordinated via
+a shared, file-based event log. Read
 [lounge/LOUNGE_PROTOCOL.md](lounge/LOUNGE_PROTOCOL.md) and
 [lounge/MACHINE.md](lounge/MACHINE.md) before running it — it's a hard
 protocol (exact-cell mutex, mandatory heartbeat, no solo report submission),
-not a suggestion.
+not a suggestion. `swarm-operator.md`'s Section 4 names when to reach for
+this vs. staying solo.
 
 ## The doctrine (governance, solo or lounge)
 
 `doctrine/` is what keeps a run honest regardless of whether it's one agent
 or a table of them: `doctrine/protocols/P01_EVIDENCE_FIRST.md` through `P14`,
-role cards for HUNTER/OPERATOR/SKEPTIC/SUPERVISOR seats, and the
-persistence/resume hooks that make state survive a compaction or a crash.
-Read `doctrine/CLAUDE_ENFORCEMENT.md` first.
+and the templates each protocol operationalizes
+(`doctrine/templates/*.md` — scope, target model, leads, chain ledger,
+coverage map). Read `doctrine/CLAUDE_ENFORCEMENT.md` first. An older,
+bus-based multi-account coordination design (role cards for
+HUNTER/OPERATOR/SKEPTIC/SUPERVISOR seats, persistence/resume hooks wired to
+a standalone external install) never got reconciled with `lounge/` and has
+been moved to [standalone-advanced/](standalone-advanced/README.md) — it's
+not part of this plugin's own runtime, kept as reference only.
 
 ## Installation
 
@@ -219,10 +232,11 @@ Talk to Claude naturally:
 ```
 Run full reconnaissance on target.com
 Find vulnerabilities on app.target.com
+Test this API for BOLA and mass assignment issues
+Map the cloud infrastructure behind app.target.com
 Chain all findings and generate a bug bounty report
-Analyze this APK against OWASP MASVS
-Map these TTPs to MITRE ATT&CK and write detection rules
-Run a SOC 2 gap analysis against NIST CSF 2.0
+Test this chatbot feature for prompt injection
+Build a PoC for the file-upload RCE you just confirmed
 ```
 
 Or invoke the entry-point agent for a full engagement:
@@ -259,3 +273,19 @@ not just merge-seam issues:
   classes before going deep on any one, and has an explicit capability
   check so it stops and hands back cleanly when a step needs a live
   browser session instead of attempting a tool call it doesn't have.
+
+This repo was then narrowed from a general 24-skill security toolkit to a
+focused 8-skill web/API/cloud pentest plugin: 16 non-web domain skills were
+removed, `03-exploit-development` was trimmed to its web-relevant content,
+6 scripts that were silently never wired into any `SKILL.md` were deleted
+(their nominal "parent" domain skill didn't exist anywhere in this repo
+either), and an orphaned bus-based multi-account coordination design with
+zero implementing code in this repo was moved to `standalone-advanced/`
+rather than deleted outright, since it documents real ideas someone running
+a standalone setup might still want. `vuln-chain-composer`'s capability-graph
+chaining engine and `webapp-exploit-hunter`'s `waf_bypass_tester.py` were
+both built from a 100-writeup research pass on 2024-2026 bug-bounty
+disclosures (`research_notes/Vuln chaining and WAF bypass patterns/`) —
+further research-driven passes per kept skill, and a native in-process
+multi-agent mode inside `swarm-operator` (alongside, not replacing, the
+lounge), are in progress.

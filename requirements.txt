@@ -1,22 +1,14 @@
-# Optional Python dependencies used by CatusMythos-Lounge's domain skills.
+# Optional Python dependencies used by CatusMythos-Lounge's skills.
 #
-# The Felix1Catus pipeline (recon-dominator, attack-path-architect,
+# The core pipeline (recon-dominator, attack-path-architect,
 # webapp-exploit-hunter, api-breaker, cloud-pivot-finder, vuln-chain-composer)
-# needs NONE of these -- it's stdlib-only by design. Everything below is used
-# by one or more of the Masriyan-derived domain skills (03-22), and every
-# import site already guards against the package being missing (the script
-# degrades or explains what's unavailable rather than crashing on import).
-# This file exists so `scripts/bootstrap.py` (wired to the SessionStart hook
-# in .claude-plugin/hooks.json) can install all of it in one step; nothing
-# here is required for the pipeline skills to work.
+# needs NONE of these -- it's stdlib-only by design. 03-exploit-development is
+# also stdlib-only. Everything below is used by one or more of the two
+# remaining domain skills (03/16), and every import site already guards
+# against the package being missing (the script degrades or explains what's
+# unavailable rather than crashing on import). This file exists so
+# `scripts/bootstrap.py` (wired to the SessionStart hook in
+# .claude-plugin/hooks.json) can install it in one step; nothing here is
+# required for the pipeline skills to work.
 
-cryptography>=42.0.0      # skills/13-crypto-analysis/scripts/tls_auditor.py (cert expiry on a failed handshake)
-dnspython>=2.6.0           # skills/recon-dominator/scripts/dns_recon.py (SPF/DMARC parsing, zone transfer, reverse DNS)
-pyelftools>=0.31           # skills/04-reverse-engineering/scripts/binary_analyzer.py (ELF section/symbol parsing)
-pefile>=2023.2.7           # skills/04-reverse-engineering/scripts/binary_analyzer.py (PE import table parsing)
-pyaxmlparser>=0.3.0        # skills/17-mobile-security/scripts/apk_analyzer.py (Android manifest parsing)
-requests>=2.31.0           # several skills' scripts (16, 20, 21) that make simple HTTP calls
-scapy>=2.5.0               # skills/08-network-security/scripts/pcap_analyzer.py (PCAP parsing)
-stix2>=3.0.1               # skills/06-threat-hunting/scripts/ioc_extractor.py (STIX bundle export)
-PyYAML>=6.0.1              # skills 19/20/22 (config/detection-rule YAML)
-yara-python>=4.5.0         # skills/05-malware-analysis/scripts/yara_generator.py (rule validation)
+requests>=2.31.0           # skills/16-ai-llm-security/scripts/prompt_injection_tester.py (HTTP calls to the target's API)

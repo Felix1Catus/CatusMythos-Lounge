@@ -1,7 +1,7 @@
 {
   "name": "catusmythos-lounge",
-  "version": "0.1.0",
-  "description": "Merged offensive/defensive security toolkit for Claude Code: Felix1Catus's claude-code-pentest pipeline (recon -> exploit -> chain -> report), Masriyan's 22-domain Claude-Code-CyberSecurity-Skill collection, and the mythos-lounge doctrine engine + multi-seat collaboration protocol, combined into one plugin.",
+  "version": "0.2.0",
+  "description": "Web, API, and cloud penetration-testing toolkit for Claude Code: a recon -> exploit -> chain -> report pipeline, AI/LLM application security testing, a CVE-PoC/payload-generation helper, a doctrine engine for evidence-first discipline, and solo / multi-seat-lounge orchestration.",
   "author": {
     "name": "CatusMythos-Lounge contributors"
   },
@@ -10,9 +10,11 @@
   "keywords": [
     "security",
     "pentest",
+    "web-security",
+    "api-security",
+    "cloud-security",
     "bug-bounty",
-    "red-team",
-    "blue-team",
+    "appsec",
     "claude-code",
     "skills"
   ],

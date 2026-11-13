@@ -36,7 +36,7 @@ blanket rule:
 |---|---|---|
 | Tech fingerprinting | `recon-dominator/scripts/tech_fingerprint.py` had no WAF, CDN, or analytics-beyond-two-patterns detection. Masriyan's version had all three, but pulled them in via the `requests` library — which would have broken the pipeline's "zero pip dependencies" design if copied as-is. | Reimplemented WAF signatures (Cloudflare/AWS WAF/Akamai/Sucuri/ModSecurity), CDN header detection (CloudFront/Fastly/Cloudflare/`x-cdn`), and a Facebook Pixel analytics pattern **directly into Felix's stdlib `urllib`-based script** (`tech_fingerprint.py`), reusing the header dict it already fetches. No new file, no new dependency, strictly more capable than either source alone. Masriyan's `_analyze_ssl` was skipped — it only checks `scheme == "https"`, which Felix's security-header block already implies, so it added nothing. |
 | Wildcard-DNS suppression | `recon-dominator/scripts/active_recon.py`'s `dns_bruteforce` had no wildcard-DNS guard: a target with a wildcard A record makes every brute-force candidate "resolve," flooding output with false positives. Masriyan's `subdomain_enum.py` had `detect_wildcard()` / `_is_wildcard_only()` for exactly this (and the v3.3 changelog of that repo calls it out as a real fix they shipped). | Ported the mechanism into `active_recon.py` as `detect_wildcard_dns()`, called once before the brute-force loop, with results suppressed via a set-containment check — same technique, native to Felix's stdlib socket-based resolver, no `dnspython` dependency added. |
-| CVSS round-up correctness | `vuln-chain-composer/scripts/calculate_impact.py` used `math.ceil(score * 10) / 10` to round a CVSS base score to one decimal. This is **not** equivalent to the CVSS v3.1 spec's `Roundup()` function on scores that land on a floating-point representation error just below a `0.1` boundary — it can silently under-score a finding. Masriyan's `cvss_calculator.py` implements the spec's exact integer-math algorithm with a comment explaining why the naive version is wrong. | Replaced Felix's round-up with the spec-correct integer algorithm (`cvss_round_up()`), verified with a boundary-case sanity check. `calculate_impact.py`'s chain-aggregation logic (which Masriyan's tool doesn't have — it only scores a single vector string) is otherwise untouched. The standalone `cvss_calculator.py` is still shipped too (see table B) since it's a different shape of tool (interactive vector-string calculator) that's independently useful outside a chain. |
+| CVSS round-up correctness | `vuln-chain-composer/scripts/calculate_impact.py` used `math.ceil(score * 10) / 10` to round a CVSS base score to one decimal. This is **not** equivalent to the CVSS v3.1 spec's `Roundup()` function on scores that land on a floating-point representation error just below a `0.1` boundary — it can silently under-score a finding. Masriyan's `cvss_calculator.py` implements the spec's exact integer-math algorithm with a comment explaining why the naive version is wrong. | Replaced Felix's round-up with the spec-correct integer algorithm (`cvss_round_up()`), verified with a boundary-case sanity check. `calculate_impact.py`'s chain-aggregation logic (which Masriyan's tool doesn't have — it only scores a single vector string) is otherwise untouched. The standalone `cvss_calculator.py` was shipped alongside it at first (table B) but was never actually wired into `vuln-chain-composer/SKILL.md` and was removed in the later web-pentest-refocus pass (see bottom section) — its one live piece of logic, the round-up fix, already lived in `calculate_impact.py`. |
 
 ### B. Genuinely new, no overlap -> shipped as additive scripts inside the pipeline skill
 
@@ -60,6 +60,10 @@ blanket rule:
 
 ## Domain skills shipped wholesale, unmodified (Masriyan, no pipeline overlap)
 
+**Historical record of the original merge — 14 of these 17 were subsequently
+removed in the web-pentest-refocus pass; see that section above for what
+changed and why.**
+
 `skills/03-exploit-development`, `04-reverse-engineering`,
 `05-malware-analysis`, `06-threat-hunting`, `07-incident-response`,
 `08-network-security`, `11-csoc-automation`, `12-log-analysis`,
@@ -77,7 +81,9 @@ into the pipeline would have been the wrong kind of merge.
 Ported from the local `mythos-lounge` project:
 
 - `doctrine/` — the `claude-mythos` engine's protocols (P01–P14), bootkit
-  role cards, persistence/resume hooks, and state templates.
+  role cards, persistence/resume hooks, and state templates. (The bootkit
+  role cards and persistence/resume hooks were later moved to
+  `standalone-advanced/` — see the refocus section above.)
 - `lounge/` — `seatlib.py` and its launcher scripts: claim/token/push
   coordination, plus `LOUNGE_PROTOCOL.md` and `MACHINE.md`.
 
@@ -93,6 +99,54 @@ backslash-escaped quote inside an f-string expression, a `SyntaxError` on
 Python <3.12 despite the pipeline's stated "Python 3.8+" requirement. Fixed
 by pulling the expression into a local variable; generated output is
 unchanged. Every `.py` file in this repo is byte-compiled before commit.
+
+## Web-pentest refocus — what this pass changed (supersedes parts of the above)
+
+The sections above are the original 2026 merge's own record and are left as
+history, not rewritten. This pass narrowed the result to a focused
+web/API/cloud pentest plugin; where it changes something the tables above
+describe, that's noted here rather than edited into the history above.
+
+**16 domain skills removed** (everything from the "shipped wholesale" list
+below except `03`/`16`): `04-reverse-engineering`, `05-malware-analysis`,
+`06-threat-hunting`, `07-incident-response`, `08-network-security`,
+`11-csoc-automation`, `12-log-analysis`, `13-crypto-analysis`,
+`14-red-team-ops`, `15-blue-team-defense`, `17-mobile-security`,
+`18-ot-ics-security`, `19-grc-compliance`, `20-supply-chain-security`,
+`21-threat-intelligence`, `22-purple-team`.
+
+**`03-exploit-development` trimmed**, not removed — the generic
+buffer-overflow/ROP/AV-evasion content (not web-specific) was cut; the
+CVE-PoC-development workflow and payload generation (useful for building a
+deliverable for a pipeline-confirmed finding) were kept.
+
+**6 table-B scripts deleted as orphaned** — none of these were ever actually
+referenced by their own skill's `SKILL.md` (confirmed by direct inspection,
+not assumed), meaning the original merge shipped the *file* but never wired
+it into the documented workflow: `cvss_calculator.py`, `dependency_auditor.py`,
+`config_auditor.py` (from `vuln-chain-composer/scripts/`), `dns_recon.py`
+(from `recon-dominator/scripts/`), `cloud_auditor.py`, `iac_scanner.py` (from
+`cloud-pivot-finder/scripts/`).
+
+**`mitre_mapper.py`/`engagement_planner.py` promoted, not removed** — these
+were originally table-B additions living in `attack-path-architect/scripts/`
+*and* duplicated verbatim (save a 4-line attribution header) in
+`06-threat-hunting`/`14-red-team-ops`, which documented and called them.
+With those two skills removed, `attack-path-architect`'s own copies are now
+the only ones, and are being promoted to properly documented, wired-in
+status in `attack-path-architect/SKILL.md` (they were the orphaned half of
+this duplication before).
+
+**Doctrine/bootkit archived, not deleted** — the bus-based role-card design
+(`SUPERVISOR`/`HUNTER`/`OPERATOR`/`SKEPTIC` seats, a `TASK_QUEUE.json` bus
+under `~/claude-shared/`) referenced in the "Doctrine + Lounge" section below
+never actually got code-level wiring into this repo's own `lounge/` or
+`agents/swarm-operator.md` — it's orphaned residue from the `kimi-mythos`
+variant this merge explicitly excluded (see that section's "left out on
+purpose" note), carried along as doctrine text without its implementation.
+Moved to `standalone-advanced/` with its own README rather than deleted,
+since it documents real, reusable ideas for someone running a standalone
+multi-account setup outside this plugin.
 
 ## What "merging" still did *not* mean
 
