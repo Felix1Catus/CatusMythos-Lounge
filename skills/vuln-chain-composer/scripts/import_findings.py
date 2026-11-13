@@ -58,6 +58,7 @@ SEVERITY_MAP = {
     "cicdexposure": "MEDIUM",
     "cloudresourceaccess": "MEDIUM",
     "modelsupplychain": "HIGH",  # a DANGEROUS static pickle-opcode verdict -- RCE if this artifact gets loaded
+    "unboundedconsumption": "LOW",  # OWASP LLM10: a missing config control (rate limit/logprobs/token cap), not a chainable primitive
 }
 
 # OWASP API Top 10 / Web Top 10 mapping

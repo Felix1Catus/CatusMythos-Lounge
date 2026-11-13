@@ -58,10 +58,10 @@ This skill activates when the user asks about:
 ```bash
 pip install requests
 ```
-Both scripts in this skill are otherwise stdlib-only (`model_supply_chain.py` has
-zero third-party dependencies at all; `requests` is a guarded, optional import in
-`prompt_injection_tester.py` for live HTTP testing — `--demo` works with neither
-installed).
+All three scripts in this skill are otherwise stdlib-only (`model_supply_chain.py`
+has zero third-party dependencies at all; `requests` is a guarded, optional
+import in `prompt_injection_tester.py` and `unbounded_consumption_tester.py`
+for live HTTP testing — `--demo` works with neither installed).
 
 **Optional enhanced capabilities:**
 - `garak` — LLM vulnerability scanner (NVIDIA)
@@ -88,19 +88,47 @@ When asked to threat-model an AI application, map the system against each catego
 | LLM07 | System Prompt Leakage | Secrets/authz logic embedded in the system prompt |
 | LLM08 | Vector & Embedding Weaknesses | RAG access-control bypass, embedding inversion, cross-tenant leakage |
 | LLM09 | Misinformation | Hallucinations relied on for security/safety decisions |
-| LLM10 | Unbounded Consumption | Cost/DoS via token floods, model extraction, wallet-drain |
+| LLM10 | Unbounded Consumption | Cost/DoS via token floods, model extraction, wallet-drain — see `scripts/unbounded_consumption_tester.py` |
 
 Produce a per-category table: **Exposure (Yes/No/Partial) → Evidence → Severity → Mitigation**.
 
 ### 2. Prompt Injection & Jailbreak Testing
 
-**Direct injection** — user input that overrides instructions. Test families:
+**Direct injection** — user input that overrides instructions. Test families
+implemented in `scripts/prompt_injection_tester.py`'s `DEFAULT_CORPUS`
+(research_notes/AI agent security depth techniques/jailbreak_and_extraction.md):
 - Instruction override ("ignore previous instructions and …")
 - Role-play / persona escape (DAN-style, hypothetical framing)
-- Encoding/obfuscation (Base64, ROT13, leetspeak, homoglyphs, zero-width chars)
+- Encoding/obfuscation: Base64, zero-width-space (ROT13/leetspeak/homoglyphs
+  are documented gaps vs. garak/promptfoo's broader encoding coverage — not
+  yet ported; see Gaps below)
 - Token smuggling and prompt-boundary confusion (fake delimiters, fake system tags)
-- Many-shot jailbreaking (long context of faux dialogue priming compliance)
-- Crescendo / multi-turn gradual escalation
+- **Many-shot jailbreaking** (Anthropic, Apr 2024) — long context of faux
+  Human/Assistant dialogue turns priming compliance before the real ask;
+  `many-shot-jailbreak` category, zero architecture change needed
+- **Low-resource-language jailbreak** (arXiv:2310.02446) — translating a
+  refused request into a low-resource language raised GPT-4's bypass rate
+  from <1% to 79% in the original study; `low-resource-language-jailbreak` category
+- **ArtPrompt** (arXiv:2402.11753) — masks the safety-triggering word as
+  ASCII art; `artprompt-ascii-mask` category
+- **Policy Puppetry** (HiddenLayer, Apr 2025) — formats the request as
+  policy/config data rather than conversational text; `policy-puppetry`
+  category. Flagged in the research as an unreplicated **vendor claim**,
+  not independently confirmed cross-model — tested for anyway, since that's
+  exactly what a tester should verify rather than assume either way.
+- **Best-of-N jailbreaking** (arXiv:2412.03556) — `--best-of-n N` resamples
+  any payload with random case/word-order mutations up to N times, stopping
+  at the first confirmed success; still a stateless retry loop, no
+  conversation state needed.
+
+**Not implemented — needs real multi-turn conversation state, which this
+script's stateless-single-POST design doesn't have** (see the module
+docstring for the full reasoning): **Crescendo** (arXiv:2404.01833),
+**Echo Chamber**, and **Skeleton Key**'s fixed prime→attack sequence. A
+faithful implementation needs a conversation-ID-aware request path (e.g.
+replaying an OpenAI-style `messages: [...]` history) plus either a scripted
+escalation ladder or an auxiliary-LLM turn generator — a genuine follow-up
+item, not attempted here as a broken approximation.
 
 **Indirect injection** — payload arrives via retrieved/processed content (web page, PDF, email, RAG doc, tool output). This is the highest-impact class for agents. Test that retrieved text **cannot** issue commands, exfiltrate context, or trigger tools.
 
@@ -202,12 +230,39 @@ python scripts/prompt_injection_tester.py --demo
 
 # Export confirmed successes as findings vuln-chain-composer can correlate
 python scripts/prompt_injection_tester.py --url ... --export-findings findings.json
+
+# Best-of-N: resample each payload with random mutations up to N times
+python scripts/prompt_injection_tester.py --url ... --best-of-n 10
 ```
 The judge scores each response **SUCCESS / BLOCKED / PARTIAL**: an echoed canary
 is authoritative; an explicit refusal outranks weak leak-phrase matches (so
 "I cannot reveal my system prompt" is not a false success); mixed signals are
 `PARTIAL` for human review. Treat every `SUCCESS`/`PARTIAL` as a lead to
 reproduce manually — the keyword judge is a triage filter, not ground truth.
+
+### `unbounded_consumption_tester.py`
+OWASP LLM10 exposure checks — not a payload-and-judge design like the script
+above. Tests the **absence** of controls named in OWASP's own LLM10:2025
+mitigation list via small, safe, non-destructive requests; never an actual
+cost-exhaustion flood.
+
+```bash
+# Run all exposure checks against a chat/completions endpoint
+python scripts/unbounded_consumption_tester.py --url https://app.test/api/chat --field message
+
+# Export exposed-control findings for vuln-chain-composer
+python scripts/unbounded_consumption_tester.py --url ... --export-findings findings.json
+
+python scripts/unbounded_consumption_tester.py --demo   # self-test the check logic offline
+```
+Checks: oversized-input rejection, `logprobs`/`logit_bias` exposure (the
+exact surface Carlini et al.'s embedding-extraction attack exploits,
+arXiv:2403.06634), server-side `max_tokens` capping (acceptance-time only —
+never awaits a full large generation), standard rate-limit response headers,
+and 429 behavior under a small, hard-capped burst (≤20 requests). Verdicts
+are `safe` / `exposed` / `inconclusive` / `unclear` — a small burst producing
+no 429 is reported `inconclusive`, never "confirmed no rate limiting," since
+that sample size can't support the stronger claim.
 
 ### `model_supply_chain.py`
 Statically walks pickle opcodes **without unpickling**, resolving both legacy
