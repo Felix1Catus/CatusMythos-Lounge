@@ -13,6 +13,7 @@ drowning real subdomains in false positives.
 
 import argparse
 import json
+import re
 import socket
 import subprocess
 import sys
@@ -132,6 +133,100 @@ def attempt_zone_transfer(domain):
         return []
 
 
+def _query_ns_records(domain):
+    """Resolve a domain's own NS records via `dig` -- the same soft
+    dependency attempt_zone_transfer() above already relies on, with the
+    same graceful "not installed" handling. Returns None (couldn't check
+    at all -- dig missing/timed out) or a list (confirmed NS records, []
+    if genuinely none)."""
+    try:
+        result = subprocess.run(
+            ["dig", "NS", domain, "+short"],
+            capture_output=True, text=True, timeout=10,
+        )
+        return [ns.strip().rstrip(".") for ns in result.stdout.strip().split("\n") if ns.strip()]
+    except FileNotFoundError:
+        return None
+    except subprocess.TimeoutExpired:
+        return None
+
+
+def _query_soa_from_nameserver(domain, nameserver, timeout=8):
+    """Ask ONE specific nameserver directly for this zone's SOA record,
+    bypassing the normal recursive resolver -- the actual 'Sitting Ducks'
+    check: the parent zone's NS records claim this nameserver is
+    authoritative for the zone, so does that nameserver actually agree?
+    Returns "authoritative" (answered with a real SOA), "lame" (REFUSED/
+    SERVFAIL/NOTAUTH/NXDOMAIN, or NOERROR with an empty answer -- the
+    documented "black hole" signature -- meaning this nameserver does NOT
+    actually serve the zone: a live hijack candidate if its provider lets
+    anyone claim an equivalent hosted-zone resource), or "unreachable"
+    (timeout/network error/dig missing -- inconclusive, not a confirmed
+    lame delegation)."""
+    try:
+        result = subprocess.run(
+            ["dig", "SOA", domain, f"@{nameserver}", "+time=5", "+tries=1"],
+            capture_output=True, text=True, timeout=timeout,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return "unreachable"
+    output = result.stdout
+    status_match = re.search(r"status:\s*(\w+)", output)
+    status = status_match.group(1) if status_match else None
+    if status in ("REFUSED", "SERVFAIL", "NOTAUTH", "NXDOMAIN"):
+        return "lame"
+    has_soa_answer = re.search(r"^\S+\.?\s+\d+\s+IN\s+SOA\s", output, re.MULTILINE)
+    if status == "NOERROR" and has_soa_answer:
+        return "authoritative"
+    if status == "NOERROR" and not has_soa_answer:
+        return "lame"
+    return "unreachable"
+
+
+def check_lame_delegation(domain, nameservers=None):
+    """'Sitting Ducks' NS-delegation hijacking check (Infoblox/Eclypsium,
+    2024): a domain's parent zone lists a nameserver as authoritative via
+    NS records, but if that nameserver itself refuses to answer for the
+    zone (never provisioned there, or the cloud DNS provider's hosted-
+    zone/name-server set was deleted and the registrar-side NS
+    delegation was never updated to match), anyone who can claim an
+    equivalent hosted-zone/nameserver resource at that provider can seize
+    full authoritative control over the domain's DNS -- mechanistically
+    independent of CNAME-based subdomain takeover (cloud-pivot-finder's
+    takeover_scanner.py only checks the CNAME pattern) and reported to
+    affect over 1,000,000 domains. Checks every nameserver individually:
+    a partially-lame delegation (some NS records authoritative, others
+    not) is still exploitable and still worth reporting, since resolvers
+    routinely retry a different one of the zone's listed nameservers."""
+    if nameservers is None:
+        nameservers = _query_ns_records(domain)
+    if nameservers is None:
+        return {"domain": domain, "checked": False, "reason": "dig not installed", "lame_nameservers": []}
+    if not nameservers:
+        return {"domain": domain, "checked": True, "nameservers": [], "lame_nameservers": []}
+
+    statuses = {}
+    lame = []
+    for ns in nameservers:
+        status = _query_soa_from_nameserver(domain, ns)
+        statuses[ns] = status
+        if status == "lame":
+            lame.append(ns)
+
+    if lame:
+        warn(f"Lame delegation on {domain}: {', '.join(lame)} listed as nameserver but does NOT "
+             f"actually serve this zone (Sitting-Ducks-style hijack candidate -- check whether "
+             f"that nameserver's provider lets you claim an equivalent resource)")
+
+    return {
+        "domain": domain,
+        "checked": True,
+        "nameservers": nameservers,
+        "nameserver_status": statuses,
+        "lame_nameservers": lame,
+    }
+
+
 def permutation_scan(domain, base_subdomains=None, threads=30):
     """Generate and test subdomain permutations."""
     log("Running permutation scan...")
@@ -230,6 +325,12 @@ def main():
     parser.add_argument("--skip-bruteforce", action="store_true", help="Skip DNS brute-force")
     parser.add_argument("--skip-permutations", action="store_true", help="Skip permutation scan")
     parser.add_argument("--skip-zone-transfer", action="store_true", help="Skip zone transfer attempt")
+    parser.add_argument("--skip-lame-delegation", action="store_true",
+                         help="Skip NS-delegation ('Sitting Ducks') lame-delegation check")
+    parser.add_argument("--max-subdomain-ns-checks", type=int, default=25,
+                         help="Max discovered subdomains to probe for their own NS delegation "
+                              "(only those with a real delegation -- their own NS records at the "
+                              "parent zone, not just an A/CNAME -- actually get checked) (default: 25)")
     args = parser.parse_args()
 
     domain = args.domain.strip().lower().rstrip(".")
@@ -253,6 +354,19 @@ def main():
     zone_transfer_results = []
     if not args.skip_zone_transfer:
         zone_transfer_results = attempt_zone_transfer(domain)
+
+    # NS-delegation lame-delegation check ("Sitting Ducks" hijacking, 2024
+    # Infoblox/Eclypsium research) on the apex domain -- complementary to,
+    # not a replacement for, zone transfer: checks whether the zone's own
+    # listed nameservers actually serve it, not whether they leak data.
+    lame_delegation_results = []
+    if not args.skip_lame_delegation:
+        log(f"Checking NS delegation on {domain}...")
+        apex_lame = check_lame_delegation(domain)
+        if not apex_lame["checked"]:
+            warn("Skipping lame-delegation check: dig not installed")
+        elif apex_lame["lame_nameservers"]:
+            lame_delegation_results.append(apex_lame)
 
     # DNS brute-force
     if not args.skip_bruteforce:
@@ -280,6 +394,24 @@ def main():
         perm_results = permutation_scan(domain, base_subdomains, args.threads)
         all_found.update(perm_results)
 
+    # Lame-delegation check on discovered subdomains too -- most of these
+    # are plain A/CNAME records in the parent zone, not zones of their own,
+    # so _query_ns_records naturally filters down to the (usually small) set
+    # that are genuinely delegated subdomains (e.g. a dangling "aws.example.com"
+    # NS-delegated straight to a since-deleted Route53 hosted zone) without
+    # needing any separate heuristic to spot them. Bounded to avoid turning a
+    # large subdomain list into an unbounded `dig` fan-out.
+    if not args.skip_lame_delegation and all_found:
+        candidates = list(all_found.keys())[:args.max_subdomain_ns_checks]
+        log(f"Checking NS delegation on {len(candidates)} discovered subdomain(s)...")
+        for sub in candidates:
+            sub_ns = _query_ns_records(sub)
+            if not sub_ns:  # None (dig unavailable) or [] (no delegation of its own) -- nothing to check
+                continue
+            sub_lame = check_lame_delegation(sub, nameservers=sub_ns)
+            if sub_lame["lame_nameservers"]:
+                lame_delegation_results.append(sub_lame)
+
     success(f"Total unique subdomains from active recon: {len(all_found)}")
 
     # Build output
@@ -292,6 +424,7 @@ def main():
             "total_unique": len(all_found)
         },
         "zone_transfer": zone_transfer_results,
+        "lame_delegation": lame_delegation_results,
         "subdomains": [
             {"host": host, "ips": ips, "source": "active"}
             for host, ips in sorted(all_found.items())
@@ -315,6 +448,12 @@ def main():
         print(f"  ZONE TRANSFER: SUCCESSFUL ({len(zone_transfer_results)} servers)")
     else:
         print(f"  Zone transfer: denied (normal)")
+    if lame_delegation_results:
+        lame_count = sum(len(r["lame_nameservers"]) for r in lame_delegation_results)
+        print(f"  LAME DELEGATION (Sitting-Ducks hijack candidate): {len(lame_delegation_results)} "
+              f"domain(s), {lame_count} nameserver(s) -- see lame_delegation in JSON")
+    else:
+        print(f"  Lame delegation: none found")
     print(f"  Subdomains found: {len(all_found)}")
     print(f"{'='*60}\n")
 

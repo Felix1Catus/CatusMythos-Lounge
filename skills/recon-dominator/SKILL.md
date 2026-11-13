@@ -47,6 +47,20 @@ python scripts/active_recon.py --domain {target_domain} --wordlist references/su
 This performs:
 - DNS brute-force with common subdomain wordlist
 - DNS zone transfer attempts
+- **NS-delegation ("Sitting Ducks") lame-delegation check** — for the apex
+  domain and for any discovered subdomain that has its own NS records (a
+  real zone delegation, e.g. `aws.{target_domain}` delegated straight to a
+  cloud DNS provider), asks each listed nameserver directly for the zone's
+  SOA record. A nameserver that answers REFUSED/SERVFAIL/NXDOMAIN, or
+  NOERROR with an empty answer, is listed as authoritative but doesn't
+  actually serve the zone — a live domain/subdomain-hijack candidate if its
+  provider lets anyone claim an equivalent hosted-zone resource (2024
+  Infoblox/Eclypsium research, reported to affect 1M+ domains).
+  Mechanistically independent of, and a real gap versus, cloud-pivot-
+  finder's CNAME-only `takeover_scanner.py`. Requires `dig`; skipped with a
+  warning (not a failure) when it isn't installed. Disable with
+  `--skip-lame-delegation`; tune subdomain-check depth with
+  `--max-subdomain-ns-checks` (default 25).
 - Virtual host discovery
 - Permutation/alteration scanning (dev-, staging-, api-, etc.)
 
@@ -82,6 +96,40 @@ Detect:
   component (`elementor-pro`) and its version (`4.0.4`) with no
   authentication needed to read it. This is what Step 5b below acts on.
 
+### Step 5a: JS Bundle & Source-Map Mining
+
+```bash
+python scripts/js_recon.py --target https://{live_host} --output js_recon_results.json
+```
+
+Modern frontends ship whole route tables, API clients, and sometimes build
+artifacts to the browser — this mines that instead of guessing endpoints
+blind. For each HTML entry point and every JS chunk it references (BFS-
+crawled up to `--max-chunks`):
+- **Endpoint strings** — LinkFinder/JSFinder/GoLinkFinder's shared
+  endpoint-regex pattern, filtered through jsluice's `MaybeURL` heuristic
+  to cut noise.
+- **Structured API calls** — `fetch()`, `axios`/`axios.<method>()`,
+  `$.ajax`/`$.get`/`$.post`, and raw `XMLHttpRequest.open()` call sites,
+  with template-literal placeholders normalized (`${id}` → `{id}`) so
+  dynamic-but-real routes aren't lost.
+- **Source maps** — if a chunk ships a `//# sourceMappingURL=` comment and
+  the `.map` file is actually reachable (routinely left deployed even when
+  the comment itself was stripped from production), reads its `sources`/
+  `sourcesContent` directly — no VLQ decoding needed — which can recover
+  whole original source files (admin components, internal tooling) that
+  never shipped a route to the bundler's own output at all.
+- **Build manifests** — Next.js's `__BUILD_MANIFEST`/`_buildManifest.js`
+  and Vite's `.vite/manifest.json` (including `dynamicImports`) both
+  enumerate every route/chunk the framework knows about, including ones
+  with no visible `<a href>` anywhere in the rendered page.
+
+Feed anything this surfaces (an unlinked `/admin/*` route, an internal API
+client method, a recovered `secrets.js`) straight to webapp-exploit-
+hunter/api-breaker as a concrete target — same "version-matched hypothesis
+beats blind sweep" logic as Step 5b below, just for hidden surface instead
+of CVEs.
+
 ### Step 5b: CVE / Public-Exploit Lookup — THIS is what should drive exploitation choices, not a blind vuln-class sweep
 
 ```bash
@@ -112,13 +160,37 @@ zero-day-class issues a version lookup can never find.
 Each result is labeled honestly by confidence — `"nvd-cpe-match"` (NVD's
 own structured data says this), `"description-text-heuristic"` (parsed
 from the CVE's prose, verify against the linked write-up before trusting
-it), or no range data at all (manual check needed) — and
-`version_appears_affected` is a **hypothesis to verify live**, never a
-confirmed finding on its own; the actual vulnerable feature/endpoint still
-needs to be checked (e.g. "is the Elementor Forms File Upload field
-actually enabled on any form on this site?" — a real install can have a
-vulnerable plugin version with the vulnerable feature turned off, which
-makes it currently non-exploitable despite being unpatched).
+it), `"osv-exact-match"` (see below), or `"keyword-only-unverified"`
+(name matched, nothing structured or in the prose confirms or refutes it —
+weakest tier, verify manually) — and `version_appears_affected` is a
+**hypothesis to verify live**, never a confirmed finding on its own; the
+actual vulnerable feature/endpoint still needs to be checked (e.g. "is the
+Elementor Forms File Upload field actually enabled on any form on this
+site?" — a real install can have a vulnerable plugin version with the
+vulnerable feature turned off, which makes it currently non-exploitable
+despite being unpatched).
+
+Two further edge cases this step now handles rather than silently getting
+wrong:
+- **Distro backport false positives** — if the installed version string
+  itself carries a Debian/Ubuntu/RHEL/Fedora backport suffix (`+deb12u1`,
+  `1ubuntu0.1`, `-1.el9`, `-1.fc40`), the hypothesis is flagged
+  `"backport_suspected": true`: the distro may have silently backported
+  the exact fix without the version string ever crossing NVD's upstream
+  "fixed" threshold (the real, documented regreSSHion/CVE-2024-6387-on-
+  Debian case). Treat any `AFFECTED?` hit with this flag as "verify
+  against the distro's own security tracker," even at the otherwise-
+  highest `nvd-cpe-match` confidence tier.
+- **Non-CPE ecosystem coverage** — if a component dict carries an
+  `"ecosystem"` key (one of OSV.dev's identifiers: `npm`, `PyPI`, `Go`,
+  `Maven`, `crates.io`, `RubyGems`, `Packagist`, `NuGet` — set by future
+  JS/dependency-mining output, not by `tech_fingerprint.py`'s WordPress-
+  shaped output, which OSV doesn't cover), the lookup is dispatched to
+  OSV.dev's free, keyless API instead of NVD's keyword search. OSV range-
+  filters server-side, so an `"osv-exact-match"` hit is already confirmed
+  for that exact version — no local range comparison, and a documented
+  stronger match than NVD's CPE/keyword approach for non-CMS packages
+  (Anchore/Grype: thousands fewer false positives, up to 80% fewer).
 
 ### Step 6: OSINT Correlation
 

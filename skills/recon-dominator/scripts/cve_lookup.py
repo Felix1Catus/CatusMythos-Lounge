@@ -35,6 +35,14 @@ from datetime import datetime, timezone
 
 from _common import log, success, warn
 NVD_CVE_API = "https://services.nvd.nist.gov/rest/json/cves/2.0"
+OSV_API = "https://api.osv.dev/v1/query"
+# OSV.dev's own ecosystem identifiers -- tried in this order when the caller
+# doesn't already know which one a component belongs to. One query per
+# ecosystem (OSV's query-by-version endpoint is cheap and keyless, no auth
+# needed), so this only costs extra requests for components that actually
+# carry an "ecosystem" hint (see lookup_component_auto) -- WordPress-style
+# components from tech_fingerprint.py never reach this path at all.
+OSV_ECOSYSTEMS = ["npm", "PyPI", "Go", "Maven", "crates.io", "RubyGems", "Packagist", "NuGet"]
 # NVD's published unauthenticated rate limit is 5 requests per rolling 30s
 # window. Self-pace comfortably under that rather than relying on nobody
 # else hitting the same limit at the same time.
@@ -63,6 +71,39 @@ def _parse_version(v):
     """Best-effort version tuple for comparison: '4.2.1' -> (4, 2, 1)."""
     parts = re.findall(r"\d+", v or "")
     return tuple(int(p) for p in parts) if parts else (0,)
+
+
+_BACKPORT_SUFFIX_RE = re.compile(
+    # Debian security backport: "+deb12u1" appended directly after the
+    # debian_revision (e.g. "9.2p1-2+deb12u1"). Debian backports-repo
+    # convention: "~bpo12+1". Ubuntu: the debian_revision digit butts
+    # directly against "ubuntu" with NO separator between them -- the
+    # separator is the hyphen before the digit, not before "ubuntu" itself
+    # (e.g. "8.9p1-3ubuntu0.6", NOT "8.9p1-3-ubuntu0.6") -- a prior version
+    # of this pattern wrongly required [+~-] immediately before "ubuntu"
+    # and so never matched real Ubuntu version strings at all.
+    # RHEL/Fedora: "-1.el9" / "-1.fc40".
+    r"\+deb\d+u\d+|~bpo\d+\+\d+|-\d+ubuntu[\d.]*|-\d+\.(?:el|fc)\d+",
+    re.IGNORECASE,
+)
+
+
+def _looks_backported(version):
+    """Distro package managers routinely backport a security fix into an
+    older upstream version string without bumping it past the CVE's
+    'fixed' threshold -- Debian/Ubuntu append a suffix like '+deb12u1' or
+    '-1ubuntu0.1', RHEL/Fedora append '-1.el9' or '-1.fc40'. A real
+    documented case is regreSSHion (CVE-2024-6387): Debian's shipped
+    OpenSSH version string still reads as 'affected' under pure upstream
+    version-range comparison after Debian's own backport had already
+    fixed it there specifically. This can't tell us whether THIS exact
+    CVE was backported (that needs the distro's own changelog/security
+    tracker, which this script doesn't fetch) -- it only flags that
+    version-range comparison is unreliable for this installed version, so
+    an 'AFFECTED?' hypothesis against it should be downgraded to
+    'verify against the distro's own advisory', not trusted at face
+    value."""
+    return bool(_BACKPORT_SUFFIX_RE.search(version or ""))
 
 
 def _version_in_range(version, start_incl=None, start_excl=None, end_incl=None, end_excl=None,
@@ -266,6 +307,19 @@ def lookup_component(name, version, max_results=200, recent_years=5):
         preceding = desc_norm[:pos]
         if re.search(r"\bfor\s+$", preceding):
             continue
+        # Mirror check in the other direction, per real documented cases
+        # (research_notes/Recon-dominator depth techniques/
+        # cve_matching_false_positives.md): a fork/rebrand/clone is often
+        # named "<product> fork", "<product> alternative", or "<product>
+        # clone" -- the product name here, followed by one of those words.
+        # (WordPress.org's own "Secure Custom Fields" vs. the original
+        # "Advanced Custom Fields" is a documented real case of exactly this
+        # kind of fork swap, though not literally named with these words --
+        # this is the generalizable text pattern for the cases that ARE
+        # named this way.)
+        following = desc_norm[pos + len(needle):pos + len(needle) + 40]
+        if re.search(r"^\s*(fork|clone|alternative to|rebrand(?:ed)?|based on)\b", following):
+            continue
 
         score, severity = _extract_cvss(cve.get("metrics", {}))
         matched, version_range = _matches_component(cve, name)
@@ -305,7 +359,17 @@ def lookup_component(name, version, max_results=200, recent_years=5):
                 range_source = "description-text-heuristic"
                 affected = _version_in_range(version, None, None, text_range.get("end_incl"), None)
             else:
-                affected = None  # genuinely no usable range anywhere -- can't confirm or refute
+                # Genuinely nothing structured OR prose to compare against --
+                # this hypothesis survives purely because the keyword gate
+                # fired and nothing contradicts it, not because anything
+                # confirms it. Label that explicitly rather than leaving
+                # range_source as plain None, so the summary output can
+                # visibly distinguish "NVD structurally confirmed this" /
+                # "prose confirms this" / "nothing confirms OR contradicts
+                # this, it just hasn't been ruled out yet" as three honestly
+                # different confidence levels, not two.
+                affected = None
+                range_source = "keyword-only-unverified"
 
         references = [r.get("url") for r in cve.get("references", []) if r.get("url")]
 
@@ -320,7 +384,15 @@ def lookup_component(name, version, max_results=200, recent_years=5):
             "affected_version_range": version_range,
             "range_source": range_source,  # "nvd-cpe-match" (structured, higher confidence),
                                             # "description-text-heuristic" (prose-parsed, verify
-                                            # against the references before trusting), or None
+                                            # against the references before trusting),
+                                            # "keyword-only-unverified" (name match fired, no
+                                            # structured or prose range exists to confirm OR
+                                            # refute -- weakest tier, verify manually),
+                                            # "osv-exact-match" (set only by lookup_via_osv(),
+                                            # never by this function -- OSV.dev already range-
+                                            # filtered server-side for this exact version), or
+                                            # None (shouldn't happen given the branches above,
+                                            # but left possible rather than asserted away)
             # True = version is inside NVD's own published range for this CVE
             # (treat as a strong hypothesis to verify, not a confirmed finding
             # -- still needs the actual vulnerable feature/precondition
@@ -329,6 +401,14 @@ def lookup_component(name, version, max_results=200, recent_years=5):
             # None = NVD didn't publish a usable range; manual version check
             # needed before trusting this as a hypothesis at all.
             "version_appears_affected": affected,
+            # Orthogonal to range_source: True when the INSTALLED version
+            # string itself carries a distro backport suffix (Debian/Ubuntu/
+            # RHEL/Fedora packaging convention -- see _looks_backported).
+            # Doesn't change version_appears_affected, but callers should
+            # treat a True here as "verify against the distro's own security
+            # tracker before trusting this," even for the otherwise-highest-
+            # confidence nvd-cpe-match tier.
+            "backport_suspected": _looks_backported(version),
             "references": references[:5],
         })
 
@@ -337,6 +417,112 @@ def lookup_component(name, version, max_results=200, recent_years=5):
     # old one that's almost certainly already patched everywhere.
     hypotheses.sort(key=lambda h: (h["is_recent"], h["cvss_score"] or 0, h["published"]), reverse=True)
     return hypotheses
+
+
+def lookup_via_osv(name, version, ecosystem=None, recent_years=5, timeout=20):
+    """Query OSV.dev's free, keyless vulnerability API -- a documented
+    stronger alternative to NVD's CPE matching for non-CMS ecosystem
+    packages (Anchore/Grype's own comparison found thousands fewer false
+    positives, up to an 80% reduction, from exact package+ecosystem+
+    version matching instead of NVD's substring/keyword CPE matching).
+    Most useful for JS/npm packages and other non-WordPress dependencies
+    js_recon.py's source-map/build-manifest mining can now recover a real
+    version string for -- NVD's keywordSearch is tuned for CMS-plugin-
+    style prose descriptions and is noisy/sparse for bare package names
+    like 'lodash' or 'requests'.
+
+    Unlike lookup_component()'s NVD path, OSV's query-by-version endpoint
+    already range-filters server-side: every vuln it returns is confirmed
+    to affect this EXACT version, no local range comparison needed, so
+    version_appears_affected is always True for a result from here.
+
+    ecosystem: one of OSV's own ecosystem strings (OSV_ECOSYSTEMS above).
+    If not given, tries each in turn -- cheap and scoped to one exact
+    package+version per call, so this costs a few extra requests, not a
+    broad search. Returns [] on no matches or if OSV is unreachable
+    (never raises -- a failed/empty OSV check should fall back to NVD,
+    not abort the whole lookup)."""
+    ecosystems = [ecosystem] if ecosystem else OSV_ECOSYSTEMS
+    cutoff_year = datetime.now(timezone.utc).year - recent_years
+    seen_ids = set()
+    results = []
+    for eco in ecosystems:
+        body = json.dumps({
+            "version": version,
+            "package": {"name": name, "ecosystem": eco},
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            OSV_API, data=body, method="POST",
+            headers={"Content-Type": "application/json",
+                     "User-Agent": "Mozilla/5.0 (compatible; catusmythos-lounge-recon/1.0)"},
+        )
+        try:
+            ctx = ssl.create_default_context()
+            with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
+                data = json.loads(resp.read().decode("utf-8", errors="replace"))
+        except Exception as e:
+            warn(f"  OSV lookup failed for '{name}' ({eco}): {e}")
+            continue
+        for v in data.get("vulns", []):
+            vid = v.get("id")
+            if not vid or vid in seen_ids:
+                continue
+            seen_ids.add(vid)
+            aliases = v.get("aliases", [])
+            cve_alias = next((a for a in aliases if a.startswith("CVE-")), None)
+            # OSV gives a raw CVSS vector string, not a precomputed 0-10 base
+            # score -- deriving one means reimplementing the CVSS v3 scoring
+            # formula, which is out of scope here. Surface the vector as-is
+            # rather than guessing a number from it.
+            cvss_vector = next(
+                (sev.get("score") for sev in v.get("severity", []) if sev.get("type") == "CVSS_V3"),
+                None,
+            )
+            published = v.get("published", "")
+            try:
+                pub_year = int(published[:4]) if published else 0
+            except ValueError:
+                pub_year = 0
+            results.append({
+                "cve_id": cve_alias or vid,
+                "osv_id": vid,
+                "ecosystem": eco,
+                "published": published,
+                "is_recent": pub_year >= cutoff_year,
+                "cvss_score": None,
+                "cvss_vector": cvss_vector,
+                "severity": None,
+                "description": (v.get("summary") or v.get("details") or "")[:400],
+                "cpe_matched_this_product": True,
+                "affected_version_range": None,
+                "range_source": "osv-exact-match",
+                "backport_suspected": False,
+                "version_appears_affected": True,
+                "references": [r.get("url") for r in v.get("references", []) if r.get("url")][:5],
+            })
+        if ecosystem:
+            break  # caller already named the exact ecosystem -- one query is authoritative
+    return results
+
+
+def lookup_component_auto(comp, recent_years=5):
+    """Pick OSV.dev or NVD for this component depending on whether it
+    carries an "ecosystem" hint. tech_fingerprint.py's WordPress-plugin-
+    shaped output never sets this (OSV doesn't cover WordPress plugins at
+    all, so trying would just waste requests) -- it's for forward
+    compatibility with JS/dependency mining (js_recon.py et al.) that can
+    identify a real npm/PyPI/Go/etc package+version pair and tag it
+    accordingly."""
+    name, version = comp["name"], comp["version"]
+    ecosystem = comp.get("ecosystem")
+    if ecosystem:
+        osv_hits = lookup_via_osv(name, version, ecosystem=ecosystem, recent_years=recent_years)
+        if osv_hits:
+            return osv_hits
+        # OSV's coverage is strong but not exhaustive (e.g. some older
+        # jQuery XSS CVEs are only tracked in NVD) -- fall through rather
+        # than reporting zero hits just because OSV had none.
+    return lookup_component(name, version, recent_years=recent_years)
 
 
 def main():
@@ -395,7 +581,7 @@ def main():
         for i, comp in enumerate(unique_components):
             name, version = comp["name"], comp["version"]
             log(f"  [{i+1}/{len(unique_components)}] {name} {version}")
-            hyps = lookup_component(name, version, recent_years=args.recent_years)
+            hyps = lookup_component_auto(comp, recent_years=args.recent_years)
             for h in hyps:
                 h["component"] = name
                 h["installed_version"] = version
@@ -434,11 +620,24 @@ def main():
     print(f"  Appear IN affected range (verify live, not auto-confirmed): "
           f"{output['meta'].get('affected_hypotheses', 0)}")
     for h in sorted(output["hypotheses"], key=lambda x: x["version_appears_affected"] is True, reverse=True)[:10]:
+        rs = h.get("range_source")
         if h["version_appears_affected"]:
-            flag = "AFFECTED?" if h.get("range_source") == "nvd-cpe-match" else "AFFECTED? (text)"
+            if rs == "nvd-cpe-match":
+                flag = "AFFECTED?"
+            elif rs == "osv-exact-match":
+                flag = "AFFECTED? (osv)"
+            else:
+                flag = "AFFECTED? (text)"
+            if h.get("backport_suspected"):
+                flag += " backport?"
         elif h["version_appears_affected"] is False:
             flag = "patched"
         else:
+            # Covers both "keyword-only-unverified" (nothing structured or
+            # prose-based confirms or refutes this) and the rare bare-None
+            # range_source -- the JSON output's own range_source field is
+            # the authoritative, machine-readable distinction; this summary
+            # line doesn't need a separate label for each.
             flag = "unclear range"
         print(f"    [{flag:>17}] {h['cve_id']} ({h['component']} {h['installed_version']}) "
               f"CVSS {h['cvss_score']} {h['severity']}")
