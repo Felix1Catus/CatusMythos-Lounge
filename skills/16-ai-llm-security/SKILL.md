@@ -213,7 +213,46 @@ reproduce manually — the keyword judge is a triage filter, not ground truth.
 Statically walks pickle opcodes **without unpickling**, resolving both legacy
 `GLOBAL` (protocol ≤3) and `STACK_GLOBAL` (protocol ≥4, used by modern
 PyTorch/transformers checkpoints) so dangerous imports are named, not just a bare
-`REDUCE`. `safetensors`/ONNX/GGUF are reported safe-by-design.
+`REDUCE`. `safetensors`/ONNX/JSON are reported safe-by-design.
+
+**GGUF/GGML are no longer blanket-safe.** CVE-2024-34359 ("Llama Drama",
+llama-cpp-python) and CVE-2026-5760 (SGLang, CVSS 9.8) both got RCE purely
+from the `tokenizer.chat_template` metadata field — literal, unsandboxed
+Jinja2, no tensor/weight data involved. The scanner now parses GGUF's binary
+key-value metadata directly (stdlib `struct`, no `gguf`/`llama.cpp` dependency)
+and flags a `chat_template` value containing a Jinja2 sandbox-escape gadget
+pattern (`__class__`, `__globals__`, `__mro__`, `__subclasses__`, etc.) as
+`DANGEROUS`; a present-but-benign template is `review`; no template at all
+stays `safe`.
+
+**`.npy`/`.npz` are now header-aware, not treated as raw pickle streams.**
+NumPy's own on-disk format is a small `ast.literal_eval`-safe header followed
+by raw binary array data — only an object-dtype array (`descr == 'O'`, which
+`numpy.save` only ever produces with the non-default `allow_pickle=True`)
+actually stores its payload as a pickle stream. Previously every plain
+numeric `.npy` file reported a meaningless "unparseable pickle stream" (it
+was never a pickle to begin with), while a malicious `.npz` (a zip of `.npy`
+members) was invisible to the scanner entirely — the zip-entry check only
+matched member names containing "pickle", and NumPy always names `.npz`
+members `<array-name>.npy`, so a crafted dangerous entry never matched and
+was silently skipped. Both are fixed: plain arrays now correctly report no
+findings, and genuinely dangerous object-dtype entries (standalone or inside
+a `.npz`) are scanned and flagged.
+
+**Blocklist gaps closed**: `pydoc`/`pydoc.locate` (CVE-2026-22608-class
+picklescan bypass), `marshal`, `types`, and `uuid` (cited as a real example
+of a stdlib module "never blocklisted" by existing tools) are now in
+`DANGEROUS_MODULES`/`DANGEROUS_CALLABLES`. A blocklist is still an inherently
+incomplete strategy — this closes the specific named gaps the research
+surfaced, not a claim of completeness.
+
+**New: loader-environment advisory**, printed once per run (not a per-file
+finding) — checks the scanning host's own installed library versions
+(stdlib `importlib.metadata`, currently `torch`) against known-vulnerable
+ranges. CVE-2025-32434 is the motivating case: `torch.load(weights_only=True)`
+— the standard documented mitigation against pickle RCE — was itself
+exploitable before PyTorch 2.6.0. A different question from "is this file
+safe" — "is the thing that will load it safe here."
 
 ```bash
 # Scan a model directory/file for unsafe pickle opcodes and risky imports
@@ -234,9 +273,9 @@ or `safe`) as `type: "modelsupplychain"` findings — feed straight into
 
 | Verdict | Meaning |
 |---------|---------|
-| `DANGEROUS` | A dangerous `GLOBAL`/`STACK_GLOBAL` import (e.g. `os`, `posix.system`, `subprocess`) is present — do **not** load |
-| `review` | `REDUCE`/object-construction opcodes or an unresolved global — inspect before loading |
-| `safe` | Safe-by-design format (safetensors/ONNX/GGUF) |
+| `DANGEROUS` | A dangerous `GLOBAL`/`STACK_GLOBAL` import (e.g. `os`, `posix.system`, `subprocess`, `pydoc.locate`, `marshal`, `uuid`) is present, **or** a GGUF `chat_template` matches a Jinja2 sandbox-escape gadget pattern — do **not** load |
+| `review` | `REDUCE`/object-construction opcodes or an unresolved global; a GGUF file with a present-but-benign `chat_template`; or an unparseable `.npy` header — inspect before loading |
+| `safe` | safetensors/ONNX/JSON (safe-by-design); a plain numeric/string-dtype `.npy`/`.npz` array (never a pickle stream); or GGUF with no `chat_template` metadata at all |
 
 ---
 
