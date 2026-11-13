@@ -56,8 +56,12 @@ This skill activates when the user asks about:
 ## Prerequisites
 
 ```bash
-pip install requests pyyaml rich
+pip install requests
 ```
+Both scripts in this skill are otherwise stdlib-only (`model_supply_chain.py` has
+zero third-party dependencies at all; `requests` is a guarded, optional import in
+`prompt_injection_tester.py` for live HTTP testing — `--demo` works with neither
+installed).
 
 **Optional enhanced capabilities:**
 - `garak` — LLM vulnerability scanner (NVIDIA)
@@ -100,7 +104,18 @@ Produce a per-category table: **Exposure (Yes/No/Partial) → Evidence → Sever
 
 **Indirect injection** — payload arrives via retrieved/processed content (web page, PDF, email, RAG doc, tool output). This is the highest-impact class for agents. Test that retrieved text **cannot** issue commands, exfiltrate context, or trigger tools.
 
-For every test record: payload, channel (direct/indirect), goal (override / exfiltrate / tool-abuse), and result (blocked / partial / success). Use `scripts/prompt_injection_tester.py` to run a corpus and score outcomes.
+`scripts/prompt_injection_tester.py`'s built-in corpus now includes five
+channel-labeled indirect tests naming the real documented ingestion channel
+for each (not just a generic simulation), matching the EchoLeak/AgentFlayer/
+ForcedLeak/CurXecute class of 2024-2026 real-world incidents:
+`email-indirect`, `calendar-invite-indirect`, `shared-doc-indirect`,
+`web-form-ticket-indirect`, `mcp-tool-description-indirect`. For this class,
+success means the agent **acted** (sent/forwarded/exported/invoked a tool),
+not only that it leaked text — the judge checks for tool-action phrases
+("I'll send", "forwarded to", "calling the tool", etc.) under the same
+refusal-outranks-weak-signal logic as text leaks.
+
+For every test record: payload, channel (direct/indirect), goal (override / exfiltrate / tool-abuse), and result (blocked / partial / success). Use `scripts/prompt_injection_tester.py` to run a corpus and score outcomes; pass `--export-findings findings.json` to turn every confirmed `SUCCESS` into a vuln-chain-composer-ready finding (`type: "promptinjection"`, evidence naming the channel) that feeds straight into `import_findings.py --input findings.json` — this is what lets `correlate.py` recognize it as `scope_violation` evidence for the EchoLeak-class chain (an agent's tool access + a real untrusted ingestion channel = a reachable attack, not two unrelated findings).
 
 **Refusal-quality note:** a single refusal is not a pass. Re-test the same goal across ≥3 phrasings and obfuscations before marking a control effective.
 
@@ -184,6 +199,9 @@ python scripts/prompt_injection_tester.py --url ... --corpus payloads.txt --judg
 
 # Verify the judge logic offline before trusting live verdicts
 python scripts/prompt_injection_tester.py --demo
+
+# Export confirmed successes as findings vuln-chain-composer can correlate
+python scripts/prompt_injection_tester.py --url ... --export-findings findings.json
 ```
 The judge scores each response **SUCCESS / BLOCKED / PARTIAL**: an echoed canary
 is authoritative; an explicit refusal outranks weak leak-phrase matches (so
@@ -219,11 +237,11 @@ python scripts/model_supply_chain.py --demo        # self-test the opcode resolv
 
 | Next Step | Condition | Target Skill |
 |-----------|-----------|--------------|
-| Web/API vuln testing of the app shell | App exposes web/API surface | → Skill 09 |
-| Cloud/infra hosting the model | Model served on AWS/Azure/GCP/K8s | → Skill 10 |
-| Detection rules for prompt-injection attempts | Need SIEM coverage | → Skill 12 |
-| Dependency/model-package CVEs | ML libs in use | → Skill 02 |
-| Red team narrative incorporating AI abuse | Full engagement | → Skill 14 |
+| Web/API vuln testing of the app shell | App exposes web/API surface | → `webapp-exploit-hunter` / `api-breaker` |
+| Cloud/infra hosting the model | Model served on AWS/Azure/GCP/K8s | → `cloud-pivot-finder` |
+| Version-matched CVEs for ML libs/frameworks in use | Non-CPE ecosystem packages (npm/PyPI/Go/etc) identified | → `recon-dominator`'s `cve_lookup.py` (`lookup_via_osv()` — set an `"ecosystem"` key on the component) |
+| Chain a confirmed injection into a concrete attack path | A `promptinjection` finding exported via `--export-findings` | → `vuln-chain-composer` (`import_findings.py` → `correlate.py`'s `scope_violation` capability) |
+| Full-engagement strategic prioritization including AI abuse | Full engagement, multiple findings across skills | → `attack-path-architect` |
 
 ---
 
