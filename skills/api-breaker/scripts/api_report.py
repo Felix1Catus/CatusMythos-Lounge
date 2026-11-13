@@ -12,22 +12,7 @@ import urllib.parse
 from datetime import datetime
 
 
-def log(msg):
-    print(f"[*] {msg}")
-
-
-def success(msg):
-    print(f"[+] {msg}")
-
-
-def warn(msg):
-    print(f"[!] {msg}")
-
-
-def vuln(msg):
-    print(f"[VULN] {msg}")
-
-
+from _common import log, success, vuln, warn
 # OWASP API Security Top 10 (2023) mapping
 OWASP_API_TOP10 = {
     "API1": {

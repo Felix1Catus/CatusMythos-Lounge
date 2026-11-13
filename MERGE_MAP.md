@@ -133,9 +133,53 @@ were originally table-B additions living in `attack-path-architect/scripts/`
 *and* duplicated verbatim (save a 4-line attribution header) in
 `06-threat-hunting`/`14-red-team-ops`, which documented and called them.
 With those two skills removed, `attack-path-architect`'s own copies are now
-the only ones, and are being promoted to properly documented, wired-in
-status in `attack-path-architect/SKILL.md` (they were the orphaned half of
-this duplication before).
+the only ones, and were promoted to properly documented, wired-in status in
+`attack-path-architect/SKILL.md` (a new Step 6b) — both run their own
+`--demo` self-test cleanly. **Not done, deliberately:** rewiring
+`generate_attack_tree.py`'s own compact inline `MITRE_TTPS` table to import
+`mitre_mapper.py`'s richer `ATTACK_TECHNIQUES` database instead of carrying
+a second, smaller one. Checked this directly before doing it: the two
+tables structure sub-techniques differently (`MITRE_TTPS` has dotted IDs
+like `T1059.004` as their own top-level keys; `ATTACK_TECHNIQUES` nests them
+under their parent's `subtechniques` field instead), and `generate_attack_tree.py`
+genuinely looks up 3 such dotted IDs directly — swapping the table would have
+silently broken those 3 lookups. Kept as two separate, independently useful
+tools instead of forcing a merge that would regress something working.
+
+**Per-skill `_common.py` added** to each of the 6 pipeline skills, replacing
+45+ hand-copied `log()`/`success()`/`warn()`/`vuln()`/`error()` definitions
+and 16 hand-copied `http_request()`/`http_get()` definitions that were
+scattered one-per-script. Vendored per-skill (not a single repo-wide shared
+module) so the README's "copy one skill directory out of the plugin" install
+path still works unmodified. `scripts/check_common_sync.py` at the repo root
+guards the one part that must stay identical across all 6 (`log`/`success`/
+`warn`) against silent drift, since the rest of each skill's `_common.py` is
+intentionally skill-specific, not a single source of truth.
+
+Two skills' network-helper functions were deliberately **not** consolidated
+across their own scripts, after checking the actual function bodies found
+real behavioral differences, not just copy-paste noise:
+- `recon-dominator`'s three `http_get()` copies differ only in default
+  timeout (dropped safely to one shared default, with one call site
+  (`wayback_analyzer.py`) made to pass its longer 30s timeout explicitly
+  rather than silently losing it — Wayback's own API is slow, confirmed
+  directly this session).
+- `cloud-pivot-finder`'s four `http_get()` copies have genuinely different
+  return shapes: `bucket_enum.py` returns `(status, body, headers)` while
+  the others return `(status, headers, body)` -- a REVERSED tuple order,
+  not just a formatting difference. Left as four separate, local helpers
+  rather than risk a silent, severe bug from unifying mismatched shapes
+  without a dedicated call-site audit.
+
+Caught and fixed one real bug introduced by this consolidation itself before
+it shipped: an automated dedup pass misplaced `correlate.py`'s new `from
+_common import` line at the very end of the file (after its own
+`if __name__ == "__main__":` block), which would have made every invocation
+of the script fail immediately with `NameError: log is not defined`. Found
+by re-running this session's own established chain-discovery regression
+test (the same synthetic findings set used earlier to validate the
+capability-graph engine) rather than trusting that "it compiles" meant "it
+runs" -- it compiled fine; it only failed at actual execution.
 
 **Doctrine/bootkit archived, not deleted** — the bus-based role-card design
 (`SUPERVISOR`/`HUNTER`/`OPERATOR`/`SKEPTIC` seats, a `TASK_QUEUE.json` bus

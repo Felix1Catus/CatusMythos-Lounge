@@ -19,18 +19,7 @@ import json
 from datetime import datetime
 
 
-def log(msg):
-    print(f"[*] {msg}")
-
-
-def success(msg):
-    print(f"[+] {msg}")
-
-
-def warn(msg):
-    print(f"[!] {msg}")
-
-
+from _common import cvss_round_up, log, score_to_severity, success, warn
 # CVSS v3.1 metric values
 CVSS_VALUES = {
     "AV": {"N": 0.85, "A": 0.62, "L": 0.55, "P": 0.20},
@@ -205,33 +194,6 @@ def calculate_cvss_score(metrics, scope):
     # Round up to one decimal, per the CVSS v3.1 spec's exact integer algorithm
     # (not plain math.ceil(score*10)/10 — see module docstring for why).
     return cvss_round_up(score)
-
-
-def cvss_round_up(value):
-    """CVSS v3.1 spec Roundup(x): round UP to 1 decimal unless already exact.
-
-    Ordinary round-half-up / math.ceil(x*10)/10 is not equivalent and can
-    under-score a result that floating point stored just below a 0.1
-    boundary. This integer-math form, from the CVSS v3.1 specification,
-    sidesteps that.
-    """
-    int_input = round(value * 100000)
-    if int_input % 10000 == 0:
-        return int_input / 100000.0
-    return (int_input // 10000 + 1) / 10.0
-
-
-def score_to_severity(score):
-    """Convert CVSS score to severity string."""
-    if score >= 9.0:
-        return "CRITICAL"
-    elif score >= 7.0:
-        return "HIGH"
-    elif score >= 4.0:
-        return "MEDIUM"
-    elif score > 0.0:
-        return "LOW"
-    return "NONE"
 
 
 def calculate_chain_cvss(chain):

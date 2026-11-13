@@ -12,18 +12,7 @@ from pathlib import Path
 from datetime import datetime
 
 
-def log(msg):
-    print(f"[*] {msg}")
-
-
-def success(msg):
-    print(f"[+] {msg}")
-
-
-def warn(msg):
-    print(f"[!] {msg}")
-
-
+from _common import log, success, warn
 # Technology -> known risk indicators
 TECH_RISK_SCORES = {
     "WordPress": 3, "Drupal": 3, "Joomla": 4, "phpMyAdmin": 5,

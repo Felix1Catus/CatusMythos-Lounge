@@ -26,18 +26,7 @@ def _finding_blob(finding):
     return " ".join(parts)
 
 
-def log(msg):
-    print(f"[*] {msg}")
-
-
-def success(msg):
-    print(f"[+] {msg}")
-
-
-def warn(msg):
-    print(f"[!] {msg}")
-
-
+from _common import log, success, warn
 # Severity mapping
 SEVERITY_MAP = {
     "error_based_sqli": "HIGH",

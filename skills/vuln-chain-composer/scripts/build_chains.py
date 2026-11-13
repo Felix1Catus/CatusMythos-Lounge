@@ -11,18 +11,7 @@ from pathlib import Path
 from datetime import datetime
 
 
-def log(msg):
-    print(f"[*] {msg}")
-
-
-def success(msg):
-    print(f"[+] {msg}")
-
-
-def warn(msg):
-    print(f"[!] {msg}")
-
-
+from _common import log, success, warn
 # Detailed exploitation techniques per vulnerability type
 EXPLOIT_TECHNIQUES = {
     "sqli": {

@@ -15,22 +15,7 @@ from pathlib import Path
 from datetime import datetime
 
 
-def log(msg):
-    print(f"[*] {msg}")
-
-
-def success(msg):
-    print(f"[+] {msg}")
-
-
-def warn(msg):
-    print(f"[!] {msg}")
-
-
-def vuln(msg):
-    print(f"[!!] {msg}")
-
-
+from _common import log, success, vuln, warn
 # Cloud metadata service endpoints
 METADATA_ENDPOINTS = {
     "AWS IMDSv1": {

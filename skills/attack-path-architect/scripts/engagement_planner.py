@@ -1,6 +1,7 @@
 # --- merged into CatusMythos-Lounge from Masriyan/Claude-Code-CyberSecurity-Skill ---
-# Original domain skill: 14-red-team-ops
-# Folded in as a complementary capability alongside the Felix1Catus pipeline script set.
+# Originally shipped alongside the (since-removed) 14-red-team-ops domain
+# skill; this copy is attack-path-architect's own canonical one -- see
+# MERGE_MAP.md for the full history.
 #
 #!/usr/bin/env python3
 """

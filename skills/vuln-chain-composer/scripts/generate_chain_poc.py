@@ -12,18 +12,7 @@ from pathlib import Path
 from datetime import datetime
 
 
-def log(msg):
-    print(f"[*] {msg}")
-
-
-def success(msg):
-    print(f"[+] {msg}")
-
-
-def warn(msg):
-    print(f"[!] {msg}")
-
-
+from _common import log, success, warn
 def generate_curl_command(step, finding):
     """Generate a curl command for a single exploitation step."""
     url = finding.get("url", step.get("target", "https://TARGET"))

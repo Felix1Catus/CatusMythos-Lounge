@@ -9,7 +9,6 @@ import argparse
 import json
 import socket
 import subprocess
-import ssl
 import urllib.request
 import urllib.parse
 import re
@@ -17,31 +16,7 @@ from pathlib import Path
 from datetime import datetime
 
 
-def log(msg):
-    print(f"[*] {msg}")
-
-
-def warn(msg):
-    print(f"[!] {msg}")
-
-
-def success(msg):
-    print(f"[+] {msg}")
-
-
-def http_get(url, timeout=15):
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
-    req = urllib.request.Request(url, headers={"User-Agent": "orizon-recon/1.0"})
-    try:
-        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
-            return resp.read().decode("utf-8", errors="replace")
-    except Exception as e:
-        warn(f"Request failed: {url} - {e}")
-        return None
-
-
+from _common import http_get, log, success, warn
 def whois_lookup(domain):
     """Perform WHOIS lookup."""
     log(f"Running WHOIS lookup for {domain}...")

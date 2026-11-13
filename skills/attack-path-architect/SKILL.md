@@ -144,6 +144,40 @@ Score each attack path on:
   - Uses legitimate protocols: +2
 - **Combined Score**: (Feasibility * 0.4) + (Impact * 0.4) + (Stealth * 0.2)
 
+### Step 6b: Deeper ATT&CK Lookup and Engagement Scoping (optional)
+
+Two standalone scripts for when a path needs more than
+`generate_attack_tree.py`'s own compact inline TTP table (15 common
+techniques, enough for the tree-building step itself):
+
+```bash
+python scripts/mitre_mapper.py --technique T1190
+python scripts/mitre_mapper.py --technique T1190 --detection-query splunk
+python scripts/mitre_mapper.py --input {technique_ids_file} --navigator --output layer.json
+```
+
+`mitre_mapper.py` carries a richer per-technique database (descriptions,
+named sub-techniques with their own detection guidance, Navigator-layer
+export) than the inline table `generate_attack_tree.py` uses for building
+the tree itself — reach for it when a finding needs the fuller writeup, a
+SIEM detection query, or an ATT&CK Navigator layer to hand to a blue team.
+It is **not** wired into `generate_attack_tree.py`'s own lookups: its
+sub-techniques are nested under each parent technique's own entry rather
+than being separate top-level keys, so a few dotted IDs the tree generator
+looks up directly (`T1059.004`, `T1552.005`, `T1078.004`) would silently
+miss if the tree generator's own table were swapped for this one — kept as
+two separate, independently useful tools rather than force-merged.
+
+```bash
+python scripts/engagement_planner.py --scope {scope_json_file} --format markdown
+```
+
+`engagement_planner.py` turns a scoped target list into a structured,
+ATT&CK-aligned red-team engagement plan (rules of engagement, OPSEC plan,
+attack-log scaffold) — useful once Step 6's prioritized paths are ready to
+become an actual engagement plan, distinct from the attack-tree/chain
+analysis the rest of this skill produces.
+
 ### Step 7: Report Generation
 
 There is no `generate_attack_report.py` in this skill — per the pipeline,

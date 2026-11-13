@@ -33,18 +33,7 @@ import urllib.request
 from datetime import datetime, timezone
 
 
-def log(msg):
-    print(f"[*] {msg}")
-
-
-def warn(msg):
-    print(f"[!] {msg}")
-
-
-def success(msg):
-    print(f"[+] {msg}")
-
-
+from _common import log, success, warn
 NVD_CVE_API = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 # NVD's published unauthenticated rate limit is 5 requests per rolling 30s
 # window. Self-pace comfortably under that rather than relying on nobody

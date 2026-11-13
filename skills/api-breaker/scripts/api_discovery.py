@@ -8,7 +8,6 @@ Author: orizon.one
 import argparse
 import json
 import re
-import ssl
 import urllib.request
 import urllib.parse
 import concurrent.futures
@@ -16,42 +15,7 @@ from pathlib import Path
 from datetime import datetime
 
 
-def log(msg):
-    print(f"[*] {msg}")
-
-
-def success(msg):
-    print(f"[+] {msg}")
-
-
-def warn(msg):
-    print(f"[!] {msg}")
-
-
-def http_request(url, method="GET", headers=None, data=None, timeout=8):
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
-    default_headers = {
-        "User-Agent": "Mozilla/5.0 (compatible; orizon-hunter/1.0)",
-        "Accept": "application/json, text/html, */*",
-    }
-    if headers:
-        default_headers.update(headers)
-    if data and isinstance(data, str):
-        data = data.encode("utf-8")
-    req = urllib.request.Request(url, data=data, headers=default_headers, method=method)
-    try:
-        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
-            body = resp.read(65536).decode("utf-8", errors="replace")
-            return resp.status, dict(resp.headers), body
-    except urllib.error.HTTPError as e:
-        body = e.read(32768).decode("utf-8", errors="replace") if hasattr(e, "read") else ""
-        return e.code, dict(e.headers) if hasattr(e, "headers") else {}, body
-    except Exception:
-        return 0, {}, ""
-
-
+from _common import http_request, log, success, warn
 # Common API paths to fuzz
 API_PATHS = [
     # Documentation

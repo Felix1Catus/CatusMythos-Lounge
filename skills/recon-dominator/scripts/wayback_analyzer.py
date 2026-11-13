@@ -8,7 +8,6 @@ Author: orizon.one
 import argparse
 import json
 import re
-import ssl
 import urllib.request
 import urllib.parse
 from pathlib import Path
@@ -16,31 +15,7 @@ from datetime import datetime
 from collections import Counter
 
 
-def log(msg):
-    print(f"[*] {msg}")
-
-
-def warn(msg):
-    print(f"[!] {msg}")
-
-
-def success(msg):
-    print(f"[+] {msg}")
-
-
-def http_get(url, timeout=30):
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
-    req = urllib.request.Request(url, headers={"User-Agent": "orizon-recon/1.0"})
-    try:
-        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
-            return resp.read().decode("utf-8", errors="replace")
-    except Exception as e:
-        warn(f"Request failed: {e}")
-        return None
-
-
+from _common import http_get, log, success, warn
 def fetch_wayback_urls(domain, limit=10000):
     """Fetch all archived URLs for a domain from Wayback CDX API."""
     log(f"Fetching Wayback Machine URLs for {domain}...")
@@ -50,7 +25,7 @@ def fetch_wayback_urls(domain, limit=10000):
         f"&output=json&fl=original,timestamp,statuscode,mimetype"
         f"&collapse=urlkey&limit={limit}"
     )
-    data = http_get(url)
+    data = http_get(url, timeout=30)
     if not data:
         return []
     try:

@@ -1,6 +1,7 @@
 # --- merged into CatusMythos-Lounge from Masriyan/Claude-Code-CyberSecurity-Skill ---
-# Original domain skill: 06-threat-hunting
-# Folded in as a complementary capability alongside the Felix1Catus pipeline script set.
+# Originally shipped alongside the (since-removed) 06-threat-hunting domain
+# skill; this copy is attack-path-architect's own canonical one -- see
+# MERGE_MAP.md for the full history.
 #
 #!/usr/bin/env python3
 """

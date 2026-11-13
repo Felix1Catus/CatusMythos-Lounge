@@ -12,14 +12,7 @@ from pathlib import Path
 from datetime import datetime
 
 
-def log(msg):
-    print(f"[*] {msg}")
-
-
-def success(msg):
-    print(f"[+] {msg}")
-
-
+from _common import log, success
 # Dork categories with templates
 DORK_DATABASE = {
     "sensitive_files": [

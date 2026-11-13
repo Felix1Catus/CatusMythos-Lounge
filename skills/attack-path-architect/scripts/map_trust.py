@@ -17,18 +17,7 @@ from datetime import datetime
 from collections import defaultdict
 
 
-def log(msg):
-    print(f"[*] {msg}")
-
-
-def success(msg):
-    print(f"[+] {msg}")
-
-
-def warn(msg):
-    print(f"[!] {msg}")
-
-
+from _common import log, success, warn
 def http_get_headers(url, timeout=5):
     """Get HTTP headers from a URL."""
     ctx = ssl.create_default_context()

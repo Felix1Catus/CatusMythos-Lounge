@@ -11,14 +11,7 @@ from pathlib import Path
 from datetime import datetime
 
 
-def log(msg):
-    print(f"[*] {msg}")
-
-
-def success(msg):
-    print(f"[+] {msg}")
-
-
+from _common import log, success
 # MITRE ATT&CK TTP Library (relevant subset)
 MITRE_TTPS = {
     "T1190": {"name": "Exploit Public-Facing Application", "tactic": "Initial Access"},

@@ -22,18 +22,7 @@ from pathlib import Path
 from datetime import datetime
 
 
-def log(msg):
-    print(f"[*] {msg}")
-
-
-def warn(msg):
-    print(f"[!] {msg}")
-
-
-def success(msg):
-    print(f"[+] {msg}")
-
-
+from _common import log, success, warn
 def resolve_dns(hostname, timeout=3):
     """Resolve a hostname to IP addresses."""
     try:

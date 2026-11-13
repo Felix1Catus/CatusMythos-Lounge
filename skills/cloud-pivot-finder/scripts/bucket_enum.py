@@ -41,22 +41,7 @@ COMMON_CONTAINERS = [
 ]
 
 
-def log(msg):
-    print(f"[*] {msg}")
-
-
-def success(msg):
-    print(f"[+] {msg}")
-
-
-def warn(msg):
-    print(f"[!] {msg}")
-
-
-def vuln(msg):
-    print(f"[!!] {msg}")
-
-
+from _common import log, success, vuln, warn
 def http_get(url, timeout=5, max_bytes=32768):
     ctx = ssl.create_default_context()
     ctx.check_hostname = False

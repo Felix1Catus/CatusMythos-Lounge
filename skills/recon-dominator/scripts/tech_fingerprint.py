@@ -19,18 +19,7 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
-def log(msg):
-    print(f"[*] {msg}")
-
-
-def warn(msg):
-    print(f"[!] {msg}")
-
-
-def success(msg):
-    print(f"[+] {msg}")
-
-
+from _common import log, success, warn
 # Technology signatures: pattern -> technology name
 HEADER_SIGNATURES = {
     "server": {

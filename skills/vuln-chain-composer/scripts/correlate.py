@@ -10,21 +10,9 @@ import json
 from pathlib import Path
 from datetime import datetime
 from collections import defaultdict
-
-
-def log(msg):
-    print(f"[*] {msg}")
-
-
-def success(msg):
-    print(f"[+] {msg}")
-
-
-def warn(msg):
-    print(f"[!] {msg}")
-
-
 import re as _re
+
+from _common import log, success, warn
 
 # A chain's whole point is "primitive A, when actually chained to primitive B,
 # becomes worse than either alone" -- but every template below used to escalate
