@@ -153,7 +153,17 @@ def _matches_component(cve_item, product_name):
                 # cpe:2.3:a:vendor:product:version:...
                 cpe_parts = criteria.split(":")
                 cpe_product = cpe_parts[4].replace("_", " ") if len(cpe_parts) > 4 else ""
-                if needle in cpe_product or cpe_product in needle:
+                # EXACT equality, not substring containment -- "elementor" is
+                # a substring of "essential addons for elementor" and
+                # "bdthemes element pack elementor addons" (both real,
+                # separately-tracked plugins in the Elementor ecosystem), so
+                # `needle in cpe_product` was matching this CVE's own
+                # structured CPE data to a DIFFERENT product's CVE just
+                # because the name happens to contain "elementor" as a
+                # substring. CPE's product field is structured, authoritative
+                # data meant for exact matching, unlike the free-text
+                # keyword-search relevance gate below.
+                if needle == cpe_product:
                     # Some CPE matches are a RANGE (versionStart/EndIncluding/
                     # Excluding) -- most CVEs look like this. Others are an
                     # EXACT version with no range fields at all: the CPE
@@ -247,12 +257,42 @@ def lookup_component(name, version, max_results=200, recent_years=5):
         # Keyword relevance gate: NVD's keywordSearch is a blunt free-text
         # match against the whole description -- require the product name
         # to actually appear, or this is noise, not a hypothesis.
-        if name.lower().replace("-", " ") not in desc_en.lower().replace("-", " "):
+        needle = name.lower().replace("-", " ")
+        desc_norm = desc_en.lower().replace("-", " ")
+        if needle not in desc_norm:
+            continue
+        # Still not enough on its own: this ecosystem is full of third-party
+        # addon plugins conventionally named "<Addon> for Elementor" / "...
+        # Addons For Elementor Pro" -- CVE-2026-28192 ("Unauthenticated
+        # Arbitrary File Upload in Piotnet Addons For Elementor Pro") is a
+        # real example that otherwise sails through this gate when querying
+        # "elementor pro", even after the CPE-exactness fix above, because
+        # THIS CVE has no CPE data at all (matched=None) so there's nothing
+        # structured to contradict it. The one consistent signal: an addon
+        # plugin's own name is written as "X for <product>" or "X Addon(s)
+        # For <product>" -- the product name is preceded by "for ", not the
+        # other way around (the product's OWN CVEs say "<product> plugin
+        # for WordPress", i.e. followed by "for", never preceded by it).
+        pos = desc_norm.find(needle)
+        preceding = desc_norm[:pos]
+        if re.search(r"\bfor\s+$", preceding):
             continue
 
         score, severity = _extract_cvss(cve.get("metrics", {}))
         matched, version_range = _matches_component(cve, name)
         range_source = "nvd-cpe-match" if version_range else None
+
+        if matched is False:
+            # This CVE DOES have structured CPE data, and none of it names
+            # the queried product -- it's affirmatively about something
+            # else (same bug class as above: NVD's keywordSearch and the
+            # free-text relevance gate below are both blunt enough to let a
+            # same-ecosystem-but-different product through). Falling back
+            # to the text heuristic here would just re-introduce the exact
+            # false-positive this CPE check exists to catch -- skip the
+            # hypothesis entirely rather than guess from prose when
+            # structured data already gave a definitive answer.
+            continue
 
         if version_range:
             affected = _version_in_range(
@@ -262,13 +302,14 @@ def lookup_component(name, version, max_results=200, recent_years=5):
                 version_range.get("exact_version"),
             )
         else:
-            # NVD often hasn't published structured CPE match data for a
-            # recent CVE yet (CPE enrichment lags initial publication by
-            # weeks), but the CNA's own description text routinely states
-            # the affected range in prose anyway -- e.g. "This issue
-            # affects Elementor Pro: from n/a through 4.2.1." Parse that as
-            # a lower-confidence fallback rather than reporting "unclear"
-            # when the answer is sitting right there in the text.
+            # matched is None here (no CPE configuration data at all for
+            # this CVE -- NVD enrichment often lags initial publication by
+            # weeks), so there's nothing structured to contradict. The
+            # CNA's own description text routinely states the affected
+            # range in prose anyway -- e.g. "This issue affects Elementor
+            # Pro: from n/a through 4.2.1." Parse that as a lower-confidence
+            # fallback rather than reporting "unclear" when the answer is
+            # sitting right there in the text.
             text_range = _parse_range_from_text(desc_en)
             if text_range:
                 version_range = text_range
