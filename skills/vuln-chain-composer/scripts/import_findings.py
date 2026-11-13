@@ -57,6 +57,7 @@ SEVERITY_MAP = {
     "hostheadertrust": "LOW",
     "cicdexposure": "MEDIUM",
     "cloudresourceaccess": "MEDIUM",
+    "modelsupplychain": "HIGH",  # a DANGEROUS static pickle-opcode verdict -- RCE if this artifact gets loaded
 }
 
 # OWASP API Top 10 / Web Top 10 mapping
@@ -219,6 +220,14 @@ def normalize_finding(finding, source_tool):
         # anything else) already proved metadata/IMDS reachability.
         normalized["chainable_as"] = ["data_access", "lateral_movement"]
         normalized["requires"] = ["cloud_metadata"]
+    elif "modelsupplychain" in vuln_type:
+        # model_supply_chain.py (16-ai-llm-security): a DANGEROUS verdict
+        # means loading this specific artifact executes attacker code --
+        # same directly-exploitable-once-reached shape as "upload" above,
+        # not a blockedcve-style unconfirmed precondition, since the
+        # scanner only flags a file it already found a real reason to
+        # believe would get loaded.
+        normalized["chainable_as"] = ["rce_potential"]
 
     # Cross-cutting: ANY finding whose own evidence says a payload got
     # blocked/filtered by a WAF (regardless of its vuln_type) now needs a

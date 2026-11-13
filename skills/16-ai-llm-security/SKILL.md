@@ -223,7 +223,14 @@ python scripts/model_supply_chain.py --path ./models/ --recursive --output scan.
 # Gate CI on findings (exit 3 if any DANGEROUS artifact); verify the detector first
 python scripts/model_supply_chain.py --path ./models/ --recursive --strict
 python scripts/model_supply_chain.py --demo        # self-test the opcode resolver
+
+# Export DANGEROUS verdicts as findings vuln-chain-composer can correlate
+python scripts/model_supply_chain.py --path ./models/ --recursive --export-findings findings.json
 ```
+`--export-findings` writes only confirmed `DANGEROUS` verdicts (never `review`
+or `safe`) as `type: "modelsupplychain"` findings — feed straight into
+`import_findings.py --input findings.json`, which tags them `chainable_as:
+["rce_potential"]` (loading this specific artifact executes attacker code).
 
 | Verdict | Meaning |
 |---------|---------|
@@ -240,7 +247,7 @@ python scripts/model_supply_chain.py --demo        # self-test the opcode resolv
 | Web/API vuln testing of the app shell | App exposes web/API surface | → `webapp-exploit-hunter` / `api-breaker` |
 | Cloud/infra hosting the model | Model served on AWS/Azure/GCP/K8s | → `cloud-pivot-finder` |
 | Version-matched CVEs for ML libs/frameworks in use | Non-CPE ecosystem packages (npm/PyPI/Go/etc) identified | → `recon-dominator`'s `cve_lookup.py` (`lookup_via_osv()` — set an `"ecosystem"` key on the component) |
-| Chain a confirmed injection into a concrete attack path | A `promptinjection` finding exported via `--export-findings` | → `vuln-chain-composer` (`import_findings.py` → `correlate.py`'s `scope_violation` capability) |
+| Chain a confirmed injection or dangerous model artifact into a concrete attack path | A `promptinjection` or `modelsupplychain` finding exported via `--export-findings` | → `vuln-chain-composer` (`import_findings.py` → `correlate.py`'s `scope_violation`/`rce_potential` capabilities) |
 | Full-engagement strategic prioritization including AI abuse | Full engagement, multiple findings across skills | → `attack-path-architect` |
 
 ---

@@ -151,6 +151,33 @@ def iter_paths(root: str, recursive: bool):
             break
 
 
+def export_findings(results: list[dict]) -> list[dict]:
+    """Shape DANGEROUS verdicts into vuln-chain-composer's expected raw-
+    finding format (import_findings.py's normalize_finding() reads
+    type/url/evidence/payload/severity directly off this dict -- "url" is
+    repurposed as the artifact path here, same as other non-web pipeline
+    scripts in this repo do for a non-HTTP target). Only DANGEROUS is
+    exported, never "review" (ambiguous) or "safe" -- same confirmed-only
+    discipline as prompt_injection_tester.py's export_findings(). The
+    "type" field is the single word "modelsupplychain" (no separator),
+    matching import_findings.py's substring-containment convention for its
+    other one-word type tags."""
+    findings = []
+    for r in results:
+        if r["verdict"] != "DANGEROUS":
+            continue
+        findings.append({
+            "type": "modelsupplychain",
+            "url": r["path"],
+            "evidence": f"Static pickle-opcode scan found a load-time code-execution risk in "
+                        f"{r['path']}: " + "; ".join(r["findings"][:5]),
+            "payload": "; ".join(r["findings"]),
+            "severity": "HIGH",
+            "note": "model_supply_chain.py static scan (no unpickling performed)",
+        })
+    return findings
+
+
 def _run_demo() -> int:
     """Self-test: confirm detection on synthetic pickles at legacy and modern protocols."""
 
@@ -175,6 +202,8 @@ def main() -> None:
     ap.add_argument("--path", help="Model file or directory")
     ap.add_argument("--recursive", action="store_true", help="Recurse into subdirectories")
     ap.add_argument("--output", help="Write JSON report")
+    ap.add_argument("--export-findings", help="Write DANGEROUS verdicts as vuln-chain-composer-ready "
+                                                "findings JSON (feed straight to import_findings.py --input)")
     ap.add_argument("--strict", action="store_true", help="Exit non-zero (3) if any DANGEROUS artifact is found")
     ap.add_argument("--demo", action="store_true", help="Run a built-in self-test and exit")
     ap.add_argument("-v", "--verbose", action="store_true", help="Enable debug logging")
@@ -217,6 +246,12 @@ def main() -> None:
         with open(args.output, "w", encoding="utf-8") as fh:
             json.dump(results, fh, indent=2)
         print(f"[+] Wrote {args.output}")
+
+    if args.export_findings:
+        findings = export_findings(results)
+        with open(args.export_findings, "w", encoding="utf-8") as fh:
+            json.dump(findings, fh, indent=2)
+        print(f"[+] Wrote {len(findings)} finding(s) to {args.export_findings}")
 
     if args.strict and danger:
         sys.exit(3)
