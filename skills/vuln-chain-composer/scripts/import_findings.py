@@ -405,6 +405,69 @@ def load_findings_from_file(filepath):
                 "evidence": f"Public listing with {bucket.get('files_visible', '?')} files",
             })
 
+    # Import subdomain takeover scanner findings (takeover_scanner.py's real
+    # output shape: top-level "vulnerable" list of {subdomain, cname, service,
+    # evidence, impact, method, edge_case, edge_case_note}). None of the
+    # generic keys above ("findings"/"vulnerabilities"/"results"/"issues")
+    # match this shape, so every subdomain-takeover finding this script ever
+    # produced silently never reached vuln-chain-composer -- found while
+    # wiring this sub-phase's fingerprint refresh through the pipeline.
+    if "vulnerable" in data and isinstance(data["vulnerable"], list) and \
+            data.get("meta", {}).get("type") == "subdomain_takeover_scan":
+        for v in data["vulnerable"]:
+            findings.append({
+                "type": "subdomain_takeover",
+                "url": f"https://{v.get('subdomain', '')}",
+                "severity": "medium" if v.get("edge_case") else v.get("impact", "high"),
+                "evidence": f"{v.get('service', 'unknown')}: {v.get('evidence', '')} "
+                            f"(method: {v.get('method', '')})"
+                            + (f" [EDGE CASE: {v.get('edge_case_note', '')}]" if v.get("edge_case") else ""),
+                "param": v.get("cname", ""),
+            })
+
+    # Import CI/CD and IaC exposure findings (cicd_finder.py's real output
+    # shape: nested under "findings_by_severity", each entry {host, category,
+    # severity, description, probe: {url, ...}} -- not a flat "findings" list,
+    # also never previously picked up by any generic key.
+    if "findings_by_severity" in data and isinstance(data["findings_by_severity"], dict):
+        for sev, items in data["findings_by_severity"].items():
+            for item in items:
+                probe = item.get("probe", {}) or {}
+                findings.append({
+                    "type": f"cicdexposure_{item.get('category', 'unknown')}",
+                    "url": probe.get("url", f"https://{item.get('host', '')}"),
+                    "severity": item.get("severity", sev),
+                    "evidence": f"{item.get('description', '')}: "
+                                f"{str(probe.get('content_preview', ''))[:200]}",
+                })
+
+    # Import serverless/container endpoint findings (serverless_finder.py's
+    # real output shape: top-level "all_results" list of {hostname, service,
+    # provider, accessible, issues} -- not a flat "findings" list, also never
+    # previously picked up. Reuses the generic "info_disclosure" type (no
+    # chainable_as/requires special-case) rather than a cloud-metadata-gated
+    # type, since an accessible unauthenticated endpoint needs no SSRF/IMDS
+    # precondition to already be directly reachable.
+    if "all_results" in data and isinstance(data["all_results"], list) and \
+            data.get("meta", {}).get("type") == "serverless_discovery":
+        for r in data["all_results"]:
+            if r.get("accessible"):
+                findings.append({
+                    "type": "info_disclosure",
+                    "url": f"https://{r.get('hostname', '')}",
+                    "severity": "medium",
+                    "evidence": f"Unauthenticated access to {r.get('service', 'serverless endpoint')} "
+                                f"({r.get('provider', '')})",
+                })
+            for issue in r.get("issues", []):
+                if str(issue.get("type", "")).startswith("info_leak"):
+                    findings.append({
+                        "type": "info_disclosure",
+                        "url": f"https://{r.get('hostname', '')}{issue.get('path', '')}",
+                        "severity": "low",
+                        "evidence": f"{issue.get('type')}: {str(issue.get('detail', ''))[:200]}",
+                    })
+
     # Import subdomain takeover findings
     if "relationships" in data:
         for rel in data["relationships"]:
