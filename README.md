@@ -176,9 +176,5 @@ CatusMythos-Lounge builds on prior work, used and adapted under MIT terms.
 Full attribution and per-file provenance: [NOTICE.md](NOTICE.md),
 [CREDITS.md](CREDITS.md), [MERGE_MAP.md](MERGE_MAP.md).
 
-- **orizon.one** and **Felix1Catus** — the original pipeline this repo's
-  execution layer is built on.
-- **Riyan Pratama ("Masriyan")** — the AI/LLM security and PoC-development
-  skills, and several capability merges across the pipeline.
 - The **mythos-lounge** project — the doctrine engine and multi-seat
   coordination protocol.
