@@ -58,10 +58,11 @@ This skill activates when the user asks about:
 ```bash
 pip install requests
 ```
-All three scripts in this skill are otherwise stdlib-only (`model_supply_chain.py`
+All four scripts in this skill are otherwise stdlib-only (`model_supply_chain.py`
 has zero third-party dependencies at all; `requests` is a guarded, optional
-import in `prompt_injection_tester.py` and `unbounded_consumption_tester.py`
-for live HTTP testing — `--demo` works with neither installed).
+import in `prompt_injection_tester.py`, `unbounded_consumption_tester.py`, and
+`mcp_security_tester.py` for live HTTP testing — `--demo` and `--tools-file`
+work with neither installed).
 
 **Optional enhanced capabilities:**
 - `garak` — LLM vulnerability scanner (NVIDIA)
@@ -166,6 +167,29 @@ The agent is a **confused deputy**: it holds privileges the user may not. Review
 - **MCP server hardening** — authenticate clients, scope resources, rate-limit, log every tool invocation; never expose secrets via resource reads
 - **Memory poisoning** — persistent agent memory can be seeded with malicious instructions that fire on later turns
 
+`scripts/mcp_security_tester.py` automates the protocol/lifecycle-level
+classes above (distinct from `prompt_injection_tester.py`'s content-
+injection corpus — doesn't duplicate it): a **Full-Schema-Poisoning**
+scanner walking every string field of a `tools/list` response, not just
+`description` (CyberArk's finding: a parameter's own *name* can carry the
+injection) — plus **tool-shadowing** detection (Invariant Labs Experiment
+2: one tool's description redirects a *different*, real tool's behavior,
+without the malicious tool ever being invoked); a **rug-pull** detector
+that hashes each tool's canonicalized schema and diffs it against a
+`--baseline` from an earlier run (the spec's `notifications/tools/
+list_changed` has no re-approval/version-pinning/content-hash mechanism of
+its own); a static **CVE fingerprint table** for the 7 named MCP
+component CVEs (mcp-remote, MCP Inspector, Filesystem server, Python SDK,
+Figma, mcp-package-docs); and a **token-passthrough** probe testing the
+MCP spec's own MUST clause ("MCP servers MUST NOT accept any tokens that
+were not explicitly issued for them") by sending one foreign-audience
+bearer token and checking whether the server processes it anyway.
+Deliberately not attempted (documented in the module docstring): a full
+OAuth confused-deputy consent-skip flow, multi-agent trust-laundering
+testing, and the two-session memory-poisoning write-then-retrieve
+methodology — each needs product-specific plumbing or a multi-agent
+harness this skill doesn't have.
+
 ### 5. Model & ML Supply Chain
 
 - Scan model artifacts for unsafe deserialization — **`pickle`/`.pt`/`.bin` can execute code on load**. Prefer `safetensors`. Run `scripts/model_supply_chain.py` or `modelscan`.
@@ -264,6 +288,34 @@ are `safe` / `exposed` / `inconclusive` / `unclear` — a small burst producing
 no 429 is reported `inconclusive`, never "confirmed no rate limiting," since
 that sample size can't support the stronger claim.
 
+### `mcp_security_tester.py`
+Protocol/lifecycle-level MCP security testing — not a payload corpus. Accepts
+either a live server (`--url`, JSON-RPC over HTTP) or an offline `--tools-file`
+JSON dump of a `tools/list` response.
+
+```bash
+# Scan a local tools/list dump for schema-field poisoning and shadowing
+python scripts/mcp_security_tester.py --tools-file tools_list.json
+
+# Save a baseline, then later diff against it to catch a rug-pull
+python scripts/mcp_security_tester.py --tools-file tools.json --save-baseline baseline.json
+python scripts/mcp_security_tester.py --tools-file tools.json --baseline baseline.json
+
+# CVE fingerprint check for a named MCP server component
+python scripts/mcp_security_tester.py --server-name mcp-remote --server-version 0.1.10
+
+# Live token-passthrough probe + export findings
+python scripts/mcp_security_tester.py --url http://localhost:8080/mcp --check-token-passthrough --export-findings findings.json
+
+python scripts/mcp_security_tester.py --demo   # self-test all 4 checks offline
+```
+The schema scanner is deliberately narrower than a bare case-insensitive
+keyword match: `IMPORTANT:`/`SYSTEM:`-style directives are matched in their
+literal shouted-caps form only, since ordinary tool descriptions routinely
+contain lowercase "important:"/"system:" in benign prose (`--demo` tests
+both the true-positive canonical-PoC shape and this exact false-positive
+guard).
+
 ### `model_supply_chain.py`
 Statically walks pickle opcodes **without unpickling**, resolving both legacy
 `GLOBAL` (protocol ≤3) and `STACK_GLOBAL` (protocol ≥4, used by modern
@@ -341,7 +393,7 @@ or `safe`) as `type: "modelsupplychain"` findings — feed straight into
 | Web/API vuln testing of the app shell | App exposes web/API surface | → `webapp-exploit-hunter` / `api-breaker` |
 | Cloud/infra hosting the model | Model served on AWS/Azure/GCP/K8s | → `cloud-pivot-finder` |
 | Version-matched CVEs for ML libs/frameworks in use | Non-CPE ecosystem packages (npm/PyPI/Go/etc) identified | → `recon-dominator`'s `cve_lookup.py` (`lookup_via_osv()` — set an `"ecosystem"` key on the component) |
-| Chain a confirmed injection or dangerous model artifact into a concrete attack path | A `promptinjection` or `modelsupplychain` finding exported via `--export-findings` | → `vuln-chain-composer` (`import_findings.py` → `correlate.py`'s `scope_violation`/`rce_potential` capabilities) |
+| Chain a confirmed injection, dangerous model artifact, or MCP finding into a concrete attack path | A `promptinjection`/`modelsupplychain`/`mcptoolpoisoning`/`mcprugpull`/`mcpcve`/`mcptokenpassthrough` finding exported via `--export-findings` | → `vuln-chain-composer` (`import_findings.py` → `correlate.py`'s `scope_violation`/`rce_potential`/`excessive_agency`/`authentication_bypass` capabilities) |
 | Full-engagement strategic prioritization including AI abuse | Full engagement, multiple findings across skills | → `attack-path-architect` |
 
 ---

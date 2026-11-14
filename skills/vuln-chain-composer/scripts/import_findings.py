@@ -59,6 +59,10 @@ SEVERITY_MAP = {
     "cloudresourceaccess": "MEDIUM",
     "modelsupplychain": "HIGH",  # a DANGEROUS static pickle-opcode verdict -- RCE if this artifact gets loaded
     "unboundedconsumption": "LOW",  # OWASP LLM10: a missing config control (rate limit/logprobs/token cap), not a chainable primitive
+    "mcptoolpoisoning": "MEDIUM",  # schema-field injection or tool-shadowing; per-finding severity usually overrides this
+    "mcprugpull": "MEDIUM",  # a tool's hash changed, or a new tool appeared, since baseline
+    "mcpcve": "MEDIUM",  # a version-matched (or name-only) MCP-component CVE hypothesis, not confirmed
+    "mcptokenpassthrough": "HIGH",  # server accepted a token explicitly issued for a different audience (MCP spec MUST violation)
 }
 
 # OWASP API Top 10 / Web Top 10 mapping
@@ -174,7 +178,11 @@ def normalize_finding(finding, source_tool):
             normalized["chainable_as"].append("org_membership_granted")
         if _re.search(r"password|email|role|permission|invite", blob, _re.I):
             normalized["requires"].append("org_membership_granted")
-    elif "jwt" in vuln_type or "auth" in vuln_type:
+    elif "jwt" in vuln_type or "auth" in vuln_type or "mcptokenpassthrough" in vuln_type:
+        # mcptokenpassthrough (mcp_security_tester.py): the MCP spec's own
+        # MUST violation -- a server accepted a token explicitly issued for
+        # a DIFFERENT audience, same confused-deputy/impersonation shape as
+        # any other broken-authentication finding.
         normalized["chainable_as"] = ["authentication_bypass", "impersonation"]
     elif "takeover" in vuln_type:
         normalized["chainable_as"] = ["phishing", "session_theft", "cookie_theft", "cookie_scope_write"]
@@ -186,7 +194,11 @@ def normalize_finding(finding, source_tool):
         normalized["chainable_as"] = ["rce", "webshell"]
     elif "redirect" in vuln_type:
         normalized["chainable_as"] = ["phishing", "token_theft", "redirect_into_allowlist"]
-    elif "blockedcve" in vuln_type:
+    elif "blockedcve" in vuln_type or "mcpcve" in vuln_type:
+        # mcpcve (mcp_security_tester.py): a version-matched MCP-component
+        # CVE hypothesis -- identical semantics to blockedcve (a real CVE
+        # that still needs its precondition confirmed live), just a
+        # different source script.
         normalized["chainable_as"] = ["rce_potential", "precondition_dependent"]
         normalized["requires"] = ["precondition_enabler"]  # the one thing standing between it and live
     elif "agenttoolaccess" in vuln_type:
@@ -197,11 +209,23 @@ def normalize_finding(finding, source_tool):
         # front of it (a scope violation). Tag it as needing that, same
         # discipline as blockedcve needing precondition_enabler.
         normalized["requires"].append("scope_violation")
-    elif "promptinjection" in vuln_type or "scopeviolation" in vuln_type:
+    elif "mcprugpull" in vuln_type:
+        # mcp_security_tester.py: a tool's schema changed since baseline (or
+        # a new tool silently appeared) -- reuses "excessive_agency", the
+        # same vocabulary term agenttoolaccess uses, since a mutated/added
+        # tool is the same underlying risk (unreviewed agent capability),
+        # just discovered via hash-diffing instead of a one-time scan.
+        normalized["chainable_as"] = ["excessive_agency"]
+    elif "promptinjection" in vuln_type or "scopeviolation" in vuln_type or "mcptoolpoisoning" in vuln_type:
         # The untrusted-content side of the EchoLeak/AgentFlayer/ForcedLeak/
         # CurXecute/calendar-invite class: an injection point an AI agent
         # ingests from a lower-trust scope (email, calendar, ticket, shared
-        # doc, Slack channel, MCP tool description).
+        # doc, Slack channel, MCP tool description). mcptoolpoisoning
+        # (mcp_security_tester.py) is the structured-schema-field version of
+        # exactly this: a hidden instruction planted in a tool's own
+        # name/description/parameter schema rather than in a document an
+        # agent ingests -- correlate.py's _scope_violation_evidence_present
+        # regex already matches "mcp"/"tool description" in evidence text.
         normalized["chainable_as"] = ["scope_violation"]
     elif "wafbypass" in vuln_type or "waf_bypass" in vuln_type:
         # Output of waf_bypass_tester.py (webapp-exploit-hunter): a
