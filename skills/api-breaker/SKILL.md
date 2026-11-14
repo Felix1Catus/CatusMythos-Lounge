@@ -34,6 +34,24 @@ For each discovered API:
 - Record base URL, authentication method, content type
 - Detect API standard (REST, GraphQL, gRPC-web, SOAP)
 
+`scripts/api_discovery.py` also runs a **legacy/deprecated API version
+discovery** pass (research_notes/API breaker depth techniques/
+rate_limit_versioning.md — real incidents: Optus's ~10M-record breach via
+an undocumented leftover endpoint, St. Luke's Health System's deprecated
+SOAP API exposing ~450K records for 6 months after the REST service was
+patched): generates sibling candidate paths by substituting version/date
+tokens (`v2`→`v1`/`v0`/`v3`/`beta`/`alpha`/`old`/`legacy`/`internal`/
+`deprecated`; date tokens decremented), fingerprints `Sunset`/
+`Deprecation`/`Link rel="deprecation"` response headers on every probed
+endpoint, and enumerates the Wayback Machine's CDX API for additional
+historically-crawled candidate paths re-probed against the **live** host
+only. Finding a candidate alone is low-severity (`legacy_api_version_exists`);
+the high-severity finding (`legacy_api_version_bypass`) requires the
+actual exploit-confirmation step — a security control (auth requirement,
+or a confirmed rate limit) demonstrably enforced on the current version
+but absent on the candidate, bounded to 5 differential checks per run to
+cap request volume.
+
 ### Step 2: Schema Reconstruction
 
 ```bash
@@ -118,9 +136,45 @@ python scripts/rate_limiter.py --api-base {api_url}
 Test:
 - Send 100+ rapid requests to each endpoint
 - Check for 429 responses or rate limit headers
-- If rate limited: test bypass via IP rotation headers (X-Forwarded-For, X-Real-IP)
+- If rate limited: test bypass via IP rotation headers (X-Forwarded-For, X-Real-IP,
+  plus `X-Host`/`X-Forwared-Host` — the literal misspelling is a real-world
+  broken-but-still-parsed header name)
 - Test resource-intensive endpoints for DoS potential (large pagination, deep queries)
 - GraphQL: Test query batching, nested query depth, alias-based multiplication
+
+`scripts/rate_limiter.py` also runs three depth passes (research_notes/API
+breaker depth techniques/rate_limit_versioning.md):
+- **Race-condition baseline-vs-burst comparator** — runs a request
+  sequence sequentially first (recording the success count), then fires
+  the identical requests as a concurrent thread-pool burst; more
+  successes in the burst than the sequential baseline allowed is a
+  non-atomic check-then-act race (James Kettle's "Smashing the State
+  Machine" class; same root cause as the Stripe fee-discount race —
+  $600K exposure from a single $5K-bounty report). Auto-targeted at
+  endpoints whose URL suggests a limited-use/financial-impact resource
+  (`coupon`/`discount`/`invite`/`redeem`/`gift_card`/`credit`/`balance`/
+  `voucher`/`offer`) rather than racing every endpoint blindly. A true
+  HTTP/2 single-packet attack needs raw frame control this stdlib-only
+  skill deliberately doesn't depend on — the thread-pool burst is the
+  realistic, portable ceiling, and will miss narrower race windows a
+  single-packet attack could still catch.
+- **Path/method/casing mutation test** — for any endpoint already
+  confirmed rate-limited, re-confirms the baseline 429 still fires, then
+  bursts trailing-slash/doubled-slash/case/method-swap/junk-query-param
+  variants and flags any mutation whose response matches the *shape*
+  (status + body-length band) of a pre-limit success — not status code
+  alone, to avoid soft-404 false positives. Direct reproduction of
+  CVE-2023-38507 (Strapi, path case/slash bypassed its admin-login rate
+  limiter) and CVE-2025-71399 (Better Auth, slash-padding bypassed a
+  path-based rate limit).
+- **GraphQL batching/aliasing upgrade** — establishes an unbatched
+  baseline (sends the single operation until it 429s, at request #K)
+  before sending a batched/aliased request with K+50 copies; a 200 with
+  all K+50 executed is the actual gateway-blindness differential, not
+  just "batching is accepted." Severity escalates to high when the
+  endpoint URL suggests login/OTP/password-reset (unlimited-rate
+  credential/OTP brute force). Falls back to the original
+  acceptance-only check when no baseline 429 is ever observed.
 
 ### Step 7: Business Logic Testing
 
