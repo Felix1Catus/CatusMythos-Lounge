@@ -56,7 +56,25 @@ python scripts/auth_analyzer.py --api-base {api_url}
 ```
 
 Detect and test:
-- **JWT tokens**: Decode, test none algorithm, key confusion (RS256->HS256), weak secrets, claim tampering
+- **JWT tokens**: Decode, test none algorithm, key confusion (RS256->HS256,
+  plus RS256<->PS256 via pure header relabeling), weak secrets, claim
+  tampering. Also tests edge cases beyond the classics
+  (research_notes/API breaker depth techniques/jwt_edge_cases.md):
+  **`kid` header injection** (path traversal to a predictable-content file,
+  UNION-based SQLi against the key lookup, and a time-based SQLi probe
+  independent of forgery success); **`crit` header non-enforcement**
+  (RFC 7515 §4.1.11 — a differential test against the `none`-alg bypass,
+  only reported when there's something real to compare against);
+  **missing `aud`/`iss` claims** (zero new requests — lets a token minted
+  for one service be accepted by a different one sharing the same signing
+  key); and a static **CVE fingerprint table** for 14 named 2024-2026 JWT
+  library CVEs, checked via `--library`/`--library-version` when the
+  library is known from recon/error leakage. `jwk`-header injection and
+  real-key JWKS extraction (building/signing with actual RSA key
+  material) were designed and verified but deliberately not shipped —
+  this skill is stdlib-only by design, and both need the `cryptography`
+  package; see the research notes' own "jwk header injection" section if
+  that tradeoff is revisited.
 - **API keys**: Test in different positions (header, query, body), check for key leakage
 - **OAuth flows**: Test for open redirect in callback, token leakage, PKCE bypass
 - **Session tokens**: Predictability, fixation, rotation on privilege change

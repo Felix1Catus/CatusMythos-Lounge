@@ -98,7 +98,18 @@ def normalize_finding(finding, source_tool):
         except Exception:
             pass
 
+    # .upper(): api-breaker's auth_analyzer.py (both its original findings --
+    # jwt_none_bypass, jwt_weak_secret, no_auth_required, etc. -- and every
+    # type this pass added) has always set lowercase severity strings
+    # ("critical"/"high"/...), but main()'s own by_severity summary groups
+    # strictly by the uppercase SEVERITY_MAP convention ("CRITICAL"/"HIGH").
+    # Without normalizing here, every one of those findings silently fails
+    # to land in its expected bucket in the printed summary (the raw
+    # per-finding value is unaffected either way) -- found while verifying
+    # this pass's own new JWT finding types actually chain correctly.
     severity = finding.get("severity", SEVERITY_MAP.get(vuln_type, "MEDIUM"))
+    if isinstance(severity, str):
+        severity = severity.upper()
 
     # Map to OWASP
     owasp = "Unknown"
