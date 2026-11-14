@@ -63,6 +63,12 @@ SEVERITY_MAP = {
     "mcprugpull": "MEDIUM",  # a tool's hash changed, or a new tool appeared, since baseline
     "mcpcve": "MEDIUM",  # a version-matched (or name-only) MCP-component CVE hypothesis, not confirmed
     "mcptokenpassthrough": "HIGH",  # server accepted a token explicitly issued for a different audience (MCP spec MUST violation)
+    "ragtenantleak": "HIGH",  # cross-tenant canary observed via a normal second-tenant session -- confirmed, not a bypass precondition
+    "embeddingexposure": "MEDIUM",  # raw embedding-shaped float array readable without tenant scoping -- an exposure precondition, not itself chainable
+    "unicodesmuggling": "MEDIUM",  # invisible-instruction-smuggling characters in retrieved text -- probe signal, not confirmed behavioral hijack
+    "citationdrift": "LOW",  # claim/cited-source vocabulary mismatch -- noisy signal, baseline non-adversarial rate is already ~10-40%
+    "membershipinference": "LOW",  # S2MIA-style confirm-rate signal -- base black-box variant has an FPR ceiling up to 0.74
+    "cvehypothesis": "MEDIUM",  # a version-matched RAG/vector-store component CVE hypothesis, not confirmed -- folded into blockedcve's chaining below
 }
 
 # OWASP API Top 10 / Web Top 10 mapping
@@ -199,17 +205,24 @@ def normalize_finding(finding, source_tool):
         normalized["chainable_as"] = ["phishing", "session_theft", "cookie_theft", "cookie_scope_write"]
     elif "bucket" in vuln_type or "storage" in vuln_type:
         normalized["chainable_as"] = ["data_access", "data_modification"]
+    elif "ragtenantleak" in vuln_type:
+        # rag_security_tester.py: a cross-tenant canary observed via a
+        # normal second-tenant session/auth context -- the leak is already
+        # confirmed data access, not a bypass precondition (no credential/
+        # parameter manipulation was needed to see it), so this doesn't
+        # chain through authentication_bypass the way jwt/auth findings do.
+        normalized["chainable_as"] = ["data_access"]
     elif "ssti" in vuln_type:
         normalized["chainable_as"] = ["rce", "data_access"]
     elif "upload" in vuln_type:
         normalized["chainable_as"] = ["rce", "webshell"]
     elif "redirect" in vuln_type:
         normalized["chainable_as"] = ["phishing", "token_theft", "redirect_into_allowlist"]
-    elif "blockedcve" in vuln_type or "mcpcve" in vuln_type:
-        # mcpcve (mcp_security_tester.py): a version-matched MCP-component
-        # CVE hypothesis -- identical semantics to blockedcve (a real CVE
-        # that still needs its precondition confirmed live), just a
-        # different source script.
+    elif "blockedcve" in vuln_type or "mcpcve" in vuln_type or "cvehypothesis" in vuln_type:
+        # mcpcve (mcp_security_tester.py) / cvehypothesis (rag_security_
+        # tester.py): a version-matched component CVE hypothesis --
+        # identical semantics to blockedcve (a real CVE that still needs
+        # its precondition confirmed live), just different source scripts.
         normalized["chainable_as"] = ["rce_potential", "precondition_dependent"]
         normalized["requires"] = ["precondition_enabler"]  # the one thing standing between it and live
     elif "agenttoolaccess" in vuln_type:

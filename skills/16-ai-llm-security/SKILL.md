@@ -58,11 +58,11 @@ This skill activates when the user asks about:
 ```bash
 pip install requests
 ```
-All four scripts in this skill are otherwise stdlib-only (`model_supply_chain.py`
+All five scripts in this skill are otherwise stdlib-only (`model_supply_chain.py`
 has zero third-party dependencies at all; `requests` is a guarded, optional
-import in `prompt_injection_tester.py`, `unbounded_consumption_tester.py`, and
-`mcp_security_tester.py` for live HTTP testing — `--demo` and `--tools-file`
-work with neither installed).
+import in `prompt_injection_tester.py`, `unbounded_consumption_tester.py`,
+`mcp_security_tester.py`, and `rag_security_tester.py` for live HTTP testing —
+`--demo` and `--tools-file` work with neither installed).
 
 **Optional enhanced capabilities:**
 - `garak` — LLM vulnerability scanner (NVIDIA)
@@ -156,6 +156,33 @@ When reviewing a RAG pipeline:
 3. **Embedding inversion / membership** — sensitive source text may be partially reconstructable from embeddings; flag PII stored unencrypted in the vector DB.
 4. **Chunk poisoning** — a single malicious document can dominate retrieval; check ranking/dedup and source allow-listing.
 5. **Citation integrity** — outputs should cite retrieved sources so injected claims are traceable.
+
+`scripts/rag_security_tester.py` automates the black-box-feasible pieces of
+all five areas above (research_notes/AI agent security depth techniques/
+rag_vector_security.md): a **cross-tenant canary-string test** — query the
+same endpoint with two tenant contexts and look for a canary known to
+exist only in tenant A's scope, including the "param-swap" variant
+(tenant B's auth + tenant A's tenant-ID parameter) that catches
+authorization checked against a caller-supplied ID rather than the
+token's own bound tenant — the research's root-cause finding: 78 of 200+
+audited multi-tenant AI/RAG products leaked this way, almost always a
+missing tenant filter, not a vector-math flaw; a **raw-embedding-exposure
+scan** (any endpoint handing back bare float arrays shaped like embedding
+vectors — the exposure precondition true embedding inversion would need,
+without attempting inversion itself, which needs white-box model access
+this tool doesn't have); a **hidden-Unicode-instruction probe** over
+retrieved chunk text (zero-width/bidi-override/Unicode-tag characters);
+a **citation-drift check** (does an answer's claim actually share
+vocabulary with its own cited source — flagged honestly against the
+research's own ~10-40% non-adversarial baseline, so a hit is a lead, not
+proof); a static **CVE fingerprint table** for Milvus, Weaviate,
+LangChain (×2 CVEs), and AnythingLLM; and a **stretch check**,
+S²MIA-style black-box membership inference, which always restates its
+own measured FPR-up-to-0.74 ceiling in its output. True embedding
+inversion and the encrypted-vector-index membership-inference variant are
+documented module-docstring limitations, not gaps — both need
+preconditions (model/embedding-table access, or raw similarity scores
+plus partial DB knowledge) a black-box HTTP tester can't satisfy.
 
 ### 4. Agent & Tool-Use (Function Calling / MCP) Security
 
@@ -288,6 +315,36 @@ are `safe` / `exposed` / `inconclusive` / `unclear` — a small burst producing
 no 429 is reported `inconclusive`, never "confirmed no rate limiting," since
 that sample size can't support the stronger claim.
 
+### `rag_security_tester.py`
+OWASP LLM08:2025 checks for RAG/vector-store pipelines. Companion to the
+two scripts above, not a replacement for either.
+
+```bash
+# Cross-tenant canary test: query as tenant B with a canary known only to
+# exist in tenant A's scope (planted via the app's own UI, NOT a fresh
+# uuid -- it has to actually be in tenant A's corpus already)
+python scripts/rag_security_tester.py --url https://app.test/api/chat --field message \
+    --header "Authorization: Bearer <tenant-a-token>" \
+    --header-b "Authorization: Bearer <tenant-b-token>" \
+    --tenant-param tenant_id --tenant-value-a acme --tenant-value-b globex \
+    --canary "INV-2024-Q3-ACME-OVERDUE-NOTICE" --concurrent
+
+# Hidden-Unicode / citation-drift probes over a specific response field
+python scripts/rag_security_tester.py --url ... --chunk-path "sources.0.text" \
+    --claim-path "answer" --citation-path "sources.0.text"
+
+# Offline CVE fingerprint lookup (no --url needed)
+python scripts/rag_security_tester.py --product milvus --version 2.4.10
+
+python scripts/rag_security_tester.py --demo   # self-test all 4 checks offline
+```
+`--header-b` identifies tenant B; `--tenant-param` is the body field
+carrying the tenant/workspace ID (omit if scoping is 100% auth/header-
+derived — pass the swap via `--header-b` directly instead). `--concurrent`
+fires the tenant-B query battery through a thread pool rather than
+serially, since the research notes semantic-cache leaks are specifically
+concurrency-dependent and invisible to a serial-only harness.
+
 ### `mcp_security_tester.py`
 Protocol/lifecycle-level MCP security testing — not a payload corpus. Accepts
 either a live server (`--url`, JSON-RPC over HTTP) or an offline `--tools-file`
@@ -393,7 +450,7 @@ or `safe`) as `type: "modelsupplychain"` findings — feed straight into
 | Web/API vuln testing of the app shell | App exposes web/API surface | → `webapp-exploit-hunter` / `api-breaker` |
 | Cloud/infra hosting the model | Model served on AWS/Azure/GCP/K8s | → `cloud-pivot-finder` |
 | Version-matched CVEs for ML libs/frameworks in use | Non-CPE ecosystem packages (npm/PyPI/Go/etc) identified | → `recon-dominator`'s `cve_lookup.py` (`lookup_via_osv()` — set an `"ecosystem"` key on the component) |
-| Chain a confirmed injection, dangerous model artifact, or MCP finding into a concrete attack path | A `promptinjection`/`modelsupplychain`/`mcptoolpoisoning`/`mcprugpull`/`mcpcve`/`mcptokenpassthrough` finding exported via `--export-findings` | → `vuln-chain-composer` (`import_findings.py` → `correlate.py`'s `scope_violation`/`rce_potential`/`excessive_agency`/`authentication_bypass` capabilities) |
+| Chain a confirmed injection, dangerous model artifact, MCP, or RAG finding into a concrete attack path | A `promptinjection`/`modelsupplychain`/`mcptoolpoisoning`/`mcprugpull`/`mcpcve`/`mcptokenpassthrough`/`ragtenantleak`/`cvehypothesis` finding exported via `--export-findings` | → `vuln-chain-composer` (`import_findings.py` → `correlate.py`'s `scope_violation`/`rce_potential`/`excessive_agency`/`authentication_bypass`/`data_access` capabilities) |
 | Full-engagement strategic prioritization including AI abuse | Full engagement, multiple findings across skills | → `attack-path-architect` |
 
 ---

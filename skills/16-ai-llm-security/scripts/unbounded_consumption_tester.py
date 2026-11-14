@@ -51,10 +51,19 @@ RATE_LIMIT_HEADER_NAMES = {
 
 
 def dotted_get(obj: Any, path: str) -> Any:
+    """Also indexes into a list via a numeric path segment -- see the
+    identical fix/rationale in prompt_injection_tester.py's copy of this
+    function."""
     cur = obj
     for part in path.split("."):
         if isinstance(cur, dict) and part in cur:
             cur = cur[part]
+        elif isinstance(cur, list) and part.lstrip("-").isdigit():
+            idx = int(part)
+            if -len(cur) <= idx < len(cur):
+                cur = cur[idx]
+            else:
+                return None
         else:
             return None
     return cur

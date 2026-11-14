@@ -216,10 +216,23 @@ def load_lines(path: str) -> list[str]:
 
 
 def dotted_get(obj: Any, path: str) -> Any:
+    """Also indexes into a list via a numeric path segment (e.g.
+    'choices.0.message.content') -- without this, --response-path
+    examples through a list-shaped field (this module's own docstring
+    names exactly that one, since 'choices' is a list in a real OpenAI-
+    shaped response) silently returned None unconditionally. Found while
+    verifying rag_security_tester.py's copy of this same function, which
+    had already fixed it; behavior for a pure-dict path is unchanged."""
     cur = obj
     for part in path.split("."):
         if isinstance(cur, dict) and part in cur:
             cur = cur[part]
+        elif isinstance(cur, list) and part.lstrip("-").isdigit():
+            idx = int(part)
+            if -len(cur) <= idx < len(cur):
+                cur = cur[idx]
+            else:
+                return None
         else:
             return None
     return cur
