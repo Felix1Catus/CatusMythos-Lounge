@@ -311,6 +311,44 @@ actual evidence check, which is why that step re-derives every finding's
 confidence from its recorded evidence rather than trusting a slice's own
 narration.
 
-Further research-driven depth passes per kept skill (recon-dominator,
-`16-ai-llm-security`, api-breaker, cloud-pivot-finder, attack-path-architect)
-are next.
+Those research-driven depth passes, per kept skill, are now done:
+
+- **recon-dominator**: OSV-backed CVE cross-matching
+  (`lookup_via_osv`/`lookup_component_auto`) alongside the existing NVD
+  path, a Debian/Ubuntu backport-suffix false-positive fix in
+  `cve_lookup.py`, and "Sitting Ducks"-class NS lame-delegation detection
+  (`check_lame_delegation`) in `active_recon.py`.
+- **`16-ai-llm-security`**: two new scripts —
+  `unbounded_consumption_tester.py` (OWASP LLM10 exposure checks) and
+  `mcp_security_tester.py`/`rag_security_tester.py` (full-schema poisoning,
+  tool-shadowing, rug-pull detection, cross-tenant leakage, raw-embedding
+  exposure, hidden-Unicode-instruction smuggling) — plus a many-shot/
+  best-of-N jailbreak harness and a real latent bug fix (`dotted_get()`
+  never indexed into a list, silently breaking the script's own documented
+  `--response-path` example).
+- **api-breaker**: JWT `kid`-header injection, `crit`-header bypass, and
+  RS256-to-PS256 pure-header-relabeling algorithm confusion in
+  `auth_analyzer.py`; a 5-stage GraphQL introspection-disabled fallback
+  chain, depth/complexity DoS, and nested-field authorization bypass in
+  `schema_builder.py`; legacy-API-version discovery and a
+  race-condition/path-mutation rate-limit depth pass in
+  `api_discovery.py`/`rate_limiter.py`. (A fully-built, cryptographically
+  verified `jwk`-header-injection capability requiring the `cryptography`
+  package was deliberately **not** shipped, keeping the core pipeline
+  stdlib-only by design — documented as a flagged future option instead.)
+- **cloud-pivot-finder**: a subdomain-takeover fingerprint refresh against
+  2024-2026 data, fixing a real false-positive bug (six services were
+  scored vulnerable on their own "not found" signature) and adding 9 new
+  services; ECS/Fargate token-free metadata, kubelet, and GKE/EKS
+  depth notes in `metadata_paths.py`; and a fix for three of this skill's
+  own five scripts whose findings were never reaching
+  `vuln-chain-composer` at all.
+- **attack-path-architect**: closed the `mitre_mapper.py` gap an earlier
+  pass deliberately left open (3 dotted sub-technique IDs would have
+  silently broken on a naive table swap) by filling the missing 15 IDs
+  first, then rewiring `generate_attack_tree.py` to call `mitre_mapper.py`
+  directly — plus 4 new attack patterns mapping this round's own ECScape/
+  GraphQL/JWT/agentic-AI findings to MITRE ATT&CK/ATLAS.
+
+Full citations and technical detail for each are in `research_notes/` and
+`reports/`, one subfolder per topic.

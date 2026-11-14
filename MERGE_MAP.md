@@ -211,6 +211,61 @@ won't exist in a normal install (CL-B/D/F/G/H), so the discipline each
 describes is still followed by hand rather than the agent attempting to run
 a nonexistent script.
 
+## Phase 5 depth passes — what changed since the refocus (supersedes one claim above)
+
+Each of the 8 kept skills' pipeline stage got a research-driven depth pass
+(real citations in `research_notes/<topic>/`, synthesized in
+`reports/<topic>.md`, then actual new/extended code and a `SKILL.md`
+update) — recon-dominator, `16-ai-llm-security`, `api-breaker`,
+`cloud-pivot-finder`, and `attack-path-architect`, in that order.
+`vuln-chain-composer`/`webapp-exploit-hunter`'s own chaining/WAF-bypass
+ground was done earlier (the "Vuln chaining and WAF bypass patterns"
+research already referenced in README's Status section) and wasn't
+re-researched here. Full technical detail lives in each pass's own report;
+this entry records what it means for this file's own audit trail.
+
+**Supersedes the "Not done, deliberately" `generate_attack_tree.py`/
+`mitre_mapper.py` claim above.** That earlier decision was correct given
+what it found — the two tables genuinely didn't cover the same IDs, and
+forcing a swap would have silently broken 3 dotted-ID lookups. The
+`attack-path-architect` depth pass closed the actual gap first: all 15
+missing technique/sub-technique IDs were added to `mitre_mapper.py`'s
+`ATTACK_TECHNIQUES` (sourced directly from attack.mitre.org, including a
+real correction — ATT&CK v19 split the "Defense Evasion" tactic into
+"Stealth" + a new "Defense Impairment," verified per-technique rather than
+applied as a blanket rename), then every ID `generate_attack_tree.py` uses
+was verified to resolve correctly through `mitre_mapper.py`'s own
+`lookup_technique()` before the inline `MITRE_TTPS` dict was finally
+removed in favor of calling it. Four new attack patterns were added at the
+same time (ECS cross-task credential harvest, GraphQL shadow-schema
+mutation smuggle, two new JWT depth-technique steps, and an agentic
+tool-access indirect-injection pattern using MITRE ATLAS IDs via a small
+local lookup table, since ATLAS is explicitly out of `mitre_mapper.py`'s
+own Enterprise-ATT&CK scope).
+
+**Real bugs this round of passes found and fixed, beyond the planned new
+capabilities** (the kind of thing a merge-history file exists to record,
+not just the features):
+- `cloud-pivot-finder/scripts/takeover_scanner.py` was scoring CloudFront,
+  AWS ELB, GCS, Firebase, Fastly, and Zendesk as **vulnerable** on their
+  own "not found" suppression fingerprint — a confirmed false positive on
+  all six, fixed by distinguishing positive from negative fingerprints.
+- Three of `cloud-pivot-finder`'s five scripts
+  (`takeover_scanner.py`/`cicd_finder.py`/`serverless_finder.py`) output a
+  shape `vuln-chain-composer/scripts/import_findings.py` never recognized
+  — every finding those three scripts ever produced was silently dropped
+  before reaching the correlation/chaining pipeline. Fixed with explicit
+  per-shape import handlers.
+- `vuln-chain-composer/scripts/import_findings.py`'s `normalize_finding()`
+  never uppercased a raw lowercase `severity` string, silently missing the
+  printed summary's severity bucket for every one of `api-breaker`'s
+  findings (its own original ones too, not just this pass's new ones).
+- A repeatedly-rediscovered bug class in `import_findings.py`'s
+  substring-based type-routing: a new finding type containing an
+  earlier-checked substring (`jwt_kid_sqli` intercepted by the unrelated
+  "sqli" branch) gets silently misrouted. Caught and fixed, and checked
+  against on every subsequent finding type this round of passes added.
+
 ## What "merging" still did *not* mean
 
 No script's internal request-firing logic was rewritten to "combine" two

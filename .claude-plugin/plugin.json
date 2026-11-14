@@ -1,6 +1,6 @@
 {
   "name": "catusmythos-lounge",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Web, API, and cloud penetration-testing toolkit for Claude Code: a recon -> exploit -> chain -> report pipeline, AI/LLM application security testing, a CVE-PoC/payload-generation helper, a doctrine engine for evidence-first discipline, and solo / multi-seat-lounge orchestration.",
   "author": {
     "name": "CatusMythos-Lounge contributors"
