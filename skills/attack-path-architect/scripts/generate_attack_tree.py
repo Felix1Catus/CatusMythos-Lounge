@@ -12,34 +12,43 @@ from datetime import datetime
 
 
 from _common import log, success
-# MITRE ATT&CK TTP Library (relevant subset)
-MITRE_TTPS = {
-    "T1190": {"name": "Exploit Public-Facing Application", "tactic": "Initial Access"},
-    "T1133": {"name": "External Remote Services", "tactic": "Initial Access"},
-    "T1078": {"name": "Valid Accounts", "tactic": "Initial Access"},
-    "T1078.004": {"name": "Cloud Accounts", "tactic": "Initial Access"},
-    "T1566": {"name": "Phishing", "tactic": "Initial Access"},
-    "T1059": {"name": "Command and Scripting Interpreter", "tactic": "Execution"},
-    "T1059.004": {"name": "Unix Shell", "tactic": "Execution"},
-    "T1203": {"name": "Exploitation for Client Execution", "tactic": "Execution"},
-    "T1053": {"name": "Scheduled Task/Job", "tactic": "Persistence"},
-    "T1098": {"name": "Account Manipulation", "tactic": "Persistence"},
-    "T1548": {"name": "Abuse Elevation Control Mechanism", "tactic": "Privilege Escalation"},
-    "T1068": {"name": "Exploitation for Privilege Escalation", "tactic": "Privilege Escalation"},
-    "T1550": {"name": "Use Alternate Authentication Material", "tactic": "Lateral Movement"},
-    "T1021": {"name": "Remote Services", "tactic": "Lateral Movement"},
-    "T1210": {"name": "Exploitation of Remote Services", "tactic": "Lateral Movement"},
-    "T1552": {"name": "Unsecured Credentials", "tactic": "Credential Access"},
-    "T1552.005": {"name": "Cloud Instance Metadata API", "tactic": "Credential Access"},
-    "T1110": {"name": "Brute Force", "tactic": "Credential Access"},
-    "T1539": {"name": "Steal Web Session Cookie", "tactic": "Credential Access"},
-    "T1530": {"name": "Data from Cloud Storage", "tactic": "Collection"},
-    "T1213": {"name": "Data from Information Repositories", "tactic": "Collection"},
-    "T1005": {"name": "Data from Local System", "tactic": "Collection"},
-    "T1048": {"name": "Exfiltration Over Alternative Protocol", "tactic": "Exfiltration"},
-    "T1567": {"name": "Exfiltration Over Web Service", "tactic": "Exfiltration"},
-    "T1498": {"name": "Network Denial of Service", "tactic": "Impact"},
+from mitre_mapper import MITREMapper
+
+# mitre_mapper.py's own ATTACK_TECHNIQUES table now covers every ID this
+# file's ATTACK_PATTERNS reference (research_notes/Attack path architect
+# depth techniques/mitre_technique_reference_data.md closed the 15-ID gap
+# that made Phase 2 deliberately keep these as two separate tables) -- a
+# small inline MITRE_TTPS dict here would just be the second hand-copy this
+# project spent Phase 2 removing everywhere else. _ttp_lookup() below
+# verifies coverage at call time rather than silently falling back to
+# "Unknown" the way the old duplicate dict did on a miss.
+_mitre = MITREMapper()
+
+# MITRE ATLAS (not Enterprise ATT&CK) technique IDs for the AI_AGENT
+# pattern below -- mitre_mapper.py is deliberately Enterprise-ATT&CK-only in
+# scope, so these three live here rather than blurring that module's scope.
+# Per research_notes/.../chain_to_ttp_mapping.md: no Enterprise ATT&CK
+# technique covers indirect prompt injection or agent tool-invocation under
+# adversarial influence, so ATLAS is the correct framework for these steps.
+ATLAS_TECHNIQUES = {
+    "AML.T0051.001": {"name": "LLM Prompt Injection: Indirect", "tactic": "AI Attack Staging (ATLAS)"},
+    "AML.T0053": {"name": "AI Agent Tool Invocation", "tactic": "Execution (ATLAS)"},
+    "AML.T0024": {"name": "Exfiltration via AI Inference API", "tactic": "Exfiltration (ATLAS)"},
 }
+
+
+def _ttp_lookup(ttp_id):
+    """Resolve a TTP ID via mitre_mapper.py's own lookup_technique() (which
+    already correctly handles both flat and dotted/nested sub-technique
+    IDs), falling back to the small ATLAS table for AI/agent-specific steps
+    Enterprise ATT&CK has no technique for, then to "Unknown" only if truly
+    unmapped."""
+    result = _mitre.lookup_technique(ttp_id)
+    if result:
+        return result
+    if ttp_id in ATLAS_TECHNIQUES:
+        return ATLAS_TECHNIQUES[ttp_id]
+    return {"name": "Unknown", "tactic": "Unknown"}
 
 # Attack patterns based on asset type and technology
 ATTACK_PATTERNS = {
@@ -87,6 +96,16 @@ ATTACK_PATTERNS = {
                 {"action": "Intercept JWT token from authentication flow", "ttp": "T1552", "tools": ["Burp Suite"]},
                 {"action": "Test none algorithm bypass", "ttp": "T1190", "tools": ["jwt_tool"]},
                 {"action": "Test key confusion (RS256->HS256)", "ttp": "T1190", "tools": ["jwt_tool"]},
+                # kid-header path-traversal/SQLi injection into the server's
+                # key-verification lookup, and RS256->PS256 header-relabeling
+                # algorithm confusion (zero new cryptographic material) --
+                # research_notes/Attack path architect depth techniques/
+                # chain_to_ttp_mapping.md: the injection/relabeling actions
+                # themselves have no clean Enterprise ATT&CK technique
+                # (explicitly flagged gaps there), so T1606 (Forge Web
+                # Credentials) is used only as the nearest-fit outcome tag.
+                {"action": "Test kid header path traversal/injection into key lookup", "ttp": "T1606", "tools": ["jwt_tool", "auth_analyzer.py"]},
+                {"action": "Test RS256->PS256 algorithm-family header relabeling", "ttp": "T1606", "tools": ["jwt_tool", "auth_analyzer.py"]},
                 {"action": "Brute-force weak JWT secret", "ttp": "T1110", "tools": ["jwt_tool", "hashcat"]},
                 {"action": "Forge admin JWT token", "ttp": "T1078", "tools": ["jwt_tool"]},
             ],
@@ -114,6 +133,27 @@ ATTACK_PATTERNS = {
                 {"action": "Map all queries, mutations, and types", "ttp": "T1213", "tools": ["GraphQL Voyager"]},
                 {"action": "Identify sensitive mutations (admin operations, data deletion)", "ttp": "T1190", "tools": ["Burp Suite"]},
                 {"action": "Test authorization on privileged mutations", "ttp": "T1548", "tools": ["Burp Suite"]},
+            ],
+            "conditions": ["GraphQL"]
+        },
+        {
+            # Distinct from the pattern above: introspection is deliberately
+            # DISABLED here, but field-suggestion ("did you mean...?") error
+            # text still leaks the schema -- research_notes/Attack path
+            # architect depth techniques/chain_to_ttp_mapping.md: the
+            # schema-reconstruction step itself has no clean Enterprise
+            # ATT&CK fit (flagged gap there; T1595 family used only as an
+            # approximate reconnaissance-adjacent tag), T1213 approximates
+            # locating the privileged mutation via the recovered schema, and
+            # T1190 is the best-available fit for the nested-field
+            # authorization-gap exploitation itself.
+            "name": "GraphQL Shadow-Schema Mutation Smuggle",
+            "feasibility_base": 5,
+            "impact": 8,
+            "steps": [
+                {"action": "Reconstruct schema via field-suggestion/binary-oracle harvesting despite introspection being disabled", "ttp": "T1595", "tools": ["schema_builder.py"]},
+                {"action": "Locate a privileged mutation not reachable via the blocked introspection endpoint", "ttp": "T1213", "tools": ["schema_builder.py"]},
+                {"action": "Exploit a nested-field authorization gap on that mutation to bypass the top-level authz check", "ttp": "T1190", "tools": ["schema_builder.py", "Burp Suite"]},
             ],
             "conditions": ["GraphQL"]
         },
@@ -189,6 +229,56 @@ ATTACK_PATTERNS = {
             "conditions": []
         },
     ],
+    "CONTAINER_ORCHESTRATION": [
+        {
+            # research_notes/Attack path architect depth techniques/
+            # chain_to_ttp_mapping.md: a container with host-level IMDS
+            # access and an instance role carrying the default
+            # ecs:DiscoverPollEndpoint/ecs:Poll permissions can impersonate
+            # the ECS agent and harvest every co-located task's credentials
+            # on the host -- "ECScape" (Sweet Security, Black Hat USA 2025,
+            # no CVE; AWS treats this as a design/configuration boundary,
+            # not a patched vulnerability). The agent-impersonation step
+            # itself has no precise Enterprise ATT&CK technique (flagged
+            # gap there); T1550.001 is used only as the nearest approximate
+            # fit.
+            "name": "ECS Cross-Task Credential Harvest (ECScape-class)",
+            "feasibility_base": 6,
+            "impact": 9,
+            "steps": [
+                {"action": "Query host-level IMDS (169.254.169.254) from inside the container for the instance role's credentials", "ttp": "T1552.005", "tools": ["curl"]},
+                {"action": "Call DiscoverPollEndpoint with the stolen instance-role credentials to learn the ECS control-plane endpoint", "ttp": "T1528", "tools": ["aws-cli"]},
+                {"action": "Open a rogue parallel session to the Agent Communication Service WebSocket, impersonating the real ECS agent", "ttp": "T1550.001", "tools": ["custom script"]},
+                {"action": "Receive IAM credentials for every co-located task on the host via the impersonated session", "ttp": "T1552.005", "tools": ["custom script"]},
+                {"action": "Use the stolen task-role credentials to access AWS resources as another task's identity", "ttp": "T1078.004", "tools": ["aws-cli"]},
+            ],
+            "conditions": []  # Fires on Kubernetes API/kubelet exposure too (kubelet unauthenticated read-only is its own live surface, CVE-2025-0426); ECS specifics are the strongest-sourced case researched.
+        },
+    ],
+    "AI_AGENT": [
+        {
+            # research_notes/Attack path architect depth techniques/
+            # chain_to_ttp_mapping.md: three independent 2025 disclosures
+            # (EchoLeak/CVE-2025-32711, CurXecute/CVE-2025-54135,
+            # AgentFlayer/Zenity) confirm the same structural pattern -- an
+            # agent with legitimate tool/connector access ingests untrusted
+            # content carrying a hidden instruction, and uses its own
+            # already-granted access to exfiltrate data or take an
+            # unauthorized action. No Enterprise ATT&CK technique covers the
+            # AI-specific injection/tool-invocation steps, so MITRE ATLAS
+            # IDs (AML.T0051.001/AML.T0053, see ATLAS_TECHNIQUES above) are
+            # used for those two steps instead.
+            "name": "Agentic Tool-Access Indirect Injection Exfiltration",
+            "feasibility_base": 7,
+            "impact": 9,
+            "steps": [
+                {"action": "Agent ingests untrusted content (email/calendar/document/MCP tool description) carrying a hidden instruction", "ttp": "AML.T0051.001", "tools": ["prompt_injection_tester.py"]},
+                {"action": "Agent invokes its own already-granted tool/connector access under the injected instruction", "ttp": "AML.T0053", "tools": ["mcp_security_tester.py"]},
+                {"action": "Data exfiltrated via the agent's legitimate outbound tool/connector call", "ttp": "T1567", "tools": ["custom script"]},
+            ],
+            "conditions": []
+        },
+    ],
 }
 
 
@@ -245,7 +335,7 @@ def generate_paths(assets, trust_map=None):
             detailed_steps = []
             for step in pattern["steps"]:
                 ttp_id = step["ttp"]
-                ttp_info = MITRE_TTPS.get(ttp_id, {"name": "Unknown", "tactic": "Unknown"})
+                ttp_info = _ttp_lookup(ttp_id)
                 detailed_steps.append({
                     "action": step["action"],
                     "ttp_id": ttp_id,

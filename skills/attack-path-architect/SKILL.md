@@ -45,7 +45,14 @@ Classify every discovered asset by:
 - VPN: VPN gateways
 - DATABASE: Exposed database services
 - ADMIN_PANEL: Management interfaces
-- CI_CD: Build/deploy infrastructure
+- CI_CD: Build/deploy infrastructure (Jenkins, GitLab, generic registries)
+- CONTAINER_ORCHESTRATION: Kubernetes API (6443), kubelet (10250/10255),
+  and ECS/EKS/GKE/AKS-named hosts — split out from CI_CD this pass, since
+  kubelet's unauthenticated read-only port is a live, still-exploitable
+  surface in its own right (CVE-2025-0426), not a CI/CD interface
+- AI_AGENT: LLM/agent-fronted hosts (not yet auto-detected by
+  `classify_assets.py` — tag manually until a dedicated AI-surface recon
+  step exists; see `16-ai-llm-security`)
 - MONITORING: Grafana, Kibana, Prometheus, etc.
 - STORAGE: S3, GCS, Azure Blob, etc.
 - LEGACY: Old/deprecated systems still running
@@ -100,6 +107,38 @@ OBJECTIVE: Remote Code Execution on production
 |       TTP: T1078 - Valid Accounts
 ```
 
+**New attack patterns this pass** (`research_notes/Attack path architect
+depth techniques/chain_to_ttp_mapping.md`), matching the pipeline's own
+recently-added depth findings:
+- **ECS Cross-Task Credential Harvest (ECScape-class)**, under the new
+  `CONTAINER_ORCHESTRATION` asset type: a container with host-level IMDS
+  access and an instance role carrying the default `ecs:DiscoverPollEndpoint`/
+  `ecs:Poll` permissions impersonates the ECS agent to harvest every
+  co-located task's credentials on the host (Sweet Security, Black Hat USA
+  2025 — no CVE, AWS treats it as a design/configuration boundary).
+- **GraphQL Shadow-Schema Mutation Smuggle**, under `API`: schema
+  reconstruction via field-suggestion/binary-oracle harvesting despite
+  introspection being disabled, then exploiting a nested-field
+  authorization gap on a mutation only discoverable that way — distinct
+  from the existing introspection-enabled pattern above it.
+- **Two new steps folded into the existing JWT pattern**: `kid`-header
+  path-traversal/injection into the server's key-lookup, and the
+  RS256-to-PS256 pure-header-relabeling algorithm-confusion technique
+  (zero new cryptographic material) — both from `api-breaker`'s own
+  JWT depth pass.
+- **Agentic Tool-Access Indirect Injection Exfiltration**, under the new
+  `AI_AGENT` asset type: an agent with legitimate tool/connector access
+  ingesting untrusted content carrying a hidden instruction, then using
+  that same access to exfiltrate data — the EchoLeak/CurXecute/AgentFlayer
+  pattern class (three independent 2025 disclosures).
+
+Several steps in these patterns are tagged with the *nearest approximate*
+TTP rather than a precise one — the research explicitly flagged that no
+current MITRE technique covers "iterative error-oracle schema inference,"
+"parameter injection into a cryptographic key-lookup," or "impersonate an
+internal agent over its own control-plane protocol." Treat those tags as
+classification conveniences, not exact matches.
+
 ### Step 5: Chaining Opportunity Analysis
 
 There is no separate `find_chains.py` — `generate_attack_tree.py` already
@@ -146,9 +185,7 @@ Score each attack path on:
 
 ### Step 6b: Deeper ATT&CK Lookup and Engagement Scoping (optional)
 
-Two standalone scripts for when a path needs more than
-`generate_attack_tree.py`'s own compact inline TTP table (15 common
-techniques, enough for the tree-building step itself):
+Two standalone scripts for when a path needs more than a quick TTP tag:
 
 ```bash
 python scripts/mitre_mapper.py --technique T1190
@@ -158,15 +195,35 @@ python scripts/mitre_mapper.py --input {technique_ids_file} --navigator --output
 
 `mitre_mapper.py` carries a richer per-technique database (descriptions,
 named sub-techniques with their own detection guidance, Navigator-layer
-export) than the inline table `generate_attack_tree.py` uses for building
-the tree itself — reach for it when a finding needs the fuller writeup, a
-SIEM detection query, or an ATT&CK Navigator layer to hand to a blue team.
-It is **not** wired into `generate_attack_tree.py`'s own lookups: its
-sub-techniques are nested under each parent technique's own entry rather
-than being separate top-level keys, so a few dotted IDs the tree generator
-looks up directly (`T1059.004`, `T1552.005`, `T1078.004`) would silently
-miss if the tree generator's own table were swapped for this one — kept as
-two separate, independently useful tools rather than force-merged.
+export) — reach for it when a finding needs the fuller writeup, a SIEM
+detection query, or an ATT&CK Navigator layer to hand to a blue team.
+
+**Now wired into `generate_attack_tree.py`'s own lookups** (this was
+previously deliberately NOT done — see git history — because a few dotted
+IDs the tree generator looks up directly, `T1059.004`/`T1552.005`/
+`T1078.004`, would have silently broken against the smaller inline table's
+different nesting). This pass closed that gap properly instead of forcing
+the swap: `mitre_mapper.py`'s `ATTACK_TECHNIQUES` table was extended with
+the 15 IDs the tree generator needed and didn't have (`research_notes/
+Attack path architect depth techniques/mitre_technique_reference_data.md`,
+sourced directly from attack.mitre.org), verified end-to-end against every
+ID the tree generator uses before `generate_attack_tree.py` was rewired to
+call `mitre_mapper.py`'s own `lookup_technique()` (which already resolves
+both flat and dotted/nested IDs correctly) instead of maintaining a second,
+smaller, duplicate table. One correctness note from that research: ATT&CK
+v19 (28 April 2026) retired the "Defense Evasion" tactic, splitting it into
+"Stealth" (same TA0005 ID) and a new "Defense Impairment" (TA0112) —
+confirmed to affect `T1078`/`T1078.004` (now "Stealth") but confirmed to
+**not** affect `T1548` (still Privilege Escalation only), so this was
+applied per-technique against a live fetch rather than as a blanket rename.
+
+Three IDs outside the original 15-ID gap (`T1528`, `T1606`, `T1565`, plus
+`T1595` for GraphQL's schema-reconstruction step) were added to support the
+new attack patterns below, and `ATLAS_TECHNIQUES` — a small MITRE ATLAS
+(not Enterprise ATT&CK) lookup table local to `generate_attack_tree.py` —
+covers the AI-agent-specific steps no current Enterprise technique fits
+(`AML.T0051.001`, `AML.T0053`, `AML.T0024`); `mitre_mapper.py` itself stays
+Enterprise-ATT&CK-only in scope.
 
 ```bash
 python scripts/engagement_planner.py --scope {scope_json_file} --format markdown

@@ -68,12 +68,24 @@ ATTACK_TECHNIQUES = {
     },
     "T1078": {
         "name": "Valid Accounts",
-        "tactic": "Defense Evasion, Persistence, Privilege Escalation, Initial Access",
+        # ATT&CK v19 (28 Apr 2026) retired the "Defense Evasion" tactic and
+        # split it into "Stealth" (same TA0005 ID) + a new "Defense
+        # Impairment" (TA0112) -- confirmed via a direct fetch of T1078's own
+        # page: this entry's tactic list changed from "Defense Evasion" to
+        # "Stealth" (research_notes/Attack path architect depth techniques/
+        # mitre_technique_reference_data.md). NOT a blanket rename: T1548
+        # historically also carried Defense Evasion but now shows ONLY
+        # Privilege Escalation, so T1055/T1027 below were deliberately left
+        # unchanged -- their own Defense-Evasion tag was not independently
+        # re-verified against v19 this pass, and guessing would repeat the
+        # exact mistake the research explicitly warned against.
+        "tactic": "Stealth, Persistence, Privilege Escalation, Initial Access",
         "description": "Adversaries may use valid accounts to gain access.",
         "subtechniques": {
             "T1078.001": {"name": "Default Accounts", "detection": "Monitor for logons with default/built-in accounts"},
             "T1078.002": {"name": "Domain Accounts", "detection": "Monitor for unusual domain account activity"},
             "T1078.003": {"name": "Local Accounts", "detection": "Monitor for local account creation and usage"},
+            "T1078.004": {"name": "Cloud Accounts", "detection": "Monitor cloud provider sign-in logs for anomalous source IP/impossible-travel/new-device sign-ins on cloud-scoped accounts"},
         },
     },
     "T1110": {
@@ -158,6 +170,195 @@ ATTACK_TECHNIQUES = {
         "subtechniques": {
             "T1048.001": {"name": "Exfiltration Over Symmetric Encrypted Non-C2 Protocol", "detection": "Monitor for unusual encrypted outbound traffic"},
             "T1048.003": {"name": "Exfiltration Over Unencrypted Non-C2 Protocol", "detection": "Monitor for large DNS/ICMP transfers"},
+        },
+    },
+    # --- Added for the web/API/cloud-pentest pipeline's own attack-tree
+    # generator (generate_attack_tree.py), whose inline MITRE_TTPS table
+    # needed 15 IDs this table didn't have -- see
+    # research_notes/Attack path architect depth techniques/
+    # mitre_technique_reference_data.md for full per-ID sourcing (all
+    # fetched directly from attack.mitre.org). Adding them here lets
+    # generate_attack_tree.py call this module's own lookup_technique()
+    # (which already correctly resolves both flat and dotted/nested IDs)
+    # instead of maintaining a second, smaller, duplicate table.
+    "T1133": {
+        "name": "External Remote Services",
+        "tactic": "Persistence, Initial Access",
+        "description": "Adversaries may leverage external-facing remote services to initially access and/or persist within a network.",
+        "subtechniques": {},
+    },
+    "T1203": {
+        "name": "Exploitation for Client Execution",
+        "tactic": "Execution",
+        "description": "Adversaries may exploit software vulnerabilities in client applications to execute code.",
+        "subtechniques": {},
+    },
+    "T1098": {
+        "name": "Account Manipulation",
+        "tactic": "Persistence, Privilege Escalation",
+        "description": "Adversaries may manipulate accounts to maintain and/or elevate access to victim systems.",
+        "subtechniques": {
+            "T1098.001": {"name": "Additional Cloud Credentials", "detection": "Monitor cloud audit logs for new access-key/credential creation on an existing identity"},
+            "T1098.002": {"name": "Additional Email Delegate Permissions", "detection": "Monitor mailbox-permission changes (delegate/send-as/full-access grants)"},
+            "T1098.003": {"name": "Additional Cloud Roles", "detection": "Monitor cloud IAM audit logs for role/policy attachment to an identity"},
+            "T1098.004": {"name": "SSH Authorized Keys", "detection": "Monitor for new entries in ~/.ssh/authorized_keys"},
+            "T1098.005": {"name": "Device Registration", "detection": "Monitor identity-provider logs for new device registrations on an existing account"},
+            "T1098.006": {"name": "Additional Container Cluster Roles", "detection": "Monitor Kubernetes/cluster audit logs for RoleBinding/ClusterRoleBinding creation"},
+            "T1098.007": {"name": "Additional Local or Domain Groups", "detection": "Monitor for account additions to privileged local/domain groups"},
+        },
+    },
+    "T1548": {
+        "name": "Abuse Elevation Control Mechanism",
+        # Confirmed via a direct fetch of T1548's own page that it does NOT
+        # carry a Stealth/Defense-Impairment tag post-v19, unlike T1078 above
+        # -- the counter-example the research used to show the restructuring
+        # can't be assumed via blanket find/replace.
+        "tactic": "Privilege Escalation",
+        "description": "Adversaries may circumvent mechanisms designed to control privilege elevation to gain higher-level permissions.",
+        "subtechniques": {
+            "T1548.001": {"name": "Setuid and Setgid", "detection": "Monitor for execution of binaries with the setuid/setgid bit set from unusual paths"},
+            "T1548.002": {"name": "Bypass User Account Control", "detection": "Monitor for UAC bypass indicators (auto-elevating binaries launched with unexpected parent processes)"},
+            "T1548.003": {"name": "Sudo and Sudo Caching", "detection": "Monitor /etc/sudoers modifications and sudo usage outside normal patterns"},
+            "T1548.004": {"name": "Elevated Execution with Prompt", "detection": "Monitor for unexpected authorization/credential prompts (e.g. macOS AuthorizationExecuteWithPrivileges)"},
+            "T1548.005": {"name": "Temporary Elevated Cloud Access", "detection": "Monitor cloud audit logs for temporary privilege-elevation grants (e.g. AWS sts:AssumeRole, GCP IAM temporary bindings)"},
+            "T1548.006": {"name": "TCC Manipulation", "detection": "Monitor macOS TCC.db modifications outside the System Preferences UI"},
+        },
+    },
+    "T1068": {
+        "name": "Exploitation for Privilege Escalation",
+        "tactic": "Privilege Escalation",
+        "description": "Adversaries may exploit software vulnerabilities in an attempt to elevate privileges.",
+        "subtechniques": {},
+    },
+    "T1550": {
+        "name": "Use Alternate Authentication Material",
+        "tactic": "Lateral Movement",
+        "description": "Adversaries may use alternate authentication material, such as password hashes, Kerberos tickets, and application access tokens, to move laterally and bypass normal system access controls.",
+        "subtechniques": {
+            "T1550.001": {"name": "Application Access Token", "detection": "Monitor for OAuth/API token usage from unexpected source IPs or in unusual API-call sequences"},
+            "T1550.002": {"name": "Pass the Hash", "detection": "Monitor for NTLM authentication using a hash with no corresponding interactive logon"},
+            "T1550.003": {"name": "Pass the Ticket", "detection": "Monitor for Kerberos ticket reuse across hosts without a corresponding TGT request"},
+            "T1550.004": {"name": "Web Session Cookie", "detection": "Monitor for session-cookie reuse from a new IP/user-agent inconsistent with the original session"},
+        },
+    },
+    "T1210": {
+        "name": "Exploitation of Remote Services",
+        "tactic": "Lateral Movement",
+        "description": "Adversaries may exploit remote services to gain unauthorized access to internal systems once inside of a network.",
+        "subtechniques": {},
+    },
+    "T1552": {
+        "name": "Unsecured Credentials",
+        "tactic": "Credential Access",
+        "description": "Adversaries may search compromised systems to find and obtain insecurely stored credentials.",
+        "subtechniques": {
+            "T1552.001": {"name": "Credentials In Files", "detection": "Scan for credential-shaped strings in accessible files (config, .env, source)"},
+            "T1552.002": {"name": "Credentials in Registry", "detection": "Monitor/scan Windows Registry for plaintext credential values"},
+            "T1552.003": {"name": "Shell History", "detection": "Monitor access to .bash_history/.zsh_history and similar shell history files"},
+            "T1552.004": {"name": "Private Keys", "detection": "Scan for private-key-shaped files (id_rsa, .pem, .pfx) outside expected locations"},
+            "T1552.005": {"name": "Cloud Instance Metadata API", "detection": "Monitor for requests to the cloud metadata service (169.254.169.254, 169.254.170.2, metadata.google.internal) from an unexpected process/context"},
+            "T1552.006": {"name": "Group Policy Preferences", "detection": "Scan SYSVOL for Group Policy Preference XML files containing cpassword"},
+            "T1552.007": {"name": "Container API", "detection": "Monitor for unauthenticated/anomalous queries to a container orchestrator's local API (e.g. Docker socket, kubelet API)"},
+            "T1552.008": {"name": "Chat Messages", "detection": "Monitor for credential-shaped strings retrieved from chat/collaboration-tool message history via an API or export"},
+        },
+    },
+    "T1539": {
+        "name": "Steal Web Session Cookie",
+        "tactic": "Credential Access",
+        "description": "Adversaries may steal web application or service session cookies and use them to gain access to web applications or Internet services as an authenticated user without needing credentials.",
+        "subtechniques": {},
+    },
+    "T1530": {
+        "name": "Data from Cloud Storage",
+        "tactic": "Collection",
+        "description": "Adversaries may access data from improperly secured cloud storage.",
+        "subtechniques": {},
+    },
+    "T1213": {
+        "name": "Data from Information Repositories",
+        "tactic": "Collection",
+        "description": "Adversaries may leverage information repositories to mine valuable information.",
+        "subtechniques": {
+            "T1213.001": {"name": "Confluence", "detection": "Monitor Confluence audit logs for bulk page export or anomalous access patterns"},
+            "T1213.002": {"name": "Sharepoint", "detection": "Monitor SharePoint/M365 audit logs for bulk download or anomalous access patterns"},
+            "T1213.003": {"name": "Code Repositories", "detection": "Monitor source-control audit logs for bulk clone/export of private repositories"},
+            "T1213.004": {"name": "Customer Relationship Management Software", "detection": "Monitor CRM audit logs for bulk record export"},
+            "T1213.005": {"name": "Messaging Applications", "detection": "Monitor chat-platform audit logs for bulk channel/message export"},
+            "T1213.006": {"name": "Databases", "detection": "Monitor for large or unusual SELECT/export queries against production databases, including cloud-hosted ones"},
+        },
+    },
+    "T1005": {
+        "name": "Data from Local System",
+        "tactic": "Collection",
+        "description": "Adversaries may search local system sources, such as file systems and configuration files, to find files of interest and sensitive data prior to Exfiltration.",
+        "subtechniques": {},
+    },
+    "T1567": {
+        "name": "Exfiltration Over Web Service",
+        "tactic": "Exfiltration",
+        "description": "Adversaries may use an existing, legitimate external web service to exfiltrate data rather than their primary command-and-control channel.",
+        "subtechniques": {
+            "T1567.001": {"name": "Exfiltration to Code Repository", "detection": "Monitor for outbound pushes to external/personal code-repository accounts from a corporate egress point"},
+            "T1567.002": {"name": "Exfiltration to Cloud Storage", "detection": "Monitor for large uploads to consumer/external cloud-storage endpoints"},
+            "T1567.003": {"name": "Exfiltration to Text Storage Sites", "detection": "Monitor for outbound POST requests to paste-site domains carrying large payloads"},
+            "T1567.004": {"name": "Exfiltration Over Webhook", "detection": "Monitor for outbound webhook calls to unexpected/newly-registered endpoints carrying sensitive data"},
+        },
+    },
+    "T1498": {
+        "name": "Network Denial of Service",
+        "tactic": "Impact",
+        "description": "Adversaries may perform Network Denial of Service attacks to degrade or block the availability of targeted resources to users.",
+        "subtechniques": {
+            "T1498.001": {"name": "Direct Network Flood", "detection": "Monitor for a sharp, sustained volume increase on a targeted endpoint from many sources"},
+            "T1498.002": {"name": "Reflection Amplification", "detection": "Monitor for inbound traffic from reflection-amplification-prone protocols (DNS/NTP/memcached) at anomalous volume"},
+        },
+    },
+    # Three further IDs the pipeline's own chain-to-TTP classification work
+    # needed (not part of the original 15-ID gap, but referenced by the new
+    # ATTACK_PATTERNS this pass adds to generate_attack_tree.py) -- standard,
+    # long-stable ATT&CK entries never tagged Defense Evasion, so the v19
+    # restructuring above doesn't apply to them; not independently re-fetched
+    # this pass, unlike the 15 IDs above.
+    "T1528": {
+        "name": "Steal Application Access Token",
+        "tactic": "Credential Access",
+        "description": "Adversaries can steal application access tokens as a means of acquiring credentials to access remote systems and resources, scoped to Containers and IaaS platforms among others.",
+        "subtechniques": {},
+    },
+    "T1606": {
+        "name": "Forge Web Credentials",
+        "tactic": "Credential Access",
+        "description": "Adversaries may forge credential materials that can be used to gain access to web applications or Internet services.",
+        "subtechniques": {
+            "T1606.001": {"name": "Web Cookies", "detection": "Monitor for session cookies with inconsistent signing/issuance metadata"},
+            "T1606.002": {"name": "SAML Tokens", "detection": "Monitor for SAML assertions signed by an unexpected certificate or with anomalous claims"},
+        },
+    },
+    "T1595": {
+        "name": "Active Scanning",
+        "tactic": "Reconnaissance",
+        # Added as the approximate, explicitly-flagged-imperfect tag for
+        # GraphQL field-suggestion/binary-oracle schema reconstruction
+        # (research_notes/Attack path architect depth techniques/
+        # chain_to_ttp_mapping.md: no ATT&CK technique precisely covers
+        # iterative error-oracle schema inference against an already-
+        # reachable API; this is the nearest Reconnaissance-tactic fit, not
+        # a confirmed exact match).
+        "description": "Adversaries may execute active reconnaissance scans to gather information that can be used during targeting.",
+        "subtechniques": {
+            "T1595.001": {"name": "Scanning IP Blocks", "detection": "Monitor for broad sequential/sweeping connection attempts across an IP range"},
+            "T1595.002": {"name": "Vulnerability Scanning", "detection": "Monitor for high-volume probing/error-triggering requests against a single endpoint"},
+            "T1595.003": {"name": "Wordlist Scanning", "detection": "Monitor for high-volume enumeration requests using common wordlists against an endpoint"},
+        },
+    },
+    "T1565": {
+        "name": "Data Manipulation",
+        "tactic": "Impact",
+        "description": "Adversaries may insert, delete, or manipulate data in order to influence external outcomes or hide activity.",
+        "subtechniques": {
+            "T1565.001": {"name": "Stored Data Manipulation", "detection": "Monitor for unexpected writes to configuration/data files by a process that doesn't normally write them"},
+            "T1565.002": {"name": "Transmitted Data Manipulation", "detection": "Monitor for integrity mismatches between sent and received data in transit"},
+            "T1565.003": {"name": "Runtime Data Manipulation", "detection": "Monitor for in-memory modification of application data structures by an unexpected process"},
         },
     },
 }

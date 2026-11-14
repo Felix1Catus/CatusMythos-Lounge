@@ -47,13 +47,20 @@ PORT_SERVICE_MAP = {
     5432: ("PostgreSQL", "DATABASE"),
     5900: ("VNC", "INFRASTRUCTURE"),
     6379: ("Redis", "DATABASE"),
-    6443: ("Kubernetes API", "CI_CD"),
+    # Kubernetes API/kubelet reclassified from CI_CD to their own
+    # CONTAINER_ORCHESTRATION type -- research_notes/Attack path architect
+    # depth techniques/ confirms kubelet's unauthenticated read-only port
+    # is a live, still-exploitable surface in its own right (CVE-2025-0426),
+    # distinct from a CI/CD interface like Jenkins/GitLab, and is the entry
+    # point for the new ECScape-class attack pattern below.
+    6443: ("Kubernetes API", "CONTAINER_ORCHESTRATION"),
     8080: ("HTTP-Alt", "WEB_APP"),
     8443: ("HTTPS-Alt", "WEB_APP"),
     9090: ("Prometheus", "MONITORING"),
     9200: ("Elasticsearch", "DATABASE"),
     9300: ("Elasticsearch", "DATABASE"),
-    10250: ("Kubelet", "CI_CD"),
+    10250: ("Kubelet", "CONTAINER_ORCHESTRATION"),
+    10255: ("Kubelet (unauthenticated read-only)", "CONTAINER_ORCHESTRATION"),
     27017: ("MongoDB", "DATABASE"),
 }
 
@@ -65,7 +72,8 @@ SUBDOMAIN_PATTERNS = {
     r"^(vpn|openvpn|wireguard|ipsec|remote)": "VPN",
     r"^(db|database|mysql|postgres|mongo|redis|elastic)": "DATABASE",
     r"^(admin|panel|dashboard|console|manage|cpanel)": "ADMIN_PANEL",
-    r"^(jenkins|gitlab|ci|cd|deploy|build|bamboo|travis|circleci|registry|docker|k8s|kube)": "CI_CD",
+    r"^(jenkins|gitlab|ci|cd|deploy|build|bamboo|travis|circleci|registry|docker)": "CI_CD",
+    r"^(k8s|kube|eks|gke|aks|ecs)": "CONTAINER_ORCHESTRATION",
     r"^(grafana|kibana|prometheus|nagios|zabbix|monitor|sentry|status)": "MONITORING",
     r"^(s3|storage|bucket|blob|cdn|static|assets|media|files)": "STORAGE",
     r"^(old|legacy|archive|bak|backup|v1|deprecated)": "LEGACY",
@@ -147,6 +155,9 @@ def calculate_risk_score(asset):
     elif asset_type == "CI_CD":
         score += 2
         reasons.append("Exposed CI/CD infrastructure")
+    elif asset_type == "CONTAINER_ORCHESTRATION":
+        score += 3
+        reasons.append("Exposed container-orchestration API/kubelet (direct cluster/credential access risk)")
     elif asset_type == "LEGACY":
         score += 2
         reasons.append("Legacy/deprecated system")
