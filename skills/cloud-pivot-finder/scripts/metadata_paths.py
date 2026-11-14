@@ -9,6 +9,7 @@ import argparse
 import json
 import re
 import ssl
+import urllib.parse
 import urllib.request
 import urllib.error
 from pathlib import Path
@@ -48,7 +49,89 @@ METADATA_ENDPOINTS = {
         "credential_path": None,
         "provider": "DigitalOcean",
     },
+    # Container/orchestrator metadata variants beyond plain EC2 IMDS --
+    # research_notes/Cloud pivot finder depth techniques/container_orchestrator_metadata.md.
+    # These sit on a separate link-local address (ECS) or require the
+    # attacker to already be running code inside a pod/container (the
+    # others), so they're documented here for the pivot-path narrative
+    # rather than probed directly by this external-recon tool.
+    "AWS ECS Task Metadata v4": {
+        "url": "http://169.254.170.2/v4/metadata",
+        "credential_path": "http://169.254.170.2${AWS_CONTAINER_CREDENTIALS_RELATIVE_URI}",
+        "token_header": None,
+        "provider": "AWS",
+        "note": "No token/PUT step at all -- reachability alone yields task-role credentials. "
+                "v2 (http://169.254.170.2/v2/metadata) still works but AWS calls it no longer "
+                "actively maintained; prefer v4. Hop-limit=1 does NOT block this on awsvpc/host "
+                "network mode (only bridge mode adds the extra hop) -- AWS's actual fix is "
+                "ECS_AWSVPC_BLOCK_IMDS=true in /etc/ecs/ecs.config.",
+    },
+    "Kubernetes kubelet (unauthenticated read-only)": {
+        "url": "http://<node-ip>:10255/pods",
+        "credential_path": None,
+        "token_header": None,
+        "provider": "Kubernetes",
+        "note": "Deprecated but still found; CIS Kubernetes Benchmark 4.2.4 flags it. "
+                "CVE-2025-0426 is a node-disk-fill DoS via this same unauthenticated endpoint "
+                "(kubelet 1.30.0-1.30.9/1.31.0-1.31.5/1.32.0-1.32.1). The authenticated port "
+                "10250 is a separate, still-relevant surface if --anonymous-auth=true (the "
+                "Kubernetes default) is left unset.",
+    },
+    "GKE/GCP Metadata (node-level, from inside a pod)": {
+        "url": "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token",
+        "credential_path": "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token",
+        "required_header": {"Metadata-Flavor": "Google"},
+        "provider": "GCP",
+        "note": "Only reachable from code already running inside a pod with node-metadata "
+                "access (no NetworkPolicy/metadata-concealment blocking it). Google now labels "
+                "pod-level metadata concealment (--workload-metadata=SECURE) Beta/deprecated and "
+                "directs operators to Workload Identity Federation instead. Legacy v0.1/v1beta1 "
+                "endpoints were fully shut down 2020-09-30 and should not respond.",
+    },
+    "EKS Pod Identity (token-gated variant)": {
+        "url": "${AWS_CONTAINER_CREDENTIALS_FULL_URI}",
+        "credential_path": "${AWS_CONTAINER_CREDENTIALS_FULL_URI}",
+        "token_header": "Authorization (from AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE)",
+        "provider": "AWS",
+        "note": "Unlike plain ECS task roles, EKS Pod Identity DOES require a bearer token read "
+                "from a local file -- architecturally stronger than the token-free ECS surface above.",
+    },
 }
+
+# AWS "ECScape" cross-task credential theft (Sweet Security, disclosed Black
+# Hat USA 2025, no CVE assigned -- AWS calls it a design consideration, not a
+# vulnerability): once code is already running inside ONE ECS container on a
+# host where the host-level IMDS (169.254.169.254, not the per-task
+# 169.254.170.2 endpoint) is reachable and the instance-profile role holds
+# ecs:DiscoverPollEndpoint/ecs:Poll, that container can impersonate the ECS
+# agent over the ACS WebSocket and receive every co-located TASK's
+# credentials on that host -- not just its own. This is a post-exploitation
+# escalation note for the pivot narrative, not something this external
+# recon tool can probe for without already having a foothold.
+ECSCAPE_NOTE = (
+    "If host-level IMDS (169.254.169.254) is reachable from inside this "
+    "container (not just the per-task 169.254.170.2 endpoint) and the "
+    "instance role holds ecs:DiscoverPollEndpoint/ecs:Poll, the 'ECScape' "
+    "technique (Sweet Security, Black Hat USA 2025) lets this container "
+    "impersonate the ECS agent and harvest every other task's credentials "
+    "on the same host -- a bigger blast radius than this task's own role."
+)
+
+# DNS-rebinding TOCTOU note -- CVE-2026-27127 (Craft CMS) is the clearest
+# recent concrete example: an SSRF-blocklist that re-resolves a hostname
+# separately from the actual connect (rather than pinning the validated IP)
+# can be defeated by a short-TTL domain that answers safely on the check and
+# flips to 169.254.169.254/127.0.0.1 at connect time. This requires attacker-
+# controlled DNS infrastructure to actually run, so it's documented as a
+# manual technique rather than coded as a live check here.
+DNS_REBINDING_NOTE = (
+    "If the target's SSRF filter re-resolves the hostname on each request "
+    "rather than pinning a validated IP (a real TOCTOU pattern -- see "
+    "CVE-2026-27127), a short-TTL rebinding domain that resolves safely on "
+    "the filter's check and flips to the metadata IP at connect time can "
+    "bypass a hostname-based allowlist. Requires attacker-controlled DNS; "
+    "not something this tool probes for automatically."
+)
 
 # SSRF vector patterns found in web applications
 SSRF_VECTOR_PATTERNS = {
@@ -301,6 +384,9 @@ def build_pivot_path(host, host_info, ssrf_vectors):
                 "persistence": "May be able to create new credentials or backdoor access",
                 "privilege_escalation": "IAM role may have excessive permissions",
             },
+            "depth_notes": (
+                [DNS_REBINDING_NOTE] + ([ECSCAPE_NOTE] if provider_key == "AWS" else [])
+            ),
         }
 
         paths.append(path)

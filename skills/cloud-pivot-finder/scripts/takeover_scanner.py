@@ -20,32 +20,69 @@ from datetime import datetime
 
 from _common import log, success, vuln, warn
 # Fingerprints: service -> {cname_patterns, response_fingerprints, info}
+#
+# Refreshed against 2024-2026 can-i-take-over-xyz / nuclei-templates data
+# (research_notes/Cloud pivot finder depth techniques/current_takeover_fingerprints.md).
+# Two real bugs this refresh fixes:
+#   1. CloudFront, GCS, Firebase, Fastly, and Zendesk were all coded with
+#      their NEGATIVE (not-vulnerable) fingerprint strings but scored as
+#      VULNERABLE on a match -- a confirmed false-positive on every one of
+#      these five services. They're now `negative_fingerprints` entries.
+#   2. AWS ELB's NXDOMAIN was scored as vulnerable, but per current
+#      research an NXDOMAIN ELB CNAME target is not independently
+#      claimable -- `nxdomain_vulnerable: False` makes it inert instead of
+#      a false positive.
+# Entries with `edge_case: True` still get reported but flagged as needing
+# manual confirmation before treating them as a high-confidence finding
+# (current account-verification models on these platforms make a bare
+# fingerprint match insufficient proof).
 TAKEOVER_FINGERPRINTS = {
     "AWS S3": {
         "cnames": [r"\.s3[.-].*\.amazonaws\.com", r"\.s3\.amazonaws\.com"],
         "fingerprints": ["NoSuchBucket", "The specified bucket does not exist"],
+        # 2026 opt-in "account-regional namespace" buckets (suffix -an) can't
+        # be re-claimed cross-account -- excluded per ProjectDiscovery's
+        # maintained nuclei template, copied verbatim rather than re-derived.
+        "exclude_cname": r"-[0-9]{12}-[a-z0-9-]+-an\.s3\.[a-z0-9-]+\.amazonaws\.com",
         "impact": "high",
         "method": "Create an S3 bucket with the matching name in any AWS account.",
     },
     "AWS CloudFront": {
         "cnames": [r"\.cloudfront\.net"],
-        "fingerprints": ["Bad request", "ERROR: The request could not be satisfied"],
-        "impact": "high",
-        "method": "Create a CloudFront distribution and add the subdomain as an alternate domain name (CNAME).",
+        "negative_fingerprints": ["ViewerCertificateException"],
+        "status": "fixed",
+        "note": "Confirmed not exploitable -- 'ViewerCertificateException' means the distribution still exists under another owner.",
     },
     "AWS Elastic Beanstalk": {
         "cnames": [r"\.elasticbeanstalk\.com"],
-        "fingerprints": ["NXDOMAIN"],
         "nxdomain": True,
         "impact": "high",
         "method": "Create an Elastic Beanstalk environment with the matching subdomain prefix.",
     },
     "AWS ELB": {
         "cnames": [r"\.elb\.amazonaws\.com"],
-        "fingerprints": ["NXDOMAIN"],
         "nxdomain": True,
-        "impact": "medium",
-        "method": "Create a load balancer in the same region with a matching DNS name.",
+        "nxdomain_vulnerable": False,
+        "status": "fixed",
+        "note": "NXDOMAIN on an ELB CNAME target is not independently claimable -- not a takeover lead.",
+    },
+    "Azure (NXDOMAIN-confirmed)": {
+        # Azure is confirmed-current-vulnerable via DNS resolution (NXDOMAIN
+        # on the CNAME target), not via an HTTP body fingerprint, across this
+        # broader suffix list -- the per-service body-fingerprint entries
+        # below remain as a secondary signal for the services that also
+        # resolve (don't NXDOMAIN) but still 404 with a service-specific body.
+        "cnames": [
+            r"\.cloudapp\.net", r"\.cloudapp\.azure\.com", r"\.azurewebsites\.net",
+            r"\.blob\.core\.windows\.net", r"\.azure-api\.net", r"\.azurehdinsight\.net",
+            r"\.azureedge\.net", r"\.azurecontainer\.io", r"\.database\.windows\.net",
+            r"\.azuredatalakestore\.net", r"\.search\.windows\.net", r"\.azurecr\.io",
+            r"\.redis\.cache\.windows\.net", r"\.servicebus\.windows\.net", r"\.trafficmanager\.net",
+            r"\.visualstudio\.com",
+        ],
+        "nxdomain": True,
+        "impact": "high",
+        "method": "Create the matching Azure resource (App Service, Storage account, Traffic Manager profile, etc.) in any Azure subscription.",
     },
     "Azure Websites": {
         "cnames": [r"\.azurewebsites\.net"],
@@ -53,31 +90,17 @@ TAKEOVER_FINGERPRINTS = {
         "impact": "high",
         "method": "Create an Azure App Service with the matching name and add a custom domain.",
     },
-    "Azure CDN": {
-        "cnames": [r"\.azureedge\.net"],
-        "fingerprints": ["<h2>Our services aren't available right now", "404"],
-        "impact": "medium",
-        "method": "Create an Azure CDN endpoint with the matching name.",
-    },
     "Azure Blob Storage": {
         "cnames": [r"\.blob\.core\.windows\.net"],
         "fingerprints": ["BlobNotFound", "The specified blob does not exist", "ContainerNotFound"],
-        "nxdomain": True,
         "impact": "medium",
         "method": "Create an Azure Storage account with the matching name.",
     },
-    "Azure Traffic Manager": {
-        "cnames": [r"\.trafficmanager\.net"],
-        "fingerprints": ["NXDOMAIN"],
-        "nxdomain": True,
-        "impact": "high",
-        "method": "Create a Traffic Manager profile with the matching name.",
-    },
     "GCP Cloud Storage": {
         "cnames": [r"\.storage\.googleapis\.com"],
-        "fingerprints": ["NoSuchBucket", "The specified bucket does not exist"],
-        "impact": "high",
-        "method": "Create a GCS bucket with the matching name.",
+        "negative_fingerprints": ["NoSuchBucket", "The specified bucket does not exist"],
+        "status": "fixed",
+        "note": "GCS's NoSuchBucket XML body is a suppression signal, not a takeover confirmation.",
     },
     "GCP App Engine": {
         "cnames": [r"\.appspot\.com"],
@@ -88,51 +111,121 @@ TAKEOVER_FINGERPRINTS = {
     },
     "GCP Firebase": {
         "cnames": [r"\.firebaseapp\.com", r"\.web\.app"],
-        "fingerprints": ["Site Not Found", "Firebase Hosting Setup"],
-        "impact": "medium",
-        "method": "Create a Firebase project with the matching project ID.",
+        "negative_fingerprints": ["Site Not Found", "Firebase Hosting Setup"],
+        "status": "fixed",
+        "note": "Firebase's default-bucket naming changed 2024-10-30 and legacy appspot.com bucket access for non-Blaze projects ends 2026-02-02 -- treat as not vulnerable.",
     },
     "Heroku": {
         "cnames": [r"\.herokuapp\.com", r"\.herokudns\.com"],
         "fingerprints": ["No such app", "no-such-app", "herokucdn.com/error-pages/no-such-app"],
         "impact": "high",
+        "edge_case": True,
         "method": "Create a Heroku app with the matching name and add the subdomain as a custom domain.",
     },
     "GitHub Pages": {
         "cnames": [r"\.github\.io"],
         "fingerprints": ["There isn't a GitHub Pages site here", "For root URLs"],
         "impact": "high",
+        "edge_case": True,
+        "note": "GitHub offers opt-in TXT-record domain verification (_github-challenge.<domain>), but it's per-account, not a platform-wide fix.",
         "method": "Create a GitHub repository matching the CNAME target and enable GitHub Pages.",
     },
     "Fastly": {
         "cnames": [r"\.fastly\.net", r"\.fastlylb\.net"],
-        "fingerprints": ["Fastly error: unknown domain"],
-        "impact": "high",
-        "method": "Add the subdomain to a Fastly service configuration.",
+        "negative_fingerprints": ["Fastly error: unknown domain:"],
+        "status": "fixed",
+        "note": "This fingerprint is Fastly's own suppression signature, not a takeover confirmation.",
     },
     "Shopify": {
         "cnames": [r"\.myshopify\.com", r"shops\.myshopify\.com"],
         "fingerprints": ["Sorry, this shop is currently unavailable", "Only one step left"],
         "impact": "medium",
+        "edge_case": True,
         "method": "Create a Shopify store and add the subdomain as a custom domain.",
     },
     "Zendesk": {
         "cnames": [r"\.zendesk\.com"],
-        "fingerprints": ["Help Center Closed", "this help center no longer exists"],
-        "impact": "medium",
-        "method": "Create a Zendesk account and configure the subdomain as a host mapping.",
+        "negative_fingerprints": ["Help Center Closed", "this help center no longer exists"],
+        "status": "fixed",
+        "note": "This fingerprint is Zendesk's own suppression signature, not a takeover confirmation.",
     },
     "Netlify": {
         "cnames": [r"\.netlify\.app", r"\.netlify\.com"],
         "fingerprints": ["Not Found - Request ID"],
         "impact": "high",
+        "edge_case": True,
+        "note": "Netlify requires TXT-record domain verification, but no official advisory confirms a platform-wide fix; live 2024-2025 community takeover reports continue.",
         "method": "Create a Netlify site and add the subdomain as a custom domain.",
     },
     "Vercel": {
-        "cnames": [r"\.vercel\.app", r"\.now\.sh"],
-        "fingerprints": ["The deployment could not be found", "DEPLOYMENT_NOT_FOUND"],
+        "cnames": [r"\.vercel\.app", r"\.now\.sh", r"cname\.vercel-dns\.com"],
+        "fingerprints": ["DEPLOYMENT_NOT_FOUND."],
         "impact": "high",
+        "edge_case": True,
+        "note": "Disputed 'no longer vulnerable' claims are unresolved; live bug-bounty reports continue.",
         "method": "Create a Vercel project and add the subdomain as a custom domain.",
+    },
+    "Bitbucket": {
+        "cnames": [r"\.bitbucket\.io"],
+        "fingerprints": ["Repository not found"],
+        "impact": "high",
+        "edge_case": True,
+        "note": "can-i-take-over-xyz issue #97 questions whether Bitbucket still supports CNAME-based custom domains at all -- confirm manually before reporting.",
+        "method": "Create a Bitbucket repository with the matching name and configure a custom domain.",
+    },
+    "Wasabi": {
+        "cnames": [r"\.wasabisys\.com"],
+        "fingerprints": ["The specified bucket does not exist", "BucketName"],
+        "impact": "high",
+        "method": "Create a Wasabi bucket with the matching name (S3-compatible storage; not in the original 2017-era takeover lists).",
+    },
+    "Ngrok": {
+        "cnames": [r"\.ngrok\.io"],
+        "fingerprints": ["not found", "ngrok.io not found"],
+        "impact": "medium",
+        "method": "Start an ngrok tunnel claiming the matching subdomain.",
+    },
+    "Surge.sh": {
+        "cnames": [r"\.surge\.sh"],
+        "fingerprints": ["project not found"],
+        "impact": "medium",
+        "method": "Publish a Surge.sh project with the matching name.",
+    },
+    "Pantheon": {
+        "cnames": [r"\.pantheonsite\.io"],
+        "fingerprints": ["404 error unknown site!"],
+        "impact": "high",
+        "method": "Create a Pantheon site with the matching name.",
+    },
+    "Readme.io": {
+        "cnames": [r"\.readme\.io"],
+        "fingerprints": ["The creators of this project are still working on making everything perfect"],
+        "impact": "medium",
+        "method": "Create a ReadMe project with the matching subdomain.",
+    },
+    "Strikingly": {
+        "cnames": [r"\.strikinglydns\.com"],
+        "fingerprints": ["PAGE NOT FOUND"],
+        "impact": "medium",
+        "method": "Create a Strikingly site with the matching subdomain.",
+    },
+    "Ghost": {
+        "cnames": [r"\.ghost\.io"],
+        "fingerprints": ["Site unavailable.", "Failed to resolve DNS path for this host"],
+        "impact": "medium",
+        "method": "Create a Ghost(Pro) site with the matching subdomain.",
+    },
+    "Help Scout": {
+        "cnames": [r"\.helpscoutdocs\.com"],
+        "fingerprints": ["No settings were found for this company:"],
+        "impact": "medium",
+        "method": "Create a Help Scout Docs site with the matching subdomain.",
+    },
+    "WordPress.com": {
+        "cnames": [r"\.wordpress\.com"],
+        "fingerprints": ["Do you want to register"],
+        "impact": "medium",
+        "method": "Register the matching WordPress.com site.",
     },
 }
 
@@ -207,6 +300,8 @@ def scan_subdomain(subdomain):
         "evidence": None,
         "impact": None,
         "method": None,
+        "edge_case": False,
+        "not_vulnerable_checked": [],  # services whose negative fingerprint ruled them out
     }
 
     # Resolve CNAME chain
@@ -229,6 +324,9 @@ def scan_subdomain(subdomain):
     if not cname:
         return finding
 
+    probed_body = None
+    probed_status = None
+
     # Check each CNAME in the chain against fingerprints
     for service, fp in TAKEOVER_FINGERPRINTS.items():
         matched_cname = None
@@ -243,27 +341,65 @@ def scan_subdomain(subdomain):
         if not matched_cname:
             continue
 
-        # Check for NXDOMAIN on the CNAME target
+        # A 2026 account-regional-namespace (or similarly excluded) target
+        # isn't independently claimable -- skip this service entirely rather
+        # than let it fall through to a fingerprint match.
+        exclude = fp.get("exclude_cname")
+        if exclude and re.search(exclude, matched_cname, re.IGNORECASE):
+            continue
+
+        # Check for NXDOMAIN on the CNAME target. nxdomain_vulnerable
+        # defaults to True for backward compatibility with entries that
+        # don't set it; AWS ELB explicitly sets it False since an NXDOMAIN
+        # ELB target isn't independently claimable (see fingerprint note).
         if fp.get("nxdomain"):
             if check_nxdomain(matched_cname):
-                finding["vulnerable"] = True
-                finding["service"] = service
-                finding["evidence"] = f"CNAME target {matched_cname} returns NXDOMAIN"
-                finding["impact"] = fp["impact"]
-                finding["method"] = fp["method"]
-                return finding
+                if fp.get("nxdomain_vulnerable", True):
+                    finding["vulnerable"] = True
+                    finding["service"] = service
+                    finding["evidence"] = f"CNAME target {matched_cname} returns NXDOMAIN"
+                    finding["impact"] = fp["impact"]
+                    finding["method"] = fp["method"]
+                    finding["edge_case"] = fp.get("edge_case", False)
+                    return finding
+                else:
+                    finding["not_vulnerable_checked"].append(
+                        {"service": service, "reason": fp.get("note", "NXDOMAIN alone is not sufficient evidence")}
+                    )
+                continue
 
-        # HTTP probe for error signatures
-        status, body = http_probe(subdomain)
-        if body:
-            for sig in fp["fingerprints"]:
-                if sig.lower() in body.lower():
+        # HTTP probe for error signatures (fetched once, reused across services)
+        if probed_body is None:
+            probed_status, probed_body = http_probe(subdomain)
+            probed_status, probed_body = probed_status, probed_body or ""
+
+        if probed_body:
+            # Negative/suppression fingerprints are checked FIRST and, on a
+            # match, positively rule the service out -- these are the
+            # service's own "not found, name is already taken" signature,
+            # not a takeover confirmation. Treating any fingerprint match as
+            # "vulnerable" (the bug this refresh fixes) produced a false
+            # positive on CloudFront/GCS/Firebase/Fastly/Zendesk.
+            neg_hit = next((sig for sig in fp.get("negative_fingerprints", [])
+                            if sig.lower() in probed_body.lower()), None)
+            if neg_hit:
+                finding["not_vulnerable_checked"].append(
+                    {"service": service, "reason": fp.get("note", f"matched negative fingerprint '{neg_hit}'")}
+                )
+                continue
+
+            for sig in fp.get("fingerprints", []):
+                if sig.lower() in probed_body.lower():
                     finding["vulnerable"] = True
                     finding["service"] = service
                     finding["evidence"] = f"HTTP response contains '{sig}'"
                     finding["impact"] = fp["impact"]
                     finding["method"] = fp["method"]
-                    finding["http_status"] = status
+                    finding["http_status"] = probed_status
+                    finding["edge_case"] = fp.get("edge_case", False)
+                    if fp.get("edge_case"):
+                        finding["edge_case_note"] = fp.get(
+                            "note", "Fingerprint match alone is insufficient proof -- confirm manually before reporting at high severity.")
                     return finding
 
     return finding
@@ -328,10 +464,14 @@ def main():
             results.append(result)
             if result["vulnerable"]:
                 vulnerable.append(result)
-                vuln(f"TAKEOVER: {result['subdomain']} -> {result['cname']} "
+                tag = "EDGE CASE (confirm manually)" if result["edge_case"] else "TAKEOVER"
+                vuln(f"{tag}: {result['subdomain']} -> {result['cname']} "
                      f"({result['service']}, impact: {result['impact']})")
             elif result["cname"]:
                 log(f"{result['subdomain']} -> {result['cname']} (not vulnerable)")
+
+    confirmed = [v for v in vulnerable if not v["edge_case"]]
+    edge_cases = [v for v in vulnerable if v["edge_case"]]
 
     output = {
         "meta": {
@@ -344,6 +484,8 @@ def main():
             "total_scanned": len(subdomains),
             "with_cname": sum(1 for r in results if r["cname"]),
             "vulnerable": len(vulnerable),
+            "confirmed": len(confirmed),
+            "edge_case": len(edge_cases),
         },
         "vulnerable": vulnerable,
         "all_results": results,
@@ -359,10 +501,11 @@ def main():
     print(f"{'='*60}")
     print(f"  Subdomains scanned : {len(subdomains)}")
     print(f"  With CNAME         : {sum(1 for r in results if r['cname'])}")
-    print(f"  VULNERABLE         : {len(vulnerable)}")
-    if vulnerable:
-        print(f"\n  VULNERABLE SUBDOMAINS:")
-        for v in vulnerable:
+    print(f"  CONFIRMED          : {len(confirmed)}")
+    print(f"  EDGE CASE          : {len(edge_cases)} (needs manual confirmation)")
+    if confirmed:
+        print(f"\n  CONFIRMED VULNERABLE SUBDOMAINS:")
+        for v in confirmed:
             print(f"    {v['subdomain']}")
             print(f"      CNAME   : {v['cname']}")
             print(f"      Service : {v['service']}")
@@ -370,6 +513,10 @@ def main():
             print(f"      Evidence: {v['evidence']}")
             print(f"      Method  : {v['method']}")
             print()
+    if edge_cases:
+        print(f"\n  EDGE CASE SUBDOMAINS (fingerprint matched, needs manual confirmation):")
+        for v in edge_cases:
+            print(f"    {v['subdomain']} -> {v['service']}: {v.get('edge_case_note', '')}")
     print(f"{'='*60}\n")
 
 
