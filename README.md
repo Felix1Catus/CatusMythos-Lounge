@@ -81,6 +81,7 @@ runs as a normal Claude Code plugin or skill set.
 | Recon | `google_dorker.py` / `osint_correlator.py` / `js_recon.py` / `wayback_analyzer.py` | Dorking, OSINT, JS-bundle mining, historical snapshots |
 | Web app | `sqli_tester.py` / `xss_tester.py` / `ssrf_tester.py` / `ssti_tester.py` | Injection-class vulnerability testing |
 | Web app | `idor_tester.py` / `auth_tester.py` / `race_tester.py` | Access-control, auth, and race-condition testing |
+| Web app | `lfi_tester.py` | LFI/path-traversal (incl. sibling-parameter-gated sanitization), XXE including the `php://filter`-as-SSRF variant, and PHP object-injection surface detection — from a real disclosed LFI→deserialization→XXE→SSRF→RCE chain |
 | Web app | `upload_tester.py` | File-upload bypass + **stack-aware PHP RCE**: fingerprints nginx/Apache/Caddy/FrankenPHP first, then runs the matching strategy — PATH_INFO path confusion (CVE-2019-11043/2026-27590/2026-24895 class), Apache `.htaccess` handler remap, or direct php-fpm/FastCGI TCP exposure (common in unhardened Docker) via a minimal stdlib FastCGI client |
 | Web app | `waf_bypass_tester.py` / `crawler.py` / `generate_poc.py` | WAF/rate-limit bypass, crawling, PoC generation |
 | API | `api_discovery.py` / `schema_builder.py` | Endpoint discovery, REST/GraphQL schema reconstruction |

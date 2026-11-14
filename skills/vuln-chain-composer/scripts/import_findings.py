@@ -37,6 +37,11 @@ SEVERITY_MAP = {
     "dom_xss": "MEDIUM",
     "ssrf": "HIGH",
     "ssrf_cloud_metadata": "CRITICAL",
+    "lfi": "HIGH",
+    "lfi_php_filter_leak": "HIGH",
+    "xxe": "CRITICAL",
+    "xxe_ssrf": "CRITICAL",
+    "php_object_injection_surface": "MEDIUM",  # confirmed reachable sink, gadget chain not yet proven
     "idor": "MEDIUM",
     "bola": "HIGH",
     "bfla": "HIGH",
@@ -76,6 +81,8 @@ OWASP_MAP = {
     "sqli": "A03:2021 - Injection",
     "xss": "A03:2021 - Injection",
     "ssrf": "A10:2021 - SSRF",
+    "lfi": "A01:2021 - Broken Access Control",
+    "xxe": "A05:2021 - Security Misconfiguration",
     "idor": "API1:2023 - BOLA",
     "bola": "API1:2023 - BOLA",
     "bfla": "API5:2023 - BFLA",
@@ -180,6 +187,32 @@ def normalize_finding(finding, source_tool):
         # (_redirect_unlocks_ssrf in correlate.py), not just a category tag.
         if _re.search(r"allow[\s_-]?list|whitelist|blocked|denied|filter", _finding_blob(finding), _re.I):
             normalized["requires"].append("redirect_into_allowlist")
+    elif "lfi" in vuln_type:
+        # lfi_tester.py (webapp-exploit-hunter), added after the publicly
+        # disclosed h1-5411-CTF write-up's LFI->object-injection->XXE->SSRF
+        # chain. A confirmed local-file-read primitive, same shape as sqli's
+        # data-access/credential-theft outcome -- a read LFI can leak
+        # source code (revealing a deserialization sink) or credentials
+        # (config files, SSH keys) directly.
+        normalized["chainable_as"] = ["data_access", "credential_theft"]
+    elif "xxe" in vuln_type:
+        # Deliberately AFTER the "ssrf" check above: xxe_ssrf (the
+        # php://filter-wrapped SSRF-via-XXE variant lfi_tester.py's
+        # test_xxe() also produces) is semantically an SSRF primitive --
+        # reaching an internal-only service -- so it correctly falls
+        # through to the ssrf branch's internal_access/cloud_metadata/
+        # port_scan chainable_as instead of landing here. Plain "xxe" (a
+        # direct local-file read via external entity, no SSRF) gets its
+        # own, narrower capability.
+        normalized["chainable_as"] = ["data_access"]
+    elif "php_object_injection_surface" in vuln_type:
+        # detect_php_object_injection_surface() (lfi_tester.py): confirms a
+        # parameter reaches PHP's unserialize() on attacker-controlled data,
+        # but NOT that a gadget chain was found -- same "needs its
+        # precondition confirmed live" semantics as blockedcve/mcpcve below,
+        # not a directly chainable primitive yet.
+        normalized["chainable_as"] = ["rce_potential", "precondition_dependent"]
+        normalized["requires"] = ["precondition_enabler"]
     elif "idor" in vuln_type or "bola" in vuln_type:
         normalized["chainable_as"] = ["data_access", "privilege_escalation"]
         normalized["requires"] = ["authentication_bypass"]  # most IDORs still need SOME valid session
