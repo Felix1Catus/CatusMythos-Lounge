@@ -216,6 +216,17 @@ def normalize_finding(finding, source_tool):
         normalized["chainable_as"] = ["rce", "data_access"]
     elif "upload" in vuln_type:
         normalized["chainable_as"] = ["rce", "webshell"]
+    elif "fpm" in vuln_type:
+        # upload_tester.py's direct-php-fpm/FastCGI-exposure probe
+        # (webapp-exploit-hunter): "fpm_port_directly_exposed" is a
+        # precondition (the listener is reachable, but execution wasn't
+        # independently confirmed yet); "fpm_direct_rce_confirmed" already
+        # proved code execution via raw FastCGI, same shape as any other
+        # confirmed RCE finding.
+        if "confirmed" in vuln_type:
+            normalized["chainable_as"] = ["rce", "webshell"]
+        else:
+            normalized["chainable_as"] = ["rce_potential"]
     elif "redirect" in vuln_type:
         normalized["chainable_as"] = ["phishing", "token_theft", "redirect_into_allowlist"]
     elif "blockedcve" in vuln_type or "mcpcve" in vuln_type or "cvehypothesis" in vuln_type:
