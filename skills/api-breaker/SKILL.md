@@ -67,6 +67,47 @@ Even without documentation:
 
 Output: Reconstructed API schema in OpenAPI format.
 
+**GraphQL gets a full depth pass beyond basic introspection**
+(research_notes/API breaker depth techniques/graphql_techniques.md):
+- **Introspection-disabled fallback chain** — when the standard query is
+  blocked, retries transport variants (GET/form-urlencoded), a
+  regex-evasion variant (whitespace/comment right after `__schema`
+  defeats a naive literal-substring blocklist), and alternate GraphQL
+  paths, before falling back to blind recovery: Clairvoyance-style
+  field-suggestion harvesting ("Did you mean" errors confirm real field
+  names even with introspection off), then a last-resort binary-oracle
+  brute force. A bare `node()`/`nodes()` root field is always probed
+  separately — a common Relay-style direct-object-access primitive
+  OWASP calls out independent of the rest of the schema.
+- **Depth/complexity DoS probe** — escalates nesting depth against a
+  self-referencing field (from the reconstructed schema, or a fallback
+  name-pair list) with a hard client timeout; classifies a depth-limit
+  validation error (limiting present), non-linear latency growth with no
+  error (cost limiting absent even if depth limiting exists), or a
+  timeout/5xx (confirmed DoS). Also runs a fragment-cycle probe (two
+  named fragments referencing each other — a spec-compliant validator
+  must reject this) and, once a depth limiter is confirmed, a
+  `__schema`-named-fragment retry for the graphql-armor-class
+  `ignoreIntrospection` bypass (GHSA-hmfr-rx46-4jx2).
+- **Nested-field authorization bypass** — differential test: validate a
+  candidate field set via a "self" field (`me`/`viewer`) under the
+  caller's own session, then re-query the identical field set via a
+  sibling by-ID field with a *different* ID using the *same* session. A
+  field that leaks via the sibling but was null via self (especially
+  email/role/permissions-class fields) is a confirmed object/field-level
+  authz finding — no credential manipulation needed. Also runs a GraphQL
+  CSRF probe (a discovered mutation replayed as GET/form-POST with no
+  token) and an **opt-in-only** mutation-BOLA write probe
+  (`--allow-mutation-write`, off by default — a true positive is a real,
+  live unauthorized write).
+- **Engine fingerprinting + version-aware CVE hypotheses** — best-effort
+  Apollo/graphql-java/Hasura detection from headers/error-shape, then (if
+  `--engine-version` is supplied) a static, **range-aware** table lookup
+  for CVE-2025-31496 (apollo-compiler), CVE-2024-40094 (graphql-java —
+  three independently-patched branches), and CVE-2026-54698 (Hasura —
+  two disjoint patched ranges). Every hit is a presumptive hypothesis to
+  confirm, never a black-box-confirmed CVE match.
+
 ### Step 3: Authentication Analysis
 
 ```bash
