@@ -6,13 +6,28 @@ doesn't mistake uneven coverage for uniform coverage.
 
 ## Current state
 
-- Latest JWT expiry fix: `0f58b5e8a4fa6a2531bd459215f37e85c544fc7b`
+- Latest code pass: `81733eee577420a8b3efebfb3117b691393a2f85`
+  (`Harden GraphQL probe evidence and inputs`), on `main`. GraphQL depth,
+  fragment-cycle, introspection-naming, and nested-field authorization
+  responses that lack impact/ownership proof are now explicitly unverified
+  candidates; fast transport failures are inconclusive. Schema-derived
+  GraphQL names are validated, optional candidate IDs are JSON-quoted and
+  bounded, and `--delay` is finite and limited to 0–60 seconds. The existing
+  bounded depth ladder and selected nested-field/CSRF probes remain active;
+  the pre-existing explicit cookie/canary and mutation-write gates are
+  unchanged. Added 12 focused regressions: API-breaker matrix **59 tests**;
+  full suite **533 tests + 38 subtests**. Ruff, compileall, shared-helper sync,
+  CLI docs (**10 / 95 / 58**), and `git diff --check` passed. All API requests
+  in the new tests are mocked; no live targets were contacted. Real GraphQL
+  HTTP integration remains unverified.
+
+- Previous JWT expiry fix: `0f58b5e8a4fa6a2531bd459215f37e85c544fc7b`
   (`Handle malformed JWT expiry values`), pushed to `origin/main` on
   2026-11-16. Malformed, non-finite, boolean, non-numeric, and out-of-range
   exp claims now produce an informational finding instead of crashing.
-- Latest verified suite: **521 tests + 30 subtests**; Ruff, compileall,
-  shared-helper sync, CLI docs (**10 / 95 / 58**), and `git diff --check`
-  passed. No live targets were contacted.
+- Verification at that JWT-expiry code state: **521 tests + 30 subtests**;
+  Ruff, compileall, shared-helper sync, CLI docs (**10 / 95 / 58**), and
+  `git diff --check` passed. No live targets were contacted.
 
 - Previous JWT/authentication follow-up: `68dd243dc5276d1d41762a6e2c059261da7c182c`
   (`Harden API auth analyzer evidence`), pushed to `origin/main` on 2026-11-16.
@@ -102,6 +117,10 @@ doesn't mistake uneven coverage for uniform coverage.
   redaction, bounded delay inputs, and focused auth-analyzer regressions.
 - `0f58b5e8a4fa6a2531bd459215f37e85c544fc7b` — made JWT expiry analysis
   resilient to huge, non-finite, boolean, and non-numeric exp claim values.
+- `81733eee577420a8b3efebfb3117b691393a2f85` — hardened GraphQL name and
+  candidate-input handling; downgraded unverified depth/authz/fragment
+  acceptance signals to candidates without disabling their active probes;
+  added 12 regressions.
 - Verification at the `61aae43` code state: **441 tests + 21 subtests** passed;
   Ruff, compileall, CLI docs (`10/94/58`), and shared-helper sync passed. The
   browser feature has a real local Chromium fixture run. The focused PATH_INFO
@@ -185,6 +204,22 @@ doesn't mistake uneven coverage for uniform coverage.
   with five invalid-value subcases. API-breaker matrix: **47 tests**; full
   suite: **521 tests + 30 subtests**. Ruff, compileall, helper sync, CLI docs
   (10 / 95 / 58), and git diff --check passed; all target requests were mocked.
+- **GraphQL evidence/input follow-up (2026-11-16, code commit
+  `81733eee577420a8b3efebfb3117b691393a2f85`):** fixed overconfident
+  classification of timeout/5xx/depth-cost timing, fragment-cycle acceptance,
+  introspection-name acceptance, and nested-field response differences. These
+  signals are now INFO candidates pending isolated impact, object-ownership,
+  or read-back evidence; quick transport failures and non-200/non-GraphQL
+  responses are inconclusive. Validated schema-derived names before query
+  interpolation; JSON-quoted caller IDs; bounded the optional ID list to 50
+  values of 128 characters and CLI delay to finite 0–60 seconds; preserved
+  active payload submission and the existing gates for CSRF/mutation writes.
+  Added 12 regressions covering negative controls, injection-safe quoting,
+  input bounds, candidate classifications/report mappings, and continued
+  active GET/form/opt-in write behavior. API-breaker matrix: **59 tests**;
+  full suite: **533 tests + 38 subtests**. Ruff, compileall, helper sync, CLI
+  docs (**10 / 95 / 58**), and diff check passed. All new target-facing tests
+  were mocked. No live target or real GraphQL HTTP integration was used.
 - The browser auditor has now had a **real Playwright/Chromium integration run**
   against a local fixture (passive, active query, active fragment via both
   `innerHTML` and `document.write`, and form submission all exercised). Two bugs
@@ -542,7 +577,7 @@ browser `--active`, or `--submit-forms` behavior.
    uploads.
 2. **Inventory structure — coverage refreshed; structural map still needs
    review if skills, CLIs, dependencies, or plugin references move.** Inventory
-   now includes bootstrap behavior and the 47 focused API-breaker regressions.
+   now includes bootstrap behavior and the 59 focused API-breaker regressions.
 3. **Bootstrap + task preflight — implemented; deeper OS-specific install
    validation remains open.** Missing Python dependencies, Chromium, Go, Go
    recon tools, and allowlisted system tools are actively installed through
@@ -558,11 +593,13 @@ browser `--active`, or `--submit-forms` behavior.
 4. Consolidate the copied `_common.py` helpers? A sync check exists instead
    of consolidation. Map imports/CLI examples/plugin refs/tests before moving.
 5. Continue skill deepening where meaningful gaps remain. `api-breaker` is still
-   only partially audited: JWT now has 47 offline regressions but still needs
-   isolated HTTP integration and review of the RS/PS relabel hypothesis;
-   next prioritize GraphQL depth/authz/
-   CSRF behavior, BOLA/BFLA integration, rate-limit bypass/batching, business-
-   state read-back, and report input shapes. Also continue the remaining browser
+   only partially audited. GraphQL depth/authz/CSRF response-confidence and
+   input-bound work now has an offline regression pass, but still needs
+   isolated HTTP integration and review of target-specific ownership/read-back
+   behavior. JWT has 47 focused offline regressions but still needs isolated
+   HTTP integration and review of the RS/PS relabel hypothesis. Next prioritize
+   BOLA/BFLA integration, rate-limit bypass/batching, business-state read-back,
+   and report input shapes. Also continue the remaining browser
    scope/state/redaction edge cases and live-protocol methodology. Ground changes
    in primary-source research, bounded active probes, explicit evidence/confidence
    rules, and regression coverage. The matrices above do not prove complete

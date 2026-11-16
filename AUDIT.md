@@ -254,7 +254,7 @@ and `INVENTORY.md`. The complete skill remains partially audited.
   CLI docs (**10 skill docs / 95 command references / 58 CLIs**), and
   `git diff --check` passed on Windows. New API-target interactions were mocked;
   no live API target was contacted.
-- `api-breaker` remains shallow in JWT case matrices, GraphQL depth/authz/CSRF
+- At this 500-test checkpoint, `api-breaker` remained shallow in JWT case matrices, GraphQL depth/authz/CSRF
   integration, BOLA/BFLA workflows, rate-limit bypass/batching, business-state
   read-back, and broad report input shapes. Keep these in the active worklist;
   26 focused tests do not establish broad coverage or absence of defects.
@@ -369,3 +369,46 @@ values. The API-breaker matrix now has **47 tests**. Full verification passed
 **521 tests + 30 subtests**, Ruff, compileall, shared-helper sync, CLI docs
 (**10 skill docs / 95 command references / 58 CLIs**), and git diff --check.
 The code fix is commit 0f58b5e8a4fa6a2531bd459215f37e85c544fc7b on main.
+
+---
+
+## Follow-up addendum — GraphQL evidence and input handling (2026-11-16)
+
+Review of `schema_builder.py` found several GraphQL acceptance signals that
+overstated evidence: a status-0 transport failure could be classified as DoS;
+a 5xx, latency-growth heuristic, or timeout was presented as confirmed impact;
+and status/body checks for naming-bypass and fragment-cycle probes could treat
+unrelated responses as acceptance. Nested-field differences also did not
+establish that the tested object belonged to another user or that the fields
+were intended to be hidden. These checks no longer label unverified signals
+as confirmed vulnerabilities. Timeout/5xx and latency signals remain INFO
+candidates; acceptance-based checks require a clean GraphQL success response.
+Fast transport failures and non-200/non-GraphQL acceptance-probe responses are
+inconclusive. The active
+depth ladder, fragment-cycle, introspection-naming, nested-field, CSRF, and
+explicitly opted-in mutation-write requests remain in place; existing cookie,
+canary, and mutation-write gates are unchanged.
+
+Schema-derived field/type names are validated before query interpolation.
+Caller-supplied nested-field IDs are JSON-quoted and bounded (at most 50 IDs,
+128 characters each); CLI delay is finite and limited to 0–60 seconds. The
+GraphQL skill guide now describes candidate confidence and keeps the active
+testing workflow explicit. `api_report.py` maps GraphQL BOLA and resource
+control candidates to the relevant OWASP API categories.
+
+Added 12 focused regressions for the transport/server/timeout distinctions,
+non-success bypass responses, nested-field controls and candidate evidence,
+JSON quoting of a hostile ID, invalid names, parser bounds, fragment-cycle
+candidate handling, report mappings, and preservation of active CSRF GET/form
+requests and selected opt-in write requests. The API-breaker test file now has
+**59 tests**; the full suite passed **533 tests + 38 subtests**. Ruff,
+compileall, shared-helper sync, CLI docs (**10 skill docs / 95 command
+references / 58 CLIs**), and `git diff --check` passed on Windows/Python 3.14.8.
+All target-facing regressions are mocked; no live target was contacted. A real
+GraphQL HTTP integration run is still needed, as are the broader API-breaker
+items in `HANDOVER.md` (BOLA/BFLA, rate-limit/batching, business-state
+read-back, report-shape coverage, and JWT RS/PS relabel review).
+
+Code and regression changes are commit
+`81733eee577420a8b3efebfb3117b691393a2f85` on `main`; verification and this
+record are being carried forward as separate documentation commits.
