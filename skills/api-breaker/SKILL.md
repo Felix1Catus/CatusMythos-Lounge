@@ -88,25 +88,32 @@ Output: Reconstructed API schema in OpenAPI format.
   self-referencing field (from the reconstructed schema, or a fallback
   name-pair list) with a hard client timeout; classifies a depth-limit
   validation error (limiting present), non-linear latency growth with no
-  error (cost limiting absent even if depth limiting exists), or a
-  timeout/5xx (confirmed DoS). Also runs a fragment-cycle probe (two
-  named fragments referencing each other — a spec-compliant validator
-  must reject this) and, once a depth limiter is confirmed, a
-  `__schema`-named-fragment retry for the graphql-armor-class
-  `ignoreIntrospection` bypass (GHSA-hmfr-rx46-4jx2).
+  error (a cost-growth candidate), or a timeout/5xx (an impact candidate,
+  not proof of DoS). A fast transport failure is inconclusive. The bounded
+  ladder still sends the active depth payloads by default. It also runs a
+  fragment-cycle probe (two named fragments referencing each other — a
+  spec-compliant validator must reject this) and, once a depth limiter is
+  confirmed, a `__schema`-named-fragment retry for the graphql-armor-class
+  `ignoreIntrospection` bypass (GHSA-hmfr-rx46-4jx2). Acceptance signals are
+  candidates until resource impact is established.
 - **Nested-field authorization bypass** — differential test: validate a
   candidate field set via a "self" field (`me`/`viewer`) under the
   caller's own session, then re-query the identical field set via a
   sibling by-ID field with a *different* ID using the *same* session. A
-  field that leaks via the sibling but was null via self (especially
-  email/role/permissions-class fields) is a confirmed object/field-level
-  authz finding — no credential manipulation needed. The GraphQL CSRF probe
+  field populated via the sibling but null via self (especially
+  email/role/permissions-class fields) is an unverified candidate: target
+  ID ownership and intended visibility must be established before confirming
+  an authz issue. Schema names are validated and operator-supplied candidate
+  IDs are bounded and JSON-quoted. The GraphQL CSRF probe
   submits a discovered mutation over GET and form-POST only when both
   `--cookie` and an operator-approved `--csrf-test-id` are supplied; these
   requests can change that object. Results are candidates until browser cookie
   policy and persisted state are verified. The separate mutation-BOLA write
   probe remains **opt-in-only** with `--allow-mutation-write` (off by default;
-  a true positive is a real, live unauthorized write).
+  it actively sends the selected write when enabled; an accepted response is
+  a candidate until a controlled read-back confirms persisted unauthorized
+  impact). `--delay` is bounded to 0–60 seconds and `--candidate-ids` accepts
+  at most 50 IDs of 128 characters each.
 - **Engine fingerprinting + version-aware CVE hypotheses** — best-effort
   Apollo/graphql-java/Hasura detection from headers/error-shape, then (if
   `--engine-version` is supplied) a static, **range-aware** table lookup

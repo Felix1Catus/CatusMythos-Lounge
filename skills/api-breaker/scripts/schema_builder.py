@@ -7,6 +7,7 @@ Author: orizon.one
 
 import argparse
 import json
+import math
 import re
 import time
 import urllib.request
@@ -14,7 +15,7 @@ import urllib.parse
 from datetime import datetime, timezone
 
 
-from _common import http_request, log, same_origin_url, success, vuln, warn
+from _common import http_request, log, same_origin_url, success, warn
 # Common field names to probe
 PROBE_FIELDS = [
     "id", "name", "email", "username", "password", "title", "description",
@@ -98,6 +99,39 @@ _UNKNOWN_FIELD_ERROR = re.compile(r'cannot query field|unknown field|unknown arg
 # against a JSON-escaped canned response, not by inspection.
 _DID_YOU_MEAN_FIELD = re.compile(r'[Dd]id you mean[^?]*?\\?["\']([A-Za-z_][A-Za-z0-9_]*)\\?["\']')
 _DID_YOU_MEAN_TYPES = re.compile(r'[Dd]id you mean one of these types:\s*([^?]+)\?')
+GRAPHQL_NAME_PATTERN = re.compile(r"^[_A-Za-z][_0-9A-Za-z]*$")
+MAX_CANDIDATE_IDS = 50
+MAX_CANDIDATE_ID_LENGTH = 128
+
+
+def is_graphql_name(value):
+    return isinstance(value, str) and bool(GRAPHQL_NAME_PATTERN.fullmatch(value))
+
+
+def parse_delay(value):
+    try:
+        delay = float(value)
+    except (TypeError, ValueError) as exc:
+        raise argparse.ArgumentTypeError("delay must be a number") from exc
+    if not math.isfinite(delay) or not 0 <= delay <= 60:
+        raise argparse.ArgumentTypeError("delay must be finite and between 0 and 60 seconds")
+    return delay
+
+
+def parse_candidate_ids(value):
+    values = list(dict.fromkeys(item.strip() for item in value.split(",") if item.strip()))
+    if len(values) > MAX_CANDIDATE_IDS:
+        raise argparse.ArgumentTypeError(
+            f"at most {MAX_CANDIDATE_IDS} candidate IDs may be supplied"
+        )
+    if any(
+        len(item) > MAX_CANDIDATE_ID_LENGTH or any(ord(char) < 32 for char in item)
+        for item in values
+    ):
+        raise argparse.ArgumentTypeError(
+            f"candidate IDs must be at most {MAX_CANDIDATE_ID_LENGTH} characters without controls"
+        )
+    return values
 
 
 def discover_methods(url, extra_headers=None, delay=0):
@@ -644,19 +678,25 @@ def _find_self_referential_field(schema):
     SELF_REFERENTIAL_FIELD_PAIRS in that case."""
     if not schema or not schema.get("types"):
         return None
-    types_by_name = {t["name"]: t for t in schema["types"]}
+    types_by_name = {
+        t["name"]: t for t in schema["types"]
+        if isinstance(t, dict) and is_graphql_name(t.get("name"))
+    }
 
-    for t in schema["types"]:
+    for t in types_by_name.values():
         for f in t.get("fields", []):
-            if f.get("type") == t["name"]:
+            if isinstance(f, dict) and is_graphql_name(f.get("name")) and f.get("type") == t["name"]:
                 return (f["name"], f["name"])
 
-    for t in schema["types"]:
+    for t in types_by_name.values():
         for f in t.get("fields", []):
+            if not isinstance(f, dict) or not is_graphql_name(f.get("name")):
+                continue
             target_type = f.get("type")
             if target_type and target_type in types_by_name and target_type != t["name"]:
                 for tf in types_by_name[target_type].get("fields", []):
-                    if tf.get("type") == t["name"]:
+                    if (isinstance(tf, dict) and is_graphql_name(tf.get("name"))
+                            and tf.get("type") == t["name"]):
                         return (f["name"], tf["name"])
     return None
 
@@ -678,6 +718,8 @@ def _pick_working_field_pair(url, headers, delay, candidate_pairs):
     -- avoids running the full, expensive depth-escalation ladder against
     a field name that doesn't even exist on this target."""
     for f1, f2 in candidate_pairs:
+        if not is_graphql_name(f1) or not is_graphql_name(f2 or f1):
+            continue
         pair = (f1, f2 or f1)
         query = _build_nested_query(pair, 2)
         status, _, body = http_request(url, "POST", headers, json.dumps({"query": query}), timeout=10)
@@ -696,11 +738,10 @@ def test_graphql_depth_complexity_dos(url, schema=None, extra_headers=None, dela
       (a) a "depth"/"exceeds maximum" validation error at some N -> depth
           limiting is present (recorded as an info-level finding with the
           threshold).
-      (b) response time growing non-linearly with NO error -> cost/
-          complexity limiting is absent, even if depth limiting exists
-          (medium finding).
-      (c) a timeout, 5xx, or dropped connection -> confirmed DoS (high
-          finding), and escalation stops immediately.
+      (b) response time growing non-linearly with NO error -> a low-confidence
+          cost/complexity candidate.
+      (c) a timeout-like delay or 5xx -> a candidate, not proof of DoS;
+          transport failures and server errors can have unrelated causes.
     See the DEFAULT_DEPTH_STEPS comment: there is no sourced numeric
     "safe" threshold, so both the step ladder and the growth-ratio
     heuristic below are this script's own reasoned defaults.
@@ -729,7 +770,7 @@ def test_graphql_depth_complexity_dos(url, schema=None, extra_headers=None, dela
 
     timings = []
     depth_limit_threshold = None
-    dos_confirmed = False
+    probe_stopped = False
 
     for depth in steps:
         query = _build_nested_query(field_pair, depth)
@@ -739,27 +780,35 @@ def test_graphql_depth_complexity_dos(url, schema=None, extra_headers=None, dela
         if delay:
             time.sleep(delay)
 
-        if status == 0 or elapsed >= timeout * 0.95:
-            vuln(f"GraphQL depth DoS: depth={depth} timed out/dropped after {elapsed:.1f}s")
-            dos_confirmed = True
+        if elapsed >= timeout * 0.95:
+            log(f"GraphQL depth timeout candidate: depth={depth} took {elapsed:.1f}s")
+            probe_stopped = True
             findings.append({
-                "type": "graphql_depth_complexity_dos", "severity": "high",
-                "classification": "dos_confirmed", "url": url, "depth": depth,
+                "type": "graphql_depth_complexity_dos_candidate", "severity": "info",
+                "classification": "timeout_candidate", "validated": False,
+                "url": url, "depth": depth,
                 "elapsed_seconds": round(elapsed, 2), "field_pair": list(field_pair),
-                "evidence": f"Query at nesting depth {depth} timed out/dropped the connection "
-                            f"(client timeout={timeout}s) before any depth or cost limit stopped it.",
+                "evidence": f"Query at nesting depth {depth} approached the client timeout "
+                            f"({timeout}s). This alone does not prove service impact; verify with "
+                            f"an isolated, authorized baseline and recovery check.",
             })
             break
 
+        if status == 0:
+            log(f"GraphQL depth probe at depth={depth} had a fast transport failure -- inconclusive")
+            break
+
         if status >= 500:
-            vuln(f"GraphQL depth DoS: depth={depth} returned HTTP {status}")
-            dos_confirmed = True
+            log(f"GraphQL depth server-error candidate: depth={depth} returned HTTP {status}")
+            probe_stopped = True
             findings.append({
-                "type": "graphql_depth_complexity_dos", "severity": "high",
-                "classification": "dos_confirmed", "url": url, "depth": depth,
+                "type": "graphql_depth_complexity_dos_candidate", "severity": "info",
+                "classification": "server_error_candidate", "validated": False,
+                "url": url, "depth": depth,
                 "http_status": status, "elapsed_seconds": round(elapsed, 2),
                 "field_pair": list(field_pair),
-                "evidence": f"Query at nesting depth {depth} returned HTTP {status}.",
+                "evidence": f"Query at nesting depth {depth} returned HTTP {status}; an isolated "
+                            f"baseline/recovery check is needed to attribute impact to query depth.",
             })
             break
 
@@ -777,7 +826,7 @@ def test_graphql_depth_complexity_dos(url, schema=None, extra_headers=None, dela
 
         timings.append((depth, elapsed))
 
-    if not dos_confirmed and len(timings) >= 2:
+    if not probe_stopped and len(timings) >= 2:
         first_depth, first_elapsed = timings[0]
         last_depth, last_elapsed = timings[-1]
         depth_ratio = (last_depth / first_depth) if first_depth else None
@@ -788,17 +837,17 @@ def test_graphql_depth_complexity_dos(url, schema=None, extra_headers=None, dela
         # Escape "cost limiting absent" signal, independent of whether
         # depth limiting itself exists.
         if growth_ratio is not None and depth_ratio and growth_ratio > depth_ratio * 1.5:
-            warn(f"GraphQL cost/complexity limiting appears absent -- latency grew {growth_ratio:.1f}x "
-                 f"over a {depth_ratio:.1f}x depth increase with no rejecting error")
+            log(f"GraphQL cost/complexity candidate -- latency grew {growth_ratio:.1f}x "
+                f"over a {depth_ratio:.1f}x depth increase with no rejecting error")
             findings.append({
-                "type": "graphql_depth_complexity_dos", "severity": "medium",
-                "classification": "cost_limiting_absent", "url": url,
+                "type": "graphql_depth_complexity_dos_candidate", "severity": "info",
+                "classification": "cost_growth_candidate", "validated": False, "url": url,
                 "depth_limit_present": depth_limit_threshold is not None,
                 "timings": [{"depth": d, "elapsed_seconds": round(e, 3)} for d, e in timings],
                 "field_pair": list(field_pair),
                 "evidence": f"Latency grew {growth_ratio:.1f}x across a {depth_ratio:.1f}x depth "
-                            f"increase with no depth/validation error -- cost/complexity limiting is "
-                            f"absent even though depth limiting present={depth_limit_threshold is not None}.",
+                            f"increase with no depth/validation error. This timing heuristic does not "
+                            f"prove resource impact or absence of cost controls.",
             })
         elif depth_limit_threshold is None:
             log(f"Reached max tested depth ({steps[-1]}) with no error and no clear non-linear growth -- "
@@ -821,7 +870,9 @@ def test_graphql_fragment_cycle(url, schema=None, extra_headers=None, delay=0):
 
     type_name = "Query"
     if schema and schema.get("types"):
-        object_types = [t["name"] for t in schema["types"] if t.get("kind") == "OBJECT"]
+        object_types = [t["name"] for t in schema["types"]
+                        if isinstance(t, dict) and t.get("kind") == "OBJECT"
+                        and is_graphql_name(t.get("name"))]
         if object_types:
             type_name = object_types[0]
 
@@ -845,17 +896,19 @@ def test_graphql_fragment_cycle(url, schema=None, extra_headers=None, delay=0):
     if status == 200:
         try:
             parsed = json.loads(body)
-        except (json.JSONDecodeError, ValueError):
-            parsed = {}
-        if not parsed.get("errors"):
-            vuln("GraphQL fragment cycle ACCEPTED/EXECUTED -- validator does not reject cyclic fragments")
+        except (json.JSONDecodeError, ValueError, TypeError):
+            parsed = None
+        if isinstance(parsed, dict) and not parsed.get("errors") and isinstance(parsed.get("data"), dict):
+            log("GraphQL fragment-cycle acceptance candidate; resource impact was not verified")
             findings.append({
-                "type": "graphql_fragment_cycle_accepted", "severity": "high",
+                "type": "graphql_fragment_cycle_candidate", "severity": "info",
+                "validated": False,
                 "url": url, "type_used": type_name, "http_status": status,
-                "evidence": "Two mutually-referencing named fragments were accepted/executed instead "
-                            "of being rejected at validation time (GraphQL spec 5.5.2.2).",
+                "evidence": "Two mutually-referencing named fragments returned a GraphQL data response "
+                            "instead of an obvious validation error (GraphQL spec 5.5.2.2). This does "
+                            "not establish practical resource impact.",
             })
-        elif not _CYCLE_ERROR_PATTERN.search(json.dumps(parsed.get("errors"))):
+        elif isinstance(parsed, dict) and not _CYCLE_ERROR_PATTERN.search(json.dumps(parsed.get("errors"))):
             log("Fragment-cycle probe: errored for a reason unrelated to cycle detection -- inconclusive")
 
     return findings
@@ -878,6 +931,16 @@ def test_graphql_introspection_naming_bypass(url, depth_limit_threshold, field_p
     probable bypass, not a certain one."""
     log("Testing introspection-naming depth-limit bypass (GHSA-hmfr-rx46-4jx2 class)...")
     findings = []
+    if (
+        not isinstance(depth_limit_threshold, int)
+        or depth_limit_threshold < 1
+        or not isinstance(field_pair, (tuple, list))
+        or len(field_pair) != 2
+        or not all(is_graphql_name(name) for name in field_pair)
+        or not is_graphql_name(query_type_name)
+    ):
+        log("Introspection-naming bypass probe skipped: invalid threshold or schema-derived GraphQL names")
+        return findings
     headers = {"Content-Type": "application/json"}
     if extra_headers:
         headers.update(extra_headers)
@@ -898,11 +961,23 @@ def test_graphql_introspection_naming_bypass(url, depth_limit_threshold, field_p
         log("Introspection-naming bypass probe: no response -- inconclusive")
         return findings
 
-    if not _DEPTH_ERROR_PATTERN.search(body):
-        vuln(f"GraphQL depth limit bypassed via '__schema'-named fragment at depth={bypass_depth} "
-             f"(normal limiter triggers at {depth_limit_threshold})")
+    if status != 200:
+        log(f"Introspection-naming bypass probe returned HTTP {status} -- inconclusive")
+        return findings
+    try:
+        parsed = json.loads(body)
+    except (json.JSONDecodeError, ValueError, TypeError):
+        parsed = None
+    accepted_response = (
+        isinstance(parsed, dict)
+        and not parsed.get("errors")
+        and isinstance(parsed.get("data"), dict)
+    )
+    if not _DEPTH_ERROR_PATTERN.search(body) and accepted_response:
+        log(f"GraphQL depth bypass candidate via '__schema'-named fragment at depth={bypass_depth}")
         findings.append({
-            "type": "graphql_depth_limit_bypass_introspection_naming", "severity": "high",
+            "type": "graphql_depth_limit_bypass_introspection_naming_candidate", "severity": "info",
+            "validated": False,
             "url": url, "bypass_depth": bypass_depth,
             "normal_depth_limit_threshold": depth_limit_threshold, "field_pair": list(field_pair),
             "evidence": f"Wrapping the same self-referential field chain (depth {bypass_depth}) inside "
@@ -911,8 +986,10 @@ def test_graphql_introspection_naming_bypass(url, depth_limit_threshold, field_p
                         f"with the graphql-armor ignoreIntrospection=True default bypass "
                         f"(GHSA-hmfr-rx46-4jx2).",
         })
-    else:
+    elif _DEPTH_ERROR_PATTERN.search(body):
         log("Introspection-naming bypass probe: still rejected -- limiter is not bypassable this way")
+    else:
+        log("Introspection-naming bypass response was not a clean GraphQL success -- inconclusive")
     return findings
 
 
@@ -926,21 +1003,28 @@ def _find_self_and_sibling_fields(schema):
     nested-field-authz Inferences step 1. Returns a dict or None."""
     if not schema or not schema.get("types"):
         return None
-    query_type = next((t for t in schema["types"] if t["name"].lower() == "query"), None)
+    query_type = next((t for t in schema["types"] if isinstance(t, dict)
+                       and isinstance(t.get("name"), str)
+                       and t["name"].lower() == "query"), None)
     if not query_type:
         return None
 
     self_field = next((f for f in query_type.get("fields", [])
-                        if f["name"].lower() in SELF_FIELD_NAMES and not f.get("args")), None)
+                       if isinstance(f, dict) and is_graphql_name(f.get("name"))
+                       and f["name"].lower() in SELF_FIELD_NAMES and not f.get("args")), None)
     if not self_field or not self_field.get("type"):
+        return None
+    if not is_graphql_name(self_field.get("name")):
         return None
 
     target_type = self_field["type"]
     for f in query_type.get("fields", []):
+        if not isinstance(f, dict) or not is_graphql_name(f.get("name")):
+            continue
         if f["name"] == self_field["name"] or f.get("type") != target_type:
             continue
-        id_arg = next((a for a in (f.get("args") or []) if "id" in a.lower()), None)
-        if id_arg:
+        id_arg = next((a for a in (f.get("args") or []) if isinstance(a, str) and "id" in a.lower()), None)
+        if is_graphql_name(f.get("name")) and is_graphql_name(id_arg):
             return {"self_field": self_field["name"], "sibling_field": f["name"],
                     "id_arg": id_arg, "target_type": target_type}
     return None
@@ -968,20 +1052,29 @@ def _extract_field_values(body, root_field, field_names):
     return {k: root.get(k) for k in field_names}
 
 
+def _has_graphql_object_response(body, root_field):
+    try:
+        parsed = json.loads(body)
+    except (json.JSONDecodeError, ValueError, TypeError):
+        return False
+    if not isinstance(parsed, dict) or parsed.get("errors"):
+        return False
+    data = parsed.get("data")
+    return isinstance(data, dict) and isinstance(data.get(root_field), dict)
+
+
 def test_graphql_nested_field_authz(url, schema, extra_headers=None, delay=0, candidate_ids=None):
-    """Differential authz probe (graphql_techniques.md Inferences steps
-    2-4): establish which generic candidate field names are real AND
+    """Differential authz candidate probe (graphql_techniques.md Inferences
+    steps 2-4): establish which generic candidate field names are real AND
     non-null on the type via the presumptively-correctly-gated self-field
     (control, one field at a time -- an unknown field invalidates a whole
     GraphQL selection set, so this can't be done as a single combined
     query), then re-query that SAME validated field set through the
     sibling by-ID field with a DIFFERENT id (test). Any field that comes
     back non-null via the sibling but was null/absent via self is a
-    confirmed object/field-level authz finding. Fields in
-    SENSITIVE_FIELD_NAMES are reported at "high" confidence; any other
-    mismatch is still reported, at "medium" confidence, since a null-vs-
-    populated scalar can also just mean the other user's record happens
-    to have that field filled in rather than a real gating bug."""
+    unverified candidate. The target ID's ownership and intended field
+    visibility must be established separately before reporting a confirmed
+    authorization issue."""
     log("Testing GraphQL nested-field authorization (self vs. by-ID sibling)...")
     findings = []
     headers = {"Content-Type": "application/json"}
@@ -993,6 +1086,9 @@ def test_graphql_nested_field_authz(url, schema, extra_headers=None, delay=0, ca
         log("No self-field/by-ID-sibling pair found in reconstructed schema -- skipping")
         return findings
     self_field, sibling_field, id_arg = pair["self_field"], pair["sibling_field"], pair["id_arg"]
+    if not all(is_graphql_name(name) for name in (self_field, sibling_field, id_arg)):
+        log("Skipping GraphQL authorization probe with invalid schema-derived names")
+        return findings
 
     valid_fields = {}
     for candidate in PROBE_FIELDS:  # "id" is already PROBE_FIELDS[0]
@@ -1000,7 +1096,9 @@ def test_graphql_nested_field_authz(url, schema, extra_headers=None, delay=0, ca
                                         json.dumps({"query": f"{{ {self_field} {{ {candidate} }} }}"}))
         if delay:
             time.sleep(delay)
-        if status == 0 or _UNKNOWN_FIELD_ERROR.search(body or ""):
+        if status != 200 or _UNKNOWN_FIELD_ERROR.search(body or ""):
+            continue
+        if not _has_graphql_object_response(body, self_field):
             continue
         valid_fields[candidate] = _extract_single_field_value(body, self_field, candidate)
 
@@ -1011,14 +1109,25 @@ def test_graphql_nested_field_authz(url, schema, extra_headers=None, delay=0, ca
     control_selection = " ".join(valid_fields.keys())
     control_non_null = {k for k, v in valid_fields.items() if v is not None}
 
-    ids_to_try = list(dict.fromkeys(list(candidate_ids or []) + ["1", "2", "3", "0", "100"]))
+    candidate_ids = [
+        str(value) for value in (candidate_ids or [])
+        if value is not None
+        and len(str(value)) <= MAX_CANDIDATE_ID_LENGTH
+        and not any(ord(char) < 32 for char in str(value))
+    ][:MAX_CANDIDATE_IDS]
+    ids_to_try = list(dict.fromkeys(candidate_ids + ["1", "2", "3", "0", "100"]))
+    own_id = valid_fields.get("id")
     for test_id in ids_to_try:
+        if own_id is not None and str(own_id) == test_id:
+            continue
         status, _, body = http_request(
             url, "POST", headers,
-            json.dumps({"query": f'{{ {sibling_field}({id_arg}: "{test_id}") {{ {control_selection} }} }}'}))
+            json.dumps({"query": f"{{ {sibling_field}({id_arg}: {json.dumps(test_id)}) {{ {control_selection} }} }}"}))
         if delay:
             time.sleep(delay)
-        if status == 0 or _UNKNOWN_FIELD_ERROR.search(body or ""):
+        if status != 200 or _UNKNOWN_FIELD_ERROR.search(body or ""):
+            continue
+        if not _has_graphql_object_response(body, sibling_field):
             continue
 
         test_values = _extract_field_values(body, sibling_field, valid_fields.keys())
@@ -1027,19 +1136,19 @@ def test_graphql_nested_field_authz(url, schema, extra_headers=None, delay=0, ca
 
         leaked = {k: v for k, v in test_values.items() if v is not None and k not in control_non_null}
         if leaked:
-            confidence = "high" if (set(leaked) & SENSITIVE_FIELD_NAMES) else "medium"
-            vuln(f"GraphQL nested-field authz bypass: '{sibling_field}({id_arg}: \"{test_id}\")' "
-                 f"exposed fields never seen via '{self_field}': {sorted(leaked)}")
+            confidence = "medium" if (set(leaked) & SENSITIVE_FIELD_NAMES) else "low"
+            log(f"GraphQL nested-field authz candidate: '{sibling_field}({id_arg}: {test_id!r})' "
+                f"returned fields absent from the self-field control: {sorted(leaked)}")
             findings.append({
-                "type": "graphql_bola_nested_field", "severity": "high",
+                "type": "graphql_bola_nested_field_candidate", "severity": "info",
                 "url": url, "self_field": self_field, "sibling_field": sibling_field,
                 "id_argument": id_arg, "tested_id": test_id,
                 "fields_exposed_via_sibling_only": sorted(leaked), "confidence": confidence,
-                "evidence": f"'{sibling_field}({id_arg}: \"{test_id}\")' returned {sorted(leaked)} "
-                            f"using the caller's OWN session -- these fields were never exposed by "
-                            f"the presumptively-gated '{self_field}' self-field for the caller's own "
-                            f"data (confidence={confidence}: a null-vs-populated scalar can also just "
-                            f"mean the other record happens to have that field filled in).",
+                "validated": False,
+                "evidence": f"'{sibling_field}({id_arg}: {test_id!r})' returned {sorted(leaked)} "
+                            f"using the caller's session but those fields were absent from "
+                            f"'{self_field}'. The target ID's ownership and intended field visibility "
+                            f"were not established; verify those before reporting (confidence={confidence}).",
             })
 
     return findings
@@ -1081,6 +1190,17 @@ def test_graphql_csrf(url, mutation_field, mutation_args=None, cookie_header=Non
     if not mutation_args:
         warn("GraphQL CSRF probe skipped: an explicit --csrf-test-id is required")
         return []
+    if (
+        not is_graphql_name(mutation_field)
+        or any(not is_graphql_name(name) for name in mutation_args)
+        or any(
+            value is None or not str(value) or len(str(value)) > MAX_CANDIDATE_ID_LENGTH
+            or any(ord(char) < 32 for char in str(value))
+            for value in mutation_args.values()
+        )
+    ):
+        warn("GraphQL CSRF probe skipped: invalid mutation/argument name or test argument value")
+        return []
 
     log(f"Testing GraphQL CSRF on mutation '{mutation_field}'...")
     findings = []
@@ -1090,7 +1210,12 @@ def test_graphql_csrf(url, mutation_field, mutation_args=None, cookie_header=Non
                        else f"mutation {{ {mutation_field} {{ __typename }} }}")
     ambient_headers = {"Cookie": cookie_header} if cookie_header else {}
 
-    get_url = url + ("&" if "?" in url else "?") + urllib.parse.urlencode({"query": mutation_query})
+    parsed_url = urllib.parse.urlsplit(url)
+    query_params = urllib.parse.parse_qsl(parsed_url.query, keep_blank_values=True)
+    query_params.append(("query", mutation_query))
+    get_url = urllib.parse.urlunsplit(
+        parsed_url._replace(query=urllib.parse.urlencode(query_params), fragment="")
+    )
     status_get, _, body_get = http_request(get_url, "GET", dict(ambient_headers))
     if delay:
         time.sleep(delay)
@@ -1142,6 +1267,15 @@ def test_graphql_mutation_bola_write(url, mutation_field, id_arg, target_id, ext
         log(f"Mutation-BOLA write probe for '{mutation_field}' skipped -- requires explicit opt-in "
             f"(--allow-mutation-write), since a true positive is a real unauthorized write")
         return []
+    if (
+        not is_graphql_name(mutation_field)
+        or not is_graphql_name(id_arg)
+        or target_id is None
+        or len(str(target_id)) > MAX_CANDIDATE_ID_LENGTH
+        or any(ord(char) < 32 for char in str(target_id))
+    ):
+        warn("Mutation-BOLA write probe skipped: invalid mutation name, ID argument, or target ID")
+        return []
 
     log(f"Testing mutation-BOLA write: '{mutation_field}' against id={target_id!r} (OPT-IN, LIVE WRITE)...")
     findings = []
@@ -1150,6 +1284,9 @@ def test_graphql_mutation_bola_write(url, mutation_field, id_arg, target_id, ext
         headers.update(extra_headers)
 
     payload = dict(write_payload or {})
+    if any(not is_graphql_name(name) for name in payload):
+        warn("Mutation-BOLA write probe skipped: payload contains an invalid GraphQL argument name")
+        return []
     payload[id_arg] = target_id
     args_str = ", ".join(f"{k}: {json.dumps(v)}" for k, v in payload.items())
     query = f"mutation {{ {mutation_field}({args_str}) {{ __typename }} }}"
@@ -1159,13 +1296,16 @@ def test_graphql_mutation_bola_write(url, mutation_field, id_arg, target_id, ext
         time.sleep(delay)
 
     if status == 200 and not _looks_like_error(body):
-        vuln(f"Mutation-BOLA: '{mutation_field}' against id={target_id!r} SUCCEEDED with caller's own session")
+        log(f"Mutation-BOLA candidate: '{mutation_field}' accepted target id={target_id!r}; "
+            "verify persisted effect with a controlled read-back")
         findings.append({
-            "type": "graphql_mutation_bola_write", "severity": "critical", "url": url,
+            "type": "graphql_mutation_bola_write_candidate", "severity": "info", "url": url,
             "mutation_field": mutation_field, "id_argument": id_arg, "target_id": target_id,
+            "validated": False,
             "evidence": f"mutation {{ {mutation_field}({id_arg}: \"{target_id}\") }} returned success "
-                        f"(no authorization error) using the caller's own session against an object "
-                        f"id believed to belong to a different user. REAL WRITE -- not a dry run.",
+                        f"(no GraphQL error) using the caller's own session against an object id "
+                        f"believed to belong to a different user. This is a live write; persisted "
+                        f"authorization impact still requires a controlled read-back.",
         })
     return findings
 
@@ -1184,15 +1324,20 @@ def _find_mutation_bola_candidates(schema):
     7, since both need the same kind of target)."""
     if not schema or not schema.get("types"):
         return []
-    mutation_type = next((t for t in schema["types"] if t["name"].lower() == "mutation"), None)
+    mutation_type = next((t for t in schema["types"] if isinstance(t, dict)
+                          and isinstance(t.get("name"), str)
+                          and t["name"].lower() == "mutation"), None)
     if not mutation_type:
         return []
     candidates = []
     for f in mutation_type.get("fields", []):
+        if not isinstance(f, dict) or not is_graphql_name(f.get("name")):
+            continue
         if not f["name"].lower().startswith(MUTATION_BOLA_PREFIXES):
             continue
-        id_arg = next((a for a in (f.get("args") or []) if "id" in a.lower()), None)
-        if id_arg:
+        id_arg = next((a for a in (f.get("args") or [])
+                       if isinstance(a, str) and "id" in a.lower()), None)
+        if is_graphql_name(id_arg):
             candidates.append({"mutation_field": f["name"], "id_arg": id_arg})
     return candidates
 
@@ -1425,7 +1570,8 @@ def main():
     parser.add_argument("--output", "-o", help="Output JSON file")
     parser.add_argument("--token", help="Auth token (Bearer)")
     parser.add_argument("--cookie", help="Session cookie")
-    parser.add_argument("--delay", type=float, default=0, help="Delay between requests (seconds)")
+    parser.add_argument("--delay", type=parse_delay, default=0,
+                        help="Delay between requests (0-60 seconds)")
     parser.add_argument("--skip-graphql-depth-test", action="store_true",
                          help="Skip the GraphQL depth/complexity DoS and fragment-cycle probes")
     parser.add_argument("--skip-graphql-authz-test", action="store_true",
@@ -1442,8 +1588,9 @@ def main():
                          help="Opt-in: actually call the discovered update*/delete* mutation against "
                               "--mutation-target-id with the caller's own session. A true positive is a "
                               "REAL, LIVE unauthorized write -- off by default.")
-    parser.add_argument("--candidate-ids", help="Comma-separated extra object ids to try in the nested-"
-                         "field authz differential probe, in addition to the built-in small-integer seeds")
+    parser.add_argument("--candidate-ids", type=parse_candidate_ids, default=[],
+                        help=f"Comma-separated extra object ids (up to {MAX_CANDIDATE_IDS}, "
+                             f"{MAX_CANDIDATE_ID_LENGTH} chars each) for the nested-field authz probe")
     parser.add_argument("--engine-version", help="Known/leaked GraphQL engine version string (from recon, "
                          "an error-message leak, a changelog, etc.) -- enables the static, version-aware "
                          "CVE hypothesis check against the auto-fingerprinted engine")
@@ -1575,7 +1722,7 @@ def main():
 
         if not args.skip_graphql_authz_test:
             log("Phase 3c: GraphQL nested-field authorization and CSRF probes...")
-            candidate_ids = [c.strip() for c in args.candidate_ids.split(",") if c.strip()] if args.candidate_ids else []
+            candidate_ids = args.candidate_ids or []
             graphql_findings.extend(test_graphql_nested_field_authz(
                 graphql_url, graphql_schema, extra_headers, args.delay, candidate_ids))
 

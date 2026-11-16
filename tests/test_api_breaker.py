@@ -572,6 +572,181 @@ class ApiBreakerScopeTests(unittest.TestCase):
         self.assertTrue(all(f["type"] == "graphql_csrf_candidate" for f in findings))
         self.assertTrue(all(f["severity"] == "INFO" and not f["validated"] for f in findings))
 
+    def test_graphql_delay_and_candidate_id_arguments_are_bounded(self):
+        self.assertEqual(schema_builder.parse_delay("0"), 0)
+        self.assertEqual(schema_builder.parse_delay("60"), 60)
+        for value in ("nan", "inf", "-0.1", "60.1", "oops"):
+            with self.subTest(value=value), self.assertRaises(argparse.ArgumentTypeError):
+                schema_builder.parse_delay(value)
+
+        self.assertEqual(schema_builder.parse_candidate_ids("a, b,a,,c"), ["a", "b", "c"])
+        too_many = ",".join(f"id{i}" for i in range(schema_builder.MAX_CANDIDATE_IDS + 1))
+        too_long = "x" * (schema_builder.MAX_CANDIDATE_ID_LENGTH + 1)
+        for value in (too_many, too_long, "bad\nvalue"):
+            with self.subTest(candidate=value[:20]), self.assertRaises(argparse.ArgumentTypeError):
+                schema_builder.parse_candidate_ids(value)
+
+    def test_graphql_depth_fast_transport_failure_is_inconclusive(self):
+        with patch.object(schema_builder, "_pick_working_field_pair", return_value=("node", "node")), \
+             patch.object(schema_builder, "http_request", return_value=(0, {}, "")) as request, \
+             patch.object(schema_builder.time, "monotonic", side_effect=[0.0, 0.01]):
+            findings, threshold, pair = schema_builder.test_graphql_depth_complexity_dos(
+                "https://api.example.test/graphql", depth_steps=[2]
+            )
+
+        self.assertEqual(findings, [])
+        self.assertIsNone(threshold)
+        self.assertEqual(pair, ("node", "node"))
+        request.assert_called_once()
+
+    def test_graphql_depth_server_error_is_candidate_not_confirmed_dos(self):
+        with patch.object(schema_builder, "_pick_working_field_pair", return_value=("node", "node")), \
+             patch.object(schema_builder, "http_request", return_value=(503, {}, "upstream error")), \
+             patch.object(schema_builder.time, "monotonic", side_effect=[0.0, 0.1]):
+            findings, _, _ = schema_builder.test_graphql_depth_complexity_dos(
+                "https://api.example.test/graphql", depth_steps=[2]
+            )
+
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0]["type"], "graphql_depth_complexity_dos_candidate")
+        self.assertEqual(findings[0]["classification"], "server_error_candidate")
+        self.assertFalse(findings[0]["validated"])
+
+    def test_graphql_depth_timeout_is_candidate_not_confirmed_dos(self):
+        with patch.object(schema_builder, "_pick_working_field_pair", return_value=("node", "node")), \
+             patch.object(schema_builder, "http_request", return_value=(0, {}, "")), \
+             patch.object(schema_builder.time, "monotonic", side_effect=[0.0, 9.8]):
+            findings, _, _ = schema_builder.test_graphql_depth_complexity_dos(
+                "https://api.example.test/graphql", depth_steps=[2], timeout=10
+            )
+
+        self.assertEqual(findings[0]["classification"], "timeout_candidate")
+        self.assertFalse(findings[0]["validated"])
+
+    def test_graphql_introspection_bypass_rejects_non_success_and_marks_acceptance_candidate(self):
+        with patch.object(schema_builder, "http_request", return_value=(403, {}, '{"data":{"node":{}}}')) as request:
+            self.assertEqual(
+                schema_builder.test_graphql_introspection_naming_bypass(
+                    "https://api.example.test/graphql", 4, ("node", "node")
+                ),
+                [],
+            )
+        request.assert_called_once()
+
+        with patch.object(schema_builder, "http_request", return_value=(200, {}, '{"data":{"node":{}}}')):
+            findings = schema_builder.test_graphql_introspection_naming_bypass(
+                "https://api.example.test/graphql", 4, ("node", "node")
+            )
+        self.assertEqual(findings[0]["type"], "graphql_depth_limit_bypass_introspection_naming_candidate")
+        self.assertFalse(findings[0]["validated"])
+
+    def test_graphql_introspection_bypass_rejects_invalid_remote_names_without_request(self):
+        with patch.object(schema_builder, "http_request") as request:
+            findings = schema_builder.test_graphql_introspection_naming_bypass(
+                "https://api.example.test/graphql", 4, ("node } mutation { leak", "node")
+            )
+        self.assertEqual(findings, [])
+        request.assert_not_called()
+
+    def test_graphql_nested_authz_requires_valid_control_and_returns_candidate(self):
+        schema = {"types": [
+            {"name": "Query", "fields": [
+                {"name": "me", "type": "User", "args": []},
+                {"name": "user", "type": "User", "args": ["id"]},
+            ]},
+            {"name": "User", "fields": []},
+        ]}
+
+        def respond(_url, _method="GET", _headers=None, data=None, **_kwargs):
+            query = json.loads(data)["query"]
+            if "me {" in query:
+                return 200, {}, '{"data":{"me":{"id":"alice","email":null}}}'
+            return 200, {}, '{"data":{"user":{"id":"other","email":"other@example.test"}}}'
+
+        with patch.object(schema_builder, "http_request", side_effect=respond):
+            findings = schema_builder.test_graphql_nested_field_authz(
+                "https://api.example.test/graphql", schema
+            )
+
+        self.assertTrue(findings)
+        self.assertTrue(all(f["type"] == "graphql_bola_nested_field_candidate" for f in findings))
+        self.assertTrue(all(f["severity"] == "info" and not f["validated"] for f in findings))
+
+    def test_graphql_nested_authz_does_not_classify_auth_failures_as_leaks(self):
+        schema = {"types": [
+            {"name": "Query", "fields": [
+                {"name": "me", "type": "User", "args": []},
+                {"name": "user", "type": "User", "args": ["id"]},
+            ]},
+            {"name": "User", "fields": []},
+        ]}
+        with patch.object(schema_builder, "http_request", return_value=(401, {}, '{"data":{"me":{"email":"x"}}}')):
+            findings = schema_builder.test_graphql_nested_field_authz(
+                "https://api.example.test/graphql", schema
+            )
+        self.assertEqual(findings, [])
+
+    def test_graphql_nested_authz_json_quotes_operator_supplied_id(self):
+        schema = {"types": [
+            {"name": "Query", "fields": [
+                {"name": "me", "type": "User", "args": []},
+                {"name": "user", "type": "User", "args": ["id"]},
+            ]},
+            {"name": "User", "fields": []},
+        ]}
+        attack_string = 'other") { admin } #'
+        queries = []
+
+        def respond(_url, _method="GET", _headers=None, data=None, **_kwargs):
+            query = json.loads(data)["query"]
+            queries.append(query)
+            if "me {" in query:
+                return 200, {}, '{"data":{"me":{"id":"alice","email":null}}}'
+            return 200, {}, '{"data":{"user":{"id":"other","email":"other@example.test"}}}'
+
+        with patch.object(schema_builder, "http_request", side_effect=respond):
+            schema_builder.test_graphql_nested_field_authz(
+                "https://api.example.test/graphql", schema, candidate_ids=[attack_string]
+            )
+
+        self.assertTrue(any(f"id: {json.dumps(attack_string)}" in query for query in queries))
+
+    def test_graphql_mutation_write_remains_opt_in_and_selected_opt_in_sends(self):
+        with patch.object(schema_builder, "http_request") as request:
+            self.assertEqual(schema_builder.test_graphql_mutation_bola_write(
+                "https://api.example.test/graphql", "updateUser", "id", "canary-2"
+            ), [])
+        request.assert_not_called()
+
+        with patch.object(schema_builder, "http_request", return_value=(
+            200, {}, '{"data":{"updateUser":{"__typename":"User"}}}'
+        )) as request:
+            findings = schema_builder.test_graphql_mutation_bola_write(
+                "https://api.example.test/graphql", "updateUser", "id", "canary-2",
+                allow_write=True,
+            )
+        request.assert_called_once()
+        self.assertEqual(findings[0]["type"], "graphql_mutation_bola_write_candidate")
+        self.assertFalse(findings[0]["validated"])
+
+    def test_graphql_fragment_cycle_acceptance_is_unverified_candidate(self):
+        with patch.object(schema_builder, "http_request", return_value=(
+            200, {}, '{"data":{"__typename":"Query"}}'
+        )):
+            findings = schema_builder.test_graphql_fragment_cycle("https://api.example.test/graphql")
+        self.assertEqual(findings[0]["type"], "graphql_fragment_cycle_candidate")
+        self.assertFalse(findings[0]["validated"])
+
+    def test_graphql_candidate_findings_map_to_owasp_api_categories(self):
+        bola = api_report.generate_finding_report({
+            "type": "graphql_bola_nested_field_candidate", "severity": "info", "validated": False,
+        }, 1)
+        dos = api_report.generate_finding_report({
+            "type": "graphql_depth_complexity_dos_candidate", "severity": "info", "validated": False,
+        }, 2)
+        self.assertEqual(bola["owasp_mapping"]["id"], "API1:2023")
+        self.assertEqual(dos["owasp_mapping"]["id"], "API4:2023")
+
     def test_schema_main_skips_graphql_csrf_without_explicit_test_id(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             output_path = Path(temp_dir) / "schema.json"

@@ -72,6 +72,9 @@ FINDING_TO_OWASP = {
     # BOLA findings -> API1
     "bola": "API1",
     "bola_idor": "API1",
+    "graphql_bola_nested_field": "API1",
+    "graphql_mutation_bola_write": "API1",
+    "graphql_mutation_bola_write_candidate": "API1",
 
     # Auth findings -> API2
     "jwt_none_bypass": "API2",
@@ -98,6 +101,9 @@ FINDING_TO_OWASP = {
     "bfla": "API5",
     "bfla_method_override": "API5",
     "graphql_csrf_candidate": "API8",
+    "graphql_depth_complexity_dos": "API4",
+    "graphql_depth_limit_bypass_introspection_naming": "API4",
+    "graphql_fragment_cycle": "API4",
 
     # Business logic -> API6
     "price_manipulation": "API6",
