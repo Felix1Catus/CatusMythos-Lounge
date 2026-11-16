@@ -259,6 +259,14 @@ def normalize_finding(finding, source_tool):
         normalized["chainable_as"] = ["data_access"]
     elif "ssti" in vuln_type:
         normalized["chainable_as"] = ["rce", "data_access"]
+    elif "upload" in vuln_type and "imagetragick" in vuln_type and "attempted" in vuln_type:
+        # upload_tester.py's ImageTragick RCE/SSRF/LFI findings are
+        # explicitly NOT auto-confirmed (they need an OOB callback hit or
+        # manual image inspection the tool itself can't verify) -- same
+        # "precondition not yet proven" semantics as blockedcve/fpm, not a
+        # directly chainable primitive yet.
+        normalized["chainable_as"] = ["rce_potential", "precondition_dependent"]
+        normalized["requires"] = ["precondition_enabler"]
     elif "upload" in vuln_type:
         normalized["chainable_as"] = ["rce", "webshell"]
     elif "fpm" in vuln_type:
