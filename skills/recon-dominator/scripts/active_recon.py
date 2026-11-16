@@ -169,12 +169,22 @@ def _query_soa_from_nameserver(domain, nameserver, timeout=8):
         )
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return "unreachable"
-    output = result.stdout
-    status_match = re.search(r"status:\s*(\w+)", output)
+    return _interpret_soa_output(result.stdout)
+
+
+def _interpret_soa_output(output):
+    """Pure interpretation of a `dig SOA @nameserver` response body into the
+    Sitting-Ducks delegation verdict: 'authoritative' (real SOA answer),
+    'lame' (REFUSED/SERVFAIL/NOTAUTH/NXDOMAIN, or NOERROR with no answer --
+    the 'black hole' signature), or 'unreachable' (no recognizable status --
+    inconclusive). Separated from the subprocess call so the delegation
+    verdict is unit-testable without a live resolver."""
+    text = output or ""
+    status_match = re.search(r"status:\s*(\w+)", text)
     status = status_match.group(1) if status_match else None
     if status in ("REFUSED", "SERVFAIL", "NOTAUTH", "NXDOMAIN"):
         return "lame"
-    has_soa_answer = re.search(r"^\S+\.?\s+\d+\s+IN\s+SOA\s", output, re.MULTILINE)
+    has_soa_answer = re.search(r"^\S+\.?\s+\d+\s+IN\s+SOA\s", text, re.MULTILINE)
     if status == "NOERROR" and has_soa_answer:
         return "authoritative"
     if status == "NOERROR" and not has_soa_answer:

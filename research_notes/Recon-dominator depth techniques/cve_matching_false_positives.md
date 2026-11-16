@@ -116,3 +116,47 @@ Quantified statistics exist but are almost all vendor-published rather than inde
 ### Gaps
 - No academic or industry paper was found that isolates "bare version-string range comparison against a CVE's published affected-version range" as the sole independent variable and reports a false-positive/negative rate for that comparison alone, decoupled from broader SCA/container/contextual-analysis methodology. This specific, narrow statistic does not appear to exist in citable published form; every available number measures something adjacent rather than the raw comparison itself.
 - No source attempted to quantify false-positive rates specifically for the NVD CVE 2.0 API (the exact data source `cve_lookup.py` queries) as distinct from downstream SCA tools that apply additional cleaning atop raw NVD data.
+
+## Prose-range boundary semantics: inclusive vs exclusive (2026-11-16)
+
+### Takeaway
+When NVD has not yet attached structured CPE data, `cve_lookup.py` falls back
+to parsing the affected range out of the CVE's prose description. Natural-
+language range phrases carry a precise, standardized boundary meaning that must
+be preserved, or the fallback produces an off-by-one false positive on the exact
+fixed version:
+
+- **Inclusive upper bound** — "through X", "<= X": version X *is* affected.
+- **Exclusive upper bound** — "before X", "prior to X", "< X": X is the fixed
+  version and is *not* affected.
+
+This mirrors NVD's own structured model, which separates `versionEndIncluding`
+from `versionEndExcluding` for exactly this reason, and the CVE-description
+authoring convention CNAs follow ("This issue affects X: from n/a through
+4.2.1." means 4.2.1 is the last affected build, whereas "fixed in / before
+4.2.1" means 4.2.1 is already patched).
+
+### Finding (local code)
+`_parse_range_from_text()` previously collapsed *all* of these phrasings into a
+single inclusive `end_incl` bound, and the caller only ever passed `end_incl`
+to `_version_in_range()`. Net effect: a description reading "affects versions
+before 4.2.1" wrongly flagged an installed 4.2.1 as `version_appears_affected`,
+in precisely the low-confidence path (`description-text-heuristic`) that exists
+for CVEs NVD has not enriched yet — the hypotheses most likely to be acted on
+without a structured cross-check. Fixed by distinguishing inclusive from
+exclusive keywords (and the `<` vs `<=` operator) and threading both
+`end_incl`/`end_excl` through to the range comparison. A secondary fix strips the
+trailing sentence period the greedy version regex pulled in ("...through 4.2.1."
+-> stored as "4.2.1.") so the saved `affected_version_range` string is clean.
+
+### Sources
+- NVD CVE API / CPE match range semantics (`versionStartIncluding`,
+  `versionStartExcluding`, `versionEndIncluding`, `versionEndExcluding`):
+  https://nvd.nist.gov/developers/vulnerabilities
+- CVE record / CNA description conventions for affected-version ranges:
+  https://www.cve.org/AllResources/CveServices
+
+### Regression coverage
+`tests/test_recon_dominator.py::ParseRangeFromTextTests` locks in the
+inclusive/exclusive distinction and the exact-boundary case (an installed
+version equal to a "before X" bound must resolve to not-affected).

@@ -12,7 +12,7 @@ doesn't mistake uneven coverage for uniform coverage.
   - `6695fcf` — isolated browser runtime security auditor.
   - `da46b1d` — integrated the local deep-payload LFI + ImageTragick work onto
     the audited base (3-way merge of a local branch; see commit body).
-- Verification: 76 unit tests + 21 subtests pass; Ruff clean; compileall ok;
+- Verification: 105 unit tests + 21 subtests pass; Ruff clean; compileall ok;
   CLI-docs 10/94/58; shared helpers in sync.
 - The browser auditor has now had a **real Playwright/Chromium integration run**
   against a local fixture (passive, active query, active fragment via both
@@ -31,8 +31,12 @@ finding-confidence, PoC-generation safety.
 **Shallowest / highest bug-risk — prioritize these:**
 - `cloud-pivot-finder`, `attack-path-architect` — mostly repo-wide lint/timestamp
   and shared-helper coverage; little domain-specific end-to-end testing.
-- `recon-dominator` — crawler + redirect got focused tests, but recon/OSINT/CVE/
-  port-scan/report workflows were not comprehensively exercised.
+- `recon-dominator` — DEEPENED 2026-11-16: `cve_lookup` version-range matching
+  and `active_recon`'s Sitting-Ducks SOA delegation verdict now have a 27-test
+  matrix, and two real `cve_lookup` bugs were fixed (prose "before/prior to/< X"
+  treated as inclusive -> false positive on the fixed version; trailing-period
+  version strings). Still lightly covered: OSINT, port-scan, js_recon,
+  google_dorker, wayback, generate_report.
 - `03-exploit-development` — only the model-artifact scanner was hardened.
 - `16-ai-llm-security` — HTTP/dependency/redirect paths reviewed, but
   prompt-injection, MCP, RAG, and consumption tests were not adversarially tested.

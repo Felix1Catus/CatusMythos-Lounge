@@ -143,8 +143,7 @@ def _extract_cvss(metrics):
 
 
 _RANGE_TEXT_RE = re.compile(
-    r"through\s+v?(\d[\d.]*)|before\s+v?(\d[\d.]*)|prior\s+to\s+v?(\d[\d.]*)|"
-    r"<\s*=?\s*v?(\d[\d.]*)",
+    r"(?P<kw>through|before|prior\s+to|<\s*=?)\s*v?(?P<ver>\d[\d.]*)",
     re.IGNORECASE,
 )
 
@@ -155,14 +154,30 @@ def _parse_range_from_text(description):
     'This issue affects X: from n/a through 4.2.1.' is a standard phrasing.
     Best-effort only: returns the end-of-range version if a recognizable
     pattern is found, else None. Never used to REFUTE a hypothesis, only to
-    avoid reporting 'unclear' when the text plainly states an upper bound."""
-    m = _RANGE_TEXT_RE.search(description)
+    avoid reporting 'unclear' when the text plainly states an upper bound.
+
+    Distinguishes an INCLUSIVE upper bound ('through X', '<= X' -- X itself
+    is affected) from an EXCLUSIVE one ('before X', 'prior to X', '< X' -- X
+    is the fixed version and is NOT affected). Collapsing the exclusive forms
+    into an inclusive end bound (the previous behavior) produced a false
+    'affected' on the exact fixed version -- e.g. 'affects versions before
+    4.2.1' wrongly flagged an installed 4.2.1 as vulnerable."""
+    m = _RANGE_TEXT_RE.search(description or "")
     if not m:
         return None
-    end_version = next((g for g in m.groups() if g), None)
+    # Strip a trailing sentence period the greedy [\d.]* pulls in
+    # ("...through 4.2.1." -> "4.2.1."), so the stored range string is clean.
+    end_version = m.group("ver").rstrip(".")
     if not end_version:
         return None
-    return {"start_incl": None, "start_excl": None, "end_incl": end_version, "end_excl": None}
+    kw = m.group("kw").lower().replace(" ", "")
+    inclusive = kw in ("through", "<=")
+    return {
+        "start_incl": None,
+        "start_excl": None,
+        "end_incl": end_version if inclusive else None,
+        "end_excl": None if inclusive else end_version,
+    }
 
 
 def _matches_component(cve_item, product_name):
@@ -356,7 +371,11 @@ def lookup_component(name, version, max_results=200, recent_years=5):
             if text_range:
                 version_range = text_range
                 range_source = "description-text-heuristic"
-                affected = _version_in_range(version, None, None, text_range.get("end_incl"), None)
+                affected = _version_in_range(
+                    version,
+                    text_range.get("start_incl"), text_range.get("start_excl"),
+                    text_range.get("end_incl"), text_range.get("end_excl"),
+                )
             else:
                 # Genuinely nothing structured OR prose to compare against --
                 # this hypothesis survives purely because the keyword gate
