@@ -1,5 +1,6 @@
 """Focused API Breaker scope and active-probe regressions."""
 
+import argparse
 import importlib.util
 import json
 import sys
@@ -32,9 +33,159 @@ schema_builder = load_api_script("api_breaker_schema_regressions", "schema_build
 api_discovery = load_api_script("api_breaker_discovery_regressions", "api_discovery.py")
 api_report = load_api_script("api_breaker_report_regressions", "api_report.py")
 authz_tester = load_api_script("api_breaker_authz_regressions", "authz_tester.py")
+auth_analyzer = load_api_script("api_breaker_auth_regressions", "auth_analyzer.py")
 
 
 class ApiBreakerScopeTests(unittest.TestCase):
+    def test_jwt_decoder_rejects_non_object_json_segments(self):
+        header_array = auth_analyzer.b64url_encode("[]")
+        payload_object = auth_analyzer.b64url_encode("{}")
+        header_object = auth_analyzer.b64url_encode("{}")
+        payload_array = auth_analyzer.b64url_encode("[]")
+
+        self.assertIsNone(auth_analyzer.decode_jwt(f"{header_array}.{payload_object}.sig"))
+        self.assertIsNone(auth_analyzer.decode_jwt(f"{header_object}.{payload_array}.sig"))
+
+    def test_jwt_decoder_rejects_invalid_base64url_and_non_string_tokens(self):
+        payload = auth_analyzer.b64url_encode("{}")
+        self.assertIsNone(auth_analyzer.decode_jwt(f"!!!!.{payload}.sig"))
+        self.assertIsNone(auth_analyzer.decode_jwt(None))
+
+    def test_jwt_report_redacts_sensitive_values_recursively(self):
+        claims = {
+            "sub": "alice",
+            "email": "alice@example.test",
+            "nested": [{"api_key": "secret-value", "role": "operator"}],
+        }
+
+        redacted = auth_analyzer.redact_claim_values(claims)
+
+        self.assertEqual(redacted["sub"], "alice")
+        self.assertEqual(redacted["email"], "[REDACTED]")
+        self.assertEqual(redacted["nested"][0]["api_key"], "[REDACTED]")
+        self.assertEqual(redacted["nested"][0]["role"], "operator")
+
+    def test_jwt_privilege_claim_finding_redacts_nested_sensitive_values(self):
+        decoded = {
+            "header": {"alg": "HS256"},
+            "payload": {
+                "permissions": {
+                    "role": "admin",
+                    "email": "alice@example.test",
+                    "jwk": {"k": "private-material"},
+                }
+            },
+        }
+
+        findings = auth_analyzer.analyze_jwt_claims(decoded)
+        privilege = next(item for item in findings if item["type"] == "jwt_privilege_claims")
+
+        self.assertEqual(privilege["claims"]["permissions"]["role"], "admin")
+        self.assertEqual(privilege["claims"]["permissions"]["email"], "[REDACTED]")
+        self.assertEqual(privilege["claims"]["permissions"]["jwk"], "[REDACTED]")
+
+    def test_jwt_none_bypass_requires_invalid_token_rejection_to_confirm(self):
+        decoded = {"header": {"alg": "HS256"}, "payload": {"sub": "alice"}}
+
+        with patch.object(
+            auth_analyzer, "http_request",
+            side_effect=[(401, {}, ""), (200, {}, '{"user": "alice"}')],
+        ):
+            findings = auth_analyzer.test_jwt_none_bypass(
+                decoded, "https://api.example.test/private", delay=0
+            )
+
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0]["type"], "jwt_none_bypass")
+        self.assertTrue(findings[0]["validated"])
+
+    def test_jwt_none_bypass_on_public_endpoint_is_only_candidate(self):
+        decoded = {"header": {"alg": "HS256"}, "payload": {"sub": "alice"}}
+
+        with patch.object(
+            auth_analyzer, "http_request",
+            side_effect=[(200, {}, "public"), (200, {}, "public")] * 4,
+        ):
+            findings = auth_analyzer.test_jwt_none_bypass(
+                decoded, "https://api.example.test/public", delay=0
+            )
+
+        self.assertEqual(len(findings), 4)
+        self.assertTrue(all(f["type"] == "jwt_none_bypass_candidate" for f in findings))
+        self.assertTrue(all(f["validated"] is False for f in findings))
+
+    def test_jwt_crit_probe_compares_acceptance_not_exact_status_code(self):
+        decoded = {"header": {"alg": "HS256"}, "payload": {"sub": "alice"}}
+
+        with patch.object(
+            auth_analyzer, "http_request",
+            side_effect=[
+                (401, {}, ""),  # malformed-token control
+                (200, {}, '{"user": "alice"}'),  # none-alg control
+                (201, {}, '{"user": "alice"}'),  # crit token accepted
+            ],
+        ):
+            findings = auth_analyzer.test_jwt_crit_header_bypass(
+                decoded, "https://api.example.test/private", delay=0
+            )
+
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0]["type"], "jwt_crit_not_enforced")
+        self.assertTrue(findings[0]["validated"])
+
+    def test_jwt_delay_parser_rejects_nonfinite_and_unbounded_values(self):
+        self.assertEqual(auth_analyzer.parse_delay("0.5"), 0.5)
+        for value in ("-1", "inf", "nan", "61"):
+            with self.subTest(value=value), self.assertRaises(argparse.ArgumentTypeError):
+                auth_analyzer.parse_delay(value)
+
+    def test_api_key_position_requires_rejected_unauthenticated_control(self):
+        def record_request(url, method="GET", headers=None, **kwargs):
+            if headers or "api_key=" in url or "apikey=" in url or "key=" in url or "token=" in url:
+                return 200, {}, '{"ok": true}'
+            return 401, {}, ""
+
+        with patch.object(auth_analyzer, "http_request", side_effect=record_request):
+            findings = auth_analyzer.test_api_key_positions(
+                "https://api.example.test",
+                "test-key",
+                ["https://api.example.test/private"],
+                delay=0,
+            )
+
+        self.assertEqual(len(findings), 9)
+        self.assertTrue(all(item["type"] == "api_key_position" for item in findings))
+        self.assertTrue(all(item["validated"] is True for item in findings))
+
+    def test_api_key_on_public_endpoint_is_only_candidate(self):
+        with patch.object(auth_analyzer, "http_request", return_value=(200, {}, "public")):
+            findings = auth_analyzer.test_api_key_positions(
+                "https://api.example.test",
+                "test-key",
+                ["https://api.example.test/public"],
+                delay=0,
+            )
+
+        self.assertEqual(len(findings), 9)
+        self.assertTrue(all(item["type"] == "api_key_position_candidate" for item in findings))
+        self.assertTrue(all(item["validated"] is False for item in findings))
+
+    def test_no_auth_data_is_candidate_until_sensitivity_is_known(self):
+        def record_request(url, method="GET", headers=None, **kwargs):
+            return 200, {}, "x" * 80
+
+        with patch.object(auth_analyzer, "http_request", side_effect=record_request):
+            findings = auth_analyzer.test_no_auth_access(
+                "https://api.example.test",
+                ["https://api.example.test/private"],
+                delay=0,
+                auth_token="valid-token",
+            )
+
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0]["type"], "no_auth_required_candidate")
+        self.assertFalse(findings[0]["validated"])
+
     def test_bola_object_urls_replace_templates_and_preserve_query(self):
         base = "https://api.example.test"
         self.assertEqual(

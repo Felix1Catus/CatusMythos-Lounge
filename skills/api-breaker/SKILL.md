@@ -151,6 +151,16 @@ API base origin before sending a token or cookie. When using `--input`, pass
 `--api-base` explicitly; imported metadata never chooses the target.
 Off-origin endpoints are skipped.
 
+The JWT and API-key probes actively send their payloads by default. Before
+classifying a 2xx response as accepted credentials, the analyzer sends a
+malformed-token or unauthenticated control to the same endpoint; when that
+control is also accepted, results stay INFO candidates instead of being
+reported as confirmed bypasses. No-auth data remains a candidate until its
+sensitivity and intended access are established. JWT header and payload values
+written to the JSON result redact common credential and personal-data claim
+keys. The inter-request delay is limited to 0-60 seconds, and the timing
+injection sleep is limited to 1-10 seconds.
+
 ### Step 4: Authorization Testing (BOLA/BFLA)
 
 ```bash
