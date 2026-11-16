@@ -24,7 +24,7 @@ python3 scripts/api_discovery.py --domain {target_domain}
 
 Discovery methods:
 1. **Path fuzzing**: /api/, /v1/, /v2/, /graphql, /rest/, /swagger.json, /openapi.json, /api-docs
-2. **JavaScript analysis**: Parse JS files for hardcoded API endpoints, base URLs, fetch/axios calls
+2. **JavaScript analysis**: Fetch up to 20 same-origin script files from the target page and parse them for hardcoded API endpoints, base URLs, fetch/axios calls; off-origin scripts are skipped
 3. **Wayback Machine**: Historical API endpoints that may still be active
 4. **Common patterns**: /{resource}s, /{resource}/{id}, /{resource}/{id}/{subresource}
 5. **GraphQL detection**: /graphql, /graphiql, /playground, /api/graphql
@@ -57,6 +57,11 @@ cap request volume.
 ```bash
 python3 scripts/schema_builder.py --api-base {api_url}
 ```
+
+When using `--input`, also pass an explicit trusted `--api-base`. Imported
+metadata does not choose the target; off-origin endpoint URLs are skipped
+before authenticated probes are sent. Discovery and schema reconstruction
+still actively send the documented HTTP and GraphQL probes to that origin.
 
 Even without documentation:
 1. Send requests with varying parameters and observe responses
@@ -95,11 +100,13 @@ Output: Reconstructed API schema in OpenAPI format.
   sibling by-ID field with a *different* ID using the *same* session. A
   field that leaks via the sibling but was null via self (especially
   email/role/permissions-class fields) is a confirmed object/field-level
-  authz finding — no credential manipulation needed. Also runs a GraphQL
-  CSRF probe (a discovered mutation replayed as GET/form-POST with no
-  token) and an **opt-in-only** mutation-BOLA write probe
-  (`--allow-mutation-write`, off by default — a true positive is a real,
-  live unauthorized write).
+  authz finding — no credential manipulation needed. The GraphQL CSRF probe
+  submits a discovered mutation over GET and form-POST only when both
+  `--cookie` and an operator-approved `--csrf-test-id` are supplied; these
+  requests can change that object. Results are candidates until browser cookie
+  policy and persisted state are verified. The separate mutation-BOLA write
+  probe remains **opt-in-only** with `--allow-mutation-write` (off by default;
+  a true positive is a real, live unauthorized write).
 - **Engine fingerprinting + version-aware CVE hypotheses** — best-effort
   Apollo/graphql-java/Hasura detection from headers/error-shape, then (if
   `--engine-version` is supplied) a static, **range-aware** table lookup
@@ -140,9 +147,9 @@ Detect and test:
 - **No auth**: Endpoints accessible without any authentication
 
 Authentication analysis filters imported endpoint URLs against the supplied
-API base origin before sending a token or cookie. Supply `--api-base` when the
-input file does not contain a trustworthy base URL; off-origin endpoints are
-skipped.
+API base origin before sending a token or cookie. When using `--input`, pass
+`--api-base` explicitly; imported metadata never chooses the target.
+Off-origin endpoints are skipped.
 
 ### Step 4: Authorization Testing (BOLA/BFLA)
 
@@ -191,6 +198,11 @@ For each creation/update endpoint:
 python3 scripts/rate_limiter.py --api-base {api_url}
 ```
 
+Use the same explicit `--api-base` with `--input`; imported URLs are scoped to
+that exact origin before credentials or rate-limit probes are sent. The
+default is 120 requests per endpoint; `--count` accepts 1–1000. This is active
+traffic, including burst, path/method variation, and GraphQL batching probes.
+
 Test:
 - Send 100+ rapid requests to each endpoint
 - Check for 429 responses or rate limit headers
@@ -237,8 +249,19 @@ breaker depth techniques/rate_limit_versioning.md):
 ### Step 7: Business Logic Testing
 
 ```bash
-python3 scripts/logic_tester.py --input {schema_file} --token {token}
+python3 scripts/logic_tester.py --input {schema_file} --api-base {api_url} --token {token}
 ```
+
+`logic_tester.py` requires an explicit trusted `--api-base` and skips imported
+off-origin endpoints. It actively sends price, quantity, privilege, coupon,
+negative-amount, and concurrent race payloads using POST/PUT/PATCH. Use only
+with explicit authorization and target-approved test accounts/data; the
+script does not add a second write opt-in, so these probes run when selected.
+Response echoes, keyword matches, successful negative-value requests, and
+multiple concurrent 2xx responses are reported as low-confidence candidates.
+Verify a persisted state change and compare it with a safe baseline before
+reporting impact. This follows the business-specific impact model in
+[OWASP API6](https://api-security.owasp.org/editions/2023/en/0xa6-unrestricted-access-to-sensitive-business-flows/).
 
 Context-aware tests:
 - **E-commerce**: Price manipulation, quantity overflow, currency confusion, coupon stacking

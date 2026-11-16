@@ -197,3 +197,69 @@ Primary implementation references: [Claude Code command-hook limits](https://cod
 [WinGet install options](https://learn.microsoft.com/en-us/windows/package-manager/winget/install),
 [Playwright Python browser installation](https://playwright.dev/python/docs/browsers), and
 [OWASP Amass current install docs](https://github.com/owasp-amass/docs/blob/master/docs/index.md).
+
+---
+
+## Follow-up addendum — API-breaker scope and evidence (2026-11-16)
+
+Starting point was clean `main` at
+`a95bab9c9334023a82dde223190e38ca1059f82f`, after the bootstrap continuation.
+This pass prioritizes the API-breaker coverage gap called out in `HANDOVER.md`
+and `INVENTORY.md`. The complete skill remains partially audited.
+
+### Findings and changes
+
+- `schema_builder.py`, `rate_limiter.py`, and `logic_tester.py` could trust
+  imported endpoint URLs or metadata without binding them to the operator's
+  intended origin. These CLIs now require an explicit credential-free
+  `--api-base`; imported URLs are resolved and filtered through the shared
+  same-origin check before any authenticated probes run. `schema_builder.py`
+  requires that explicit base when `--input` is used.
+- `api_discovery.py` defined a JavaScript endpoint extractor but never invoked
+  it. It now parses script tags from the target page, analyzes at most 20
+  same-origin scripts, skips external scripts and API URLs, and probes the
+  extracted same-origin paths. Its target URL and worker count are validated.
+- `rate_limiter.py` now rejects non-finite/negative delays and request counts
+  outside 1–1000; the default remains 120. This keeps explicit rate tests
+  configurable while avoiding accidental zero-work false reports and
+  unbounded count values.
+- `logic_tester.py` had labeled response status, field presence, or concurrent
+  2xx counts as confirmed price/quantity/coupon/negative-amount/race/privilege
+  vulnerabilities without verifying the manipulated value or a persisted
+  state change. Exact injected-value echoes are now low-confidence candidates;
+  other accepted/race signals are also informational candidates pending
+  read-back. `api_report.py` preserves API6/API5 mapping while explaining that
+  candidate impact is unverified. The active POST/PUT/PATCH payloads and race
+  probes remain enabled when selected; no new write flag was introduced.
+- `schema_builder.py` previously submitted GraphQL CSRF mutations against a
+  guessed object ID (`1`) even without an ambient session cookie, and treated a
+  successful response as confirmed CSRF impact. It now submits those GET/form
+  mutations only when both `--cookie` and an operator-approved
+  `--csrf-test-id` are present. The requests remain active when selected, but
+  successful responses are informational candidates pending browser cookie
+  policy and persisted-state verification.
+- A specific `logic_tester.py --endpoint` run previously reached some payload
+  routines once through category classification and again through the
+  all-tests path. The category pass is now skipped for this explicit mode, so
+  each selected probe routine runs once.
+
+### Verification and remaining limits
+
+- Added `tests/test_api_breaker.py` with 26 focused regressions for same-origin
+  JavaScript analysis, active discovery integration, imported endpoint scoping,
+  explicit target bases, bounded rate counts, no duplicate single-endpoint
+  submissions, evidence confidence, candidate report mapping, and guarded
+  GraphQL CSRF mutation submission.
+- Full suite passed **500 tests + 21 subtests**. Ruff, compileall, helper sync,
+  CLI docs (**10 skill docs / 95 command references / 58 CLIs**), and
+  `git diff --check` passed on Windows. New API-target interactions were mocked;
+  no live API target was contacted.
+- `api-breaker` remains shallow in JWT case matrices, GraphQL depth/authz/CSRF
+  integration, BOLA/BFLA workflows, rate-limit bypass/batching, business-state
+  read-back, and broad report input shapes. Keep these in the active worklist;
+  26 focused tests do not establish broad coverage or absence of defects.
+
+Business-logic evidence rules follow the business-specific harm model in
+[OWASP API6:2023](https://api-security.owasp.org/editions/2023/en/0xa6-unrestricted-access-to-sensitive-business-flows/).
+For object-level authorization methodology see
+[OWASP API1:2023](https://api-security.owasp.org/editions/2023/en/0xa1-broken-object-level-authorization/).

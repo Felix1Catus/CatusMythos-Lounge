@@ -13,9 +13,10 @@ import urllib.request
 import urllib.parse
 import concurrent.futures
 from datetime import datetime, timezone
+import math
 
 
-from _common import http_request, log, success, vuln
+from _common import http_request, log, same_origin_url, success, vuln, warn
 # IP spoofing headers for rate limit bypass
 #
 # NOT implemented, by design (research_notes/API breaker depth
@@ -67,6 +68,8 @@ RATE_LIMIT_HEADERS = [
     "Retry-After",
 ]
 
+MAX_RATE_LIMIT_REQUESTS = 1000
+
 
 def extract_rate_limit_info(headers):
     """Extract rate limiting information from response headers."""
@@ -76,6 +79,44 @@ def extract_rate_limit_info(headers):
             if key.lower() == header_name.lower():
                 info[header_name] = val
     return info
+
+
+def scope_rate_limit_targets(base_url, input_data):
+    """Extract only same-origin endpoints from untrusted discovery data."""
+    endpoints = []
+    graphql_endpoints = []
+    if not isinstance(input_data, dict):
+        return endpoints, graphql_endpoints
+
+    discovered = input_data.get("discovered_apis", [])
+    if isinstance(discovered, list):
+        for api in discovered:
+            if not isinstance(api, dict):
+                continue
+            candidate = api.get("url") or api.get("path", "")
+            url = same_origin_url(base_url, candidate)
+            if not url:
+                if candidate:
+                    warn(f"Skipping endpoint outside the API base origin: {candidate}")
+                continue
+            endpoints.append(url)
+            if api.get("api_type") == "graphql":
+                graphql_endpoints.append(url)
+
+    schema_endpoints = input_data.get("endpoints", [])
+    if isinstance(schema_endpoints, list):
+        for ep in schema_endpoints:
+            if not isinstance(ep, dict):
+                continue
+            candidate = ep.get("url") or ep.get("path", "")
+            url = same_origin_url(base_url, candidate)
+            if not url:
+                if candidate:
+                    warn(f"Skipping endpoint outside the API base origin: {candidate}")
+                continue
+            endpoints.append(url)
+
+    return list(dict.fromkeys(endpoints)), list(dict.fromkeys(graphql_endpoints))
 
 
 def send_rapid_requests(url, count, extra_headers=None, delay=0):
@@ -673,7 +714,8 @@ def main():
     parser = argparse.ArgumentParser(description="Rate Limiter Tester - orizon.one")
     parser.add_argument("--input", "-i", help="Input JSON from api_discovery.py or schema_builder.py")
     parser.add_argument("--output", "-o", help="Output JSON file")
-    parser.add_argument("--api-base", help="API base URL")
+    parser.add_argument("--api-base", required=True,
+                        help="Trusted API base URL; imported endpoint metadata is never trusted as scope")
     parser.add_argument("--endpoint", help="Specific endpoint to test")
     parser.add_argument("--token", help="Auth token (Bearer)")
     parser.add_argument("--cookie", help="Session cookie")
@@ -682,8 +724,14 @@ def main():
     parser.add_argument("--delay", type=float, default=0, help="Delay between requests (seconds)")
     args = parser.parse_args()
 
-    if not args.input and not args.api_base:
-        parser.error("Either --input or --api-base is required")
+    if not 1 <= args.count <= MAX_RATE_LIMIT_REQUESTS:
+        parser.error(f"--count must be between 1 and {MAX_RATE_LIMIT_REQUESTS}")
+    if not math.isfinite(args.delay) or args.delay < 0 or args.delay > 60:
+        parser.error("--delay must be between 0 and 60 seconds")
+
+    base_url = same_origin_url(args.api_base, args.api_base)
+    if not base_url:
+        parser.error("--api-base must be a credential-free absolute HTTP(S) URL")
 
     extra_headers = {}
     if args.cookie:
@@ -691,7 +739,6 @@ def main():
     if args.token:
         extra_headers["Authorization"] = args.token if " " in args.token else f"Bearer {args.token}"
 
-    base_url = args.api_base or ""
     endpoints = []
     graphql_endpoints = []
 
@@ -699,20 +746,14 @@ def main():
         log(f"Loading data from {args.input}")
         with open(args.input) as f:
             input_data = json.load(f)
-        base_url = base_url or input_data.get("meta", {}).get("base_url", "")
-        for api in input_data.get("discovered_apis", []):
-            url = api.get("url", "")
-            if url:
-                endpoints.append(url)
-                if api.get("api_type") == "graphql":
-                    graphql_endpoints.append(url)
-        for ep in input_data.get("endpoints", []):
-            url = ep.get("url", "")
-            if url:
-                endpoints.append(url)
+        if not isinstance(input_data, dict):
+            parser.error("Input JSON must contain an object at the top level")
+        endpoints, graphql_endpoints = scope_rate_limit_targets(base_url, input_data)
 
     if args.endpoint:
-        url = urllib.parse.urljoin(base_url, args.endpoint) if base_url else args.endpoint
+        url = same_origin_url(base_url, args.endpoint)
+        if not url:
+            parser.error("--endpoint must remain on the trusted --api-base origin")
         endpoints.insert(0, url)
 
     if not endpoints and base_url:

@@ -14,7 +14,7 @@ import urllib.parse
 from datetime import datetime, timezone
 
 
-from _common import http_request, log, success, vuln, warn
+from _common import http_request, log, same_origin_url, success, vuln, warn
 # Common field names to probe
 PROBE_FIELDS = [
     "id", "name", "email", "username", "password", "title", "description",
@@ -1070,8 +1070,18 @@ def test_graphql_csrf(url, mutation_field, mutation_args=None, cookie_header=Non
     session cookie a browser attaches automatically); an Authorization
     bearer token is deliberately never included here, since a cross-site
     request can't carry one without script/same-origin access -- that
-    would test something else (no-auth-required), not CSRF. A 200 with
-    the mutation actually applied on either transport is a finding."""
+    would test something else (no-auth-required), not CSRF. A 200 response
+    without GraphQL errors is only an unverified candidate: browser cookie
+    policy and persisted state are not tested. The caller must provide an
+    ambient session cookie and operator-approved test object ID because this
+    probe can change target state."""
+    if not cookie_header:
+        warn("GraphQL CSRF probe skipped: a session --cookie is required to test ambient authentication")
+        return []
+    if not mutation_args:
+        warn("GraphQL CSRF probe skipped: an explicit --csrf-test-id is required")
+        return []
+
     log(f"Testing GraphQL CSRF on mutation '{mutation_field}'...")
     findings = []
 
@@ -1085,13 +1095,15 @@ def test_graphql_csrf(url, mutation_field, mutation_args=None, cookie_header=Non
     if delay:
         time.sleep(delay)
     if status_get == 200 and not _looks_like_error(body_get):
-        vuln(f"GraphQL CSRF: mutation '{mutation_field}' executed via GET, no CSRF token")
+        warn(f"GraphQL CSRF candidate: mutation '{mutation_field}' accepted via GET; verify in a browser")
         findings.append({
-            "type": "graphql_csrf_mutation", "severity": "high", "url": get_url,
+            "type": "graphql_csrf_candidate", "severity": "INFO", "confidence": "low",
+            "validated": False, "url": get_url,
             "transport": "GET_querystring", "mutation_field": mutation_field,
             "evidence": f"GET {url}?query=... executed mutation '{mutation_field}' with no CSRF "
-                        f"token and no custom header -- a cross-site GET (e.g. <img src>) could "
-                        f"trigger this.",
+                        f"token and no custom header -- a cross-site GET could trigger this if "
+                        "the browser sends the session cookie. Browser cookie policy and "
+                        "persisted state change were not verified.",
         })
 
     form_headers = dict(ambient_headers)
@@ -1101,13 +1113,15 @@ def test_graphql_csrf(url, mutation_field, mutation_args=None, cookie_header=Non
     if delay:
         time.sleep(delay)
     if status_post == 200 and not _looks_like_error(body_post):
-        vuln(f"GraphQL CSRF: mutation '{mutation_field}' executed via form-encoded POST, no token")
+        warn(f"GraphQL CSRF candidate: mutation '{mutation_field}' accepted via form POST; verify in a browser")
         findings.append({
-            "type": "graphql_csrf_mutation", "severity": "high", "url": url,
+            "type": "graphql_csrf_candidate", "severity": "INFO", "confidence": "low",
+            "validated": False, "url": url,
             "transport": "POST_form_urlencoded", "mutation_field": mutation_field,
             "evidence": f"POST {url} (Content-Type: application/x-www-form-urlencoded) executed "
                         f"mutation '{mutation_field}' with no CSRF token -- an auto-submitting "
-                        f"cross-site <form> could trigger this.",
+                        f"cross-site <form> could trigger this if the browser sends the session "
+                        "cookie. Browser cookie policy and persisted state change were not verified.",
         })
 
     return findings
@@ -1326,6 +1340,30 @@ def test_graphql_cve_hypotheses(engine, version):
     return findings
 
 
+def collect_scoped_schema_paths(base_url, discovered_apis, resources):
+    """Return canonical in-scope URLs from imported and live-discovered data."""
+    paths = set()
+    for api in discovered_apis if isinstance(discovered_apis, list) else []:
+        if not isinstance(api, dict):
+            continue
+        candidate = api.get("path") or api.get("url") or ""
+        scoped_url = same_origin_url(base_url, candidate)
+        if scoped_url:
+            paths.add(scoped_url)
+        elif candidate:
+            warn(f"Skipping imported endpoint outside the API base origin: {candidate}")
+
+    for resource in resources if isinstance(resources, list) else []:
+        if not isinstance(resource, dict):
+            continue
+        candidate = resource.get("path", "")
+        scoped_url = same_origin_url(base_url, candidate)
+        if scoped_url:
+            paths.add(scoped_url)
+
+    return paths
+
+
 def build_openapi_spec(base_url, endpoints, resources):
     """Build an OpenAPI 3.0 spec from discovered data."""
     spec = {
@@ -1383,7 +1421,7 @@ def build_openapi_spec(base_url, endpoints, resources):
 def main():
     parser = argparse.ArgumentParser(description="Schema Builder - orizon.one")
     parser.add_argument("--input", "-i", help="Input JSON from api_discovery.py")
-    parser.add_argument("--api-base", help="API base URL (alternative to --input)")
+    parser.add_argument("--api-base", help="Trusted API base URL; required with --input to scope imported endpoints")
     parser.add_argument("--output", "-o", help="Output JSON file")
     parser.add_argument("--token", help="Auth token (Bearer)")
     parser.add_argument("--cookie", help="Session cookie")
@@ -1397,7 +1435,9 @@ def main():
     parser.add_argument("--mutation-id-arg", default="id", help="Argument name the mutation takes for the "
                          "object id (default: id)")
     parser.add_argument("--mutation-target-id", help="Object id believed to belong to a DIFFERENT user, "
-                         "used by the CSRF probe and required by --allow-mutation-write")
+                        "required by --allow-mutation-write")
+    parser.add_argument("--csrf-test-id", help="Operator-approved test object id for the state-changing "
+                        "GraphQL CSRF GET/form-POST probe; requires --cookie")
     parser.add_argument("--allow-mutation-write", action="store_true",
                          help="Opt-in: actually call the discovered update*/delete* mutation against "
                               "--mutation-target-id with the caller's own session. A true positive is a "
@@ -1411,6 +1451,12 @@ def main():
 
     if not args.input and not args.api_base:
         parser.error("Either --input or --api-base is required")
+    if args.input and not args.api_base:
+        parser.error("--api-base is required with --input; imported metadata is not a trusted target")
+
+    base_url = same_origin_url(args.api_base, args.api_base) if args.api_base else None
+    if not base_url:
+        parser.error("--api-base must be a credential-free absolute HTTP(S) URL")
 
     extra_headers = {}
     if args.cookie:
@@ -1418,15 +1464,17 @@ def main():
     if args.token:
         extra_headers["Authorization"] = args.token if " " in args.token else f"Bearer {args.token}"
 
-    base_url = args.api_base
     discovered_apis = []
 
     if args.input:
         log(f"Loading discovery data from {args.input}")
         with open(args.input) as f:
             discovery_data = json.load(f)
-        base_url = base_url or discovery_data.get("meta", {}).get("base_url", "")
+        if not isinstance(discovery_data, dict):
+            parser.error("Input JSON must contain an object at the top level")
         discovered_apis = discovery_data.get("discovered_apis", [])
+        if not isinstance(discovered_apis, list):
+            discovered_apis = []
 
     log(f"Reconstructing API schema for: {base_url}")
 
@@ -1438,16 +1486,14 @@ def main():
     log("Phase 2: Probing HTTP methods and content types...")
     endpoints = []
 
-    all_paths = set()
-    for api in discovered_apis:
-        all_paths.add(api.get("path", api.get("url", "")))
-    for res in resources:
-        all_paths.add(res.get("path", ""))
+    all_paths = collect_scoped_schema_paths(base_url, discovered_apis, resources)
 
-    for path in all_paths:
-        if not path:
+    for candidate in all_paths:
+        url = same_origin_url(base_url, candidate)
+        if not url:
             continue
-        url = urllib.parse.urljoin(base_url, path)
+        parsed_url = urllib.parse.urlsplit(url)
+        path = urllib.parse.urlunsplit(("", "", parsed_url.path, parsed_url.query, ""))
         log(f"Probing: {path}")
 
         methods = discover_methods(url, extra_headers, args.delay)
@@ -1540,10 +1586,14 @@ def main():
             if mutation_candidates:
                 target = mutation_candidates[0]
                 cookie_header = args.cookie or None
-                graphql_findings.extend(test_graphql_csrf(
-                    graphql_url, target["mutation_field"],
-                    {target["id_arg"]: args.mutation_target_id or "1"},
-                    cookie_header, args.delay))
+                if cookie_header and args.csrf_test_id:
+                    graphql_findings.extend(test_graphql_csrf(
+                        graphql_url, target["mutation_field"],
+                        {target["id_arg"]: args.csrf_test_id},
+                        cookie_header, args.delay))
+                else:
+                    warn("GraphQL CSRF mutation probe skipped; supply both --cookie and "
+                         "an operator-approved --csrf-test-id (the probe can change state)")
 
                 if args.allow_mutation_write:
                     if not args.mutation_target_id:

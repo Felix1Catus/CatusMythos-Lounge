@@ -12,9 +12,13 @@ import urllib.request
 import urllib.parse
 import concurrent.futures
 from datetime import datetime, timezone
+import math
 
 
-from _common import http_request, log, success, vuln
+from _common import http_request, log, same_origin_url, success, warn
+
+
+MUTATING_METHODS = {"POST", "PUT", "PATCH"}
 def classify_endpoints(endpoints):
     """Classify endpoints by likely business function."""
     classified = {
@@ -35,7 +39,14 @@ def classify_endpoints(endpoints):
                      "attachment", "import", "export"]
 
     for ep in endpoints:
-        path = ep.get("path", ep.get("url", "")).lower() if isinstance(ep, dict) else ep.lower()
+        if isinstance(ep, dict):
+            path = str(ep.get("path") or ep.get("url") or "").lower()
+        elif isinstance(ep, str):
+            path = ep.lower()
+        else:
+            continue
+        if not path:
+            continue
         matched = False
 
         for pattern in ecommerce_patterns:
@@ -74,6 +85,63 @@ def classify_endpoints(endpoints):
     return classified
 
 
+def scope_business_logic_endpoints(base_url, endpoints):
+    """Keep active business-logic probes on the operator-selected origin.
+
+    Imported discovery files are data, not authorization. Every URL is
+    canonicalized against the explicit --api-base before credentials or
+    mutation payloads are sent.
+    """
+    scoped = []
+    for ep in endpoints:
+        if isinstance(ep, dict):
+            candidate = ep.get("url") or ep.get("path") or ""
+            record = dict(ep)
+            method = str(ep.get("method") or "POST").upper()
+        elif isinstance(ep, str):
+            candidate = ep
+            record = {"path": ep}
+            method = "POST"
+        else:
+            warn(f"Skipping malformed business-logic endpoint: {ep!r}")
+            continue
+
+        url = same_origin_url(base_url, candidate)
+        if not url:
+            warn(f"Skipping endpoint outside the API base origin: {candidate}")
+            continue
+        if method not in MUTATING_METHODS:
+            warn(f"Skipping non-write endpoint for business-logic probes: {method} {url}")
+            continue
+
+        record["url"] = url
+        record["method"] = method
+        scoped.append(record)
+    return scoped
+
+
+def _matching_json_fields(body, payload):
+    """Return injected fields echoed with the exact JSON type and value."""
+    try:
+        response = json.loads(body)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return {}
+
+    matches = {}
+    pending = [response]
+    while pending:
+        current = pending.pop()
+        if isinstance(current, dict):
+            for field, expected in payload.items():
+                actual = current.get(field)
+                if type(actual) is type(expected) and actual == expected:
+                    matches[field] = actual
+            pending.extend(current.values())
+        elif isinstance(current, list):
+            pending.extend(current)
+    return matches
+
+
 def test_price_manipulation(url, method, auth_headers, delay=0):
     """Test price manipulation on e-commerce endpoints."""
     log(f"Testing price manipulation: {url}")
@@ -104,26 +172,23 @@ def test_price_manipulation(url, method, auth_headers, delay=0):
             time.sleep(delay)
 
         if status in (200, 201):
-            try:
-                resp = json.loads(body)
-                # Check if manipulated values are reflected
-                for key, val in test["payload"].items():
-                    if isinstance(resp, dict) and key in resp:
-                        if resp[key] == val or (isinstance(val, (int, float)) and val <= 0):
-                            vuln(f"Price manipulation accepted: {test['name']} on {url}")
-                            findings.append({
-                                "type": "price_manipulation",
-                                "severity": "critical",
-                                "test_name": test["name"],
-                                "url": url,
-                                "method": method,
-                                "payload": test["payload"],
-                                "status": status,
-                                "response_preview": body[:300],
-                            })
-                            break
-            except (json.JSONDecodeError, ValueError):
-                pass
+            echoed = _matching_json_fields(body, test["payload"])
+            if echoed:
+                warn(f"Price manipulation candidate: injected values echoed by {url}; verify persisted impact")
+                findings.append({
+                    "type": "price_manipulation_candidate",
+                    "severity": "INFO",
+                    "confidence": "low",
+                    "validated": False,
+                    "evidence": "The response echoed injected values; a persisted price/total change is unverified.",
+                    "echoed_fields": echoed,
+                    "test_name": test["name"],
+                    "url": url,
+                    "method": method,
+                    "payload": test["payload"],
+                    "status": status,
+                    "response_preview": body[:300],
+                })
 
     return findings
 
@@ -154,10 +219,17 @@ def test_quantity_overflow(url, method, auth_headers, delay=0):
             time.sleep(delay)
 
         if status in (200, 201):
-            vuln(f"Quantity manipulation accepted: {test['name']} on {url}")
+            echoed = _matching_json_fields(body, test["payload"])
+            if not echoed:
+                continue
+            warn(f"Quantity overflow candidate: injected values echoed by {url}; verify persisted impact")
             findings.append({
-                "type": "quantity_overflow",
-                "severity": "high",
+                "type": "quantity_overflow_candidate",
+                "severity": "INFO",
+                "confidence": "low",
+                "validated": False,
+                "evidence": "The response echoed an injected quantity/count; range enforcement and persisted impact are unverified.",
+                "echoed_fields": echoed,
                 "test_name": test["name"],
                 "url": url,
                 "method": method,
@@ -194,10 +266,13 @@ def test_coupon_stacking(url, method, auth_headers, delay=0):
         if status in (200, 201):
             lower_body = body.lower()
             if any(kw in lower_body for kw in ["discount", "applied", "coupon", "success"]):
-                vuln(f"Coupon stacking possible: {test['name']} on {url}")
+                warn(f"Coupon stacking candidate: response suggests handling for {test['name']} on {url}")
                 findings.append({
-                    "type": "coupon_stacking",
-                    "severity": "high",
+                    "type": "coupon_stacking_candidate",
+                    "severity": "INFO",
+                    "confidence": "low",
+                    "validated": False,
+                    "evidence": "A 2xx response referenced coupon/discount handling; stacked discounts and persisted totals are unverified.",
                     "test_name": test["name"],
                     "url": url,
                     "method": method,
@@ -241,10 +316,13 @@ def test_race_condition(url, method, auth_headers, delay=0):
                     success_count += 1
 
         if success_count > 1:
-            vuln(f"Race condition: {success_count}/10 concurrent requests succeeded ({test['name']})")
+            warn(f"Race condition candidate: {success_count}/10 requests returned 2xx ({test['name']}); verify duplicate side effects")
             findings.append({
-                "type": "race_condition",
-                "severity": "high",
+                "type": "race_condition_candidate",
+                "severity": "INFO",
+                "confidence": "low",
+                "validated": False,
+                "evidence": "Multiple concurrent requests returned 2xx; a sequential baseline and duplicate state change are unverified.",
                 "test_name": test["name"],
                 "url": url,
                 "method": method,
@@ -279,10 +357,13 @@ def test_negative_amounts(url, method, auth_headers, delay=0):
             time.sleep(delay)
 
         if status in (200, 201):
-            vuln(f"Negative amount accepted: {test['name']} on {url}")
+            warn(f"Negative amount candidate: {test['name']} returned 2xx on {url}; verify transaction impact")
             findings.append({
-                "type": "negative_amount",
-                "severity": "critical",
+                "type": "negative_amount_candidate",
+                "severity": "INFO",
+                "confidence": "low",
+                "validated": False,
+                "evidence": "The negative-value request returned 2xx; a persisted balance or transaction change is unverified.",
                 "test_name": test["name"],
                 "url": url,
                 "method": method,
@@ -320,24 +401,23 @@ def test_privilege_escalation(url, method, auth_headers, delay=0):
                 time.sleep(delay)
 
             if status in (200, 201):
-                try:
-                    resp = json.loads(body)
-                    for key in test["payload"]:
-                        if isinstance(resp, dict) and key in resp:
-                            vuln(f"Privilege escalation: {test['name']} on {url}")
-                            findings.append({
-                                "type": "privilege_escalation",
-                                "severity": "critical",
-                                "test_name": test["name"],
-                                "url": url,
-                                "method": m,
-                                "payload": test["payload"],
-                                "status": status,
-                                "response_preview": body[:300],
-                            })
-                            break
-                except (json.JSONDecodeError, ValueError):
-                    pass
+                echoed = _matching_json_fields(body, test["payload"])
+                if echoed:
+                    warn(f"Privilege escalation candidate: injected fields echoed by {url}; verify persisted authorization impact")
+                    findings.append({
+                        "type": "privilege_escalation_candidate",
+                        "severity": "INFO",
+                        "confidence": "low",
+                        "validated": False,
+                        "evidence": "The response echoed injected privilege fields; a persisted role/authorization change is unverified.",
+                        "echoed_fields": echoed,
+                        "test_name": test["name"],
+                        "url": url,
+                        "method": m,
+                        "payload": test["payload"],
+                        "status": status,
+                        "response_preview": body[:300],
+                    })
 
     return findings
 
@@ -348,13 +428,18 @@ def main():
     parser.add_argument("--output", "-o", help="Output JSON file")
     parser.add_argument("--token", help="Auth token (Bearer)")
     parser.add_argument("--cookie", help="Session cookie")
-    parser.add_argument("--api-base", help="API base URL")
+    parser.add_argument("--api-base", required=True,
+                        help="Trusted API base URL; imported endpoint metadata is never trusted as scope")
     parser.add_argument("--endpoint", help="Specific endpoint to test")
     parser.add_argument("--delay", type=float, default=0, help="Delay between requests (seconds)")
     args = parser.parse_args()
 
-    if not args.input and not args.api_base:
-        parser.error("Either --input or --api-base is required")
+    if not math.isfinite(args.delay) or args.delay < 0 or args.delay > 60:
+        parser.error("--delay must be between 0 and 60 seconds")
+
+    base_url = same_origin_url(args.api_base, args.api_base)
+    if not base_url:
+        parser.error("--api-base must be a credential-free absolute HTTP(S) URL")
 
     auth_headers = {}
     if args.cookie:
@@ -362,24 +447,27 @@ def main():
     if args.token:
         auth_headers["Authorization"] = args.token if " " in args.token else f"Bearer {args.token}"
 
-    base_url = args.api_base or ""
     endpoints = []
 
     if args.input:
         log(f"Loading data from {args.input}")
         with open(args.input) as f:
             input_data = json.load(f)
-        base_url = base_url or input_data.get("meta", {}).get("base_url", "")
-        for api in input_data.get("discovered_apis", []):
-            endpoints.append(api)
-        for ep in input_data.get("endpoints", []):
-            endpoints.append(ep)
-        for ep in input_data.get("openapi_endpoints", []):
-            endpoints.append(ep)
+        if not isinstance(input_data, dict):
+            parser.error("Input JSON must contain an object at the top level")
+        for key in ("discovered_apis", "endpoints", "openapi_endpoints"):
+            values = input_data.get(key, [])
+            if isinstance(values, list):
+                endpoints.extend(values)
 
+    specific_url = None
     if args.endpoint:
-        url = urllib.parse.urljoin(base_url, args.endpoint) if base_url else args.endpoint
-        endpoints.insert(0, {"path": args.endpoint, "url": url, "method": "POST"})
+        specific_url = same_origin_url(base_url, args.endpoint)
+        if not specific_url:
+            parser.error("--endpoint must remain on the trusted --api-base origin")
+        endpoints.insert(0, {"path": args.endpoint, "url": specific_url, "method": "POST"})
+
+    endpoints = scope_business_logic_endpoints(base_url, endpoints)
 
     log(f"Testing business logic for: {base_url}")
     log(f"Total endpoints: {len(endpoints)}")
@@ -393,12 +481,9 @@ def main():
     all_findings = []
 
     # E-commerce tests
-    for ep in classified["ecommerce"][:10]:
-        url = ep.get("url", "") if isinstance(ep, dict) else ep
-        path = ep.get("path", "") if isinstance(ep, dict) else ep
-        if not url:
-            url = urllib.parse.urljoin(base_url, path)
-        method = ep.get("method", "POST") if isinstance(ep, dict) else "POST"
+    for ep in classified["ecommerce"][:10] if not args.endpoint else []:
+        url = ep["url"]
+        method = ep["method"]
 
         all_findings.extend(test_price_manipulation(url, method, auth_headers, args.delay))
         all_findings.extend(test_quantity_overflow(url, method, auth_headers, args.delay))
@@ -406,29 +491,23 @@ def main():
         all_findings.extend(test_race_condition(url, method, auth_headers, args.delay))
 
     # Financial tests
-    for ep in classified["financial"][:10]:
-        url = ep.get("url", "") if isinstance(ep, dict) else ep
-        path = ep.get("path", "") if isinstance(ep, dict) else ep
-        if not url:
-            url = urllib.parse.urljoin(base_url, path)
-        method = ep.get("method", "POST") if isinstance(ep, dict) else "POST"
+    for ep in classified["financial"][:10] if not args.endpoint else []:
+        url = ep["url"]
+        method = ep["method"]
 
         all_findings.extend(test_negative_amounts(url, method, auth_headers, args.delay))
         all_findings.extend(test_race_condition(url, method, auth_headers, args.delay))
 
     # User management tests
-    for ep in classified["user_management"][:10]:
-        url = ep.get("url", "") if isinstance(ep, dict) else ep
-        path = ep.get("path", "") if isinstance(ep, dict) else ep
-        if not url:
-            url = urllib.parse.urljoin(base_url, path)
-        method = ep.get("method", "PUT") if isinstance(ep, dict) else "PUT"
+    for ep in classified["user_management"][:10] if not args.endpoint else []:
+        url = ep["url"]
+        method = ep["method"]
 
         all_findings.extend(test_privilege_escalation(url, method, auth_headers, args.delay))
 
     # If a specific endpoint is given, run all tests
     if args.endpoint:
-        url = urllib.parse.urljoin(base_url, args.endpoint) if base_url else args.endpoint
+        url = specific_url
         log(f"\nRunning all logic tests on: {url}")
         all_findings.extend(test_price_manipulation(url, "POST", auth_headers, args.delay))
         all_findings.extend(test_quantity_overflow(url, "POST", auth_headers, args.delay))

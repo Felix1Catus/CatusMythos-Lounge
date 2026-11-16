@@ -11,10 +11,11 @@ import re
 import urllib.request
 import urllib.parse
 import concurrent.futures
+from html.parser import HTMLParser
 from datetime import datetime, timezone
 
 
-from _common import http_request, log, success, vuln, warn
+from _common import http_request, log, same_origin_url, success, vuln, warn
 # Common API paths to fuzz
 API_PATHS = [
     # Documentation
@@ -96,6 +97,44 @@ WAYBACK_VERSION_TOKEN_RE = re.compile(r'/v\d+(?:/|$)|/\d{4}[.\-]\d{1,2}(?:/|$)',
 MAX_LEGACY_BYPASS_CHECKS = 5
 
 
+class _ScriptSrcParser(HTMLParser):
+    """Collect script src attributes from a page without executing scripts."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.sources = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag.lower() == "script":
+            src = dict(attrs).get("src")
+            if src:
+                self.sources.append(src)
+
+
+def extract_script_urls(base_url, html):
+    """Extract and resolve at most 20 same-origin JavaScript source URLs."""
+    parser = _ScriptSrcParser()
+    parser.feed(html or "")
+    urls = []
+    for source in parser.sources:
+        url = same_origin_url(base_url, source)
+        if url and url not in urls:
+            urls.append(url)
+        elif source and not url:
+            warn(f"Skipping off-origin script source: {source}")
+        if len(urls) >= 20:
+            break
+    return urls
+
+
+def discover_script_urls(base_url, extra_headers=None):
+    """Fetch the selected origin's landing page and collect its script URLs."""
+    status, _, body = http_request(base_url, headers=extra_headers)
+    if status != 200:
+        return []
+    return extract_script_urls(base_url, body)
+
+
 def extract_version_headers(headers):
     """Fingerprint response headers that self-disclose version/deprecation
     metadata: exact Sunset/Deprecation headers, a Link header whose value
@@ -115,7 +154,10 @@ def extract_version_headers(headers):
 
 def probe_path(base_url, path, extra_headers=None):
     """Probe a single path and return details if found."""
-    url = urllib.parse.urljoin(base_url, path)
+    url = same_origin_url(base_url, path)
+    if not url:
+        warn(f"Skipping API path outside the base origin: {path}")
+        return None
     status, headers, body = http_request(url, headers=extra_headers)
 
     if status in (200, 201, 301, 302, 401, 403, 405):
@@ -236,17 +278,24 @@ def discover_from_js(base_url, js_urls, extra_headers=None):
     ]
 
     for js_url in js_urls[:20]:
-        _, _, js_body = http_request(js_url, headers=extra_headers)
+        scoped_js_url = same_origin_url(base_url, js_url)
+        if not scoped_js_url:
+            warn(f"Skipping off-origin JavaScript URL: {js_url}")
+            continue
+        _, _, js_body = http_request(scoped_js_url, headers=extra_headers)
         if not js_body:
             continue
         for pattern in patterns:
             for match in re.finditer(pattern, js_body):
                 ep = match.group(1)
-                if ep.startswith("/"):
-                    endpoints.add(ep)
-                elif ep.startswith("http"):
-                    parsed = urllib.parse.urlparse(ep)
-                    endpoints.add(parsed.path)
+                scoped_ep = same_origin_url(base_url, ep)
+                if scoped_ep:
+                    parsed = urllib.parse.urlsplit(scoped_ep)
+                    path = urllib.parse.urlunsplit(("", "", parsed.path, parsed.query, ""))
+                    if path:
+                        endpoints.add(path)
+                elif ep:
+                    warn(f"Skipping off-origin API URL found in JavaScript: {ep}")
 
     success(f"Found {len(endpoints)} endpoints from JS analysis")
     return list(endpoints)
@@ -584,12 +633,20 @@ def main():
     parser.add_argument("--threads", type=int, default=15, help="Concurrent threads")
     args = parser.parse_args()
 
-    domain = args.domain.strip().lower()
-    if not domain.startswith("http"):
-        base_url = f"https://{domain}"
+    if not 1 <= args.threads <= 50:
+        parser.error("--threads must be between 1 and 50")
+
+    domain_input = args.domain.strip()
+    if "://" in domain_input and not domain_input.lower().startswith(("http://", "https://")):
+        parser.error("--domain must be a hostname or an absolute HTTP(S) URL")
+    if not domain_input.lower().startswith(("http://", "https://")):
+        base_url = f"https://{domain_input}"
     else:
-        base_url = domain
-        domain = urllib.parse.urlparse(domain).hostname
+        base_url = domain_input
+    base_url = same_origin_url(base_url, base_url)
+    if not base_url:
+        parser.error("--domain must resolve to a credential-free absolute HTTP(S) origin")
+    domain = urllib.parse.urlsplit(base_url).hostname or "unknown"
 
     log(f"Starting API discovery on: {domain}")
 
@@ -613,6 +670,20 @@ def main():
             if result:
                 discovered.append(result)
                 success(f"Found: {result['path']} ({result['status']}, {result['api_type']})")
+
+    # Phase 1b: Same-origin JavaScript analysis. The implementation stays
+    # origin-scoped so authenticated headers are never sent to CDN or other
+    # off-origin script URLs found in the page.
+    log("Analyzing same-origin JavaScript for API endpoints...")
+    script_urls = discover_script_urls(base_url, extra_headers)
+    js_paths = discover_from_js(base_url, script_urls, extra_headers)
+    known_urls = {entry["url"] for entry in discovered}
+    for path in js_paths:
+        result = probe_path(base_url, path, extra_headers)
+        if result and result["url"] not in known_urls:
+            discovered.append(result)
+            known_urls.add(result["url"])
+            success(f"Found from JavaScript: {result['path']} ({result['status']}, {result['api_type']})")
 
     # Phase 2: Test GraphQL endpoints
     graphql_results = {}
@@ -655,7 +726,9 @@ def main():
             "tool": "api-breaker by orizon.one",
         },
         "stats": {
-            "paths_tested": len(API_PATHS),
+            "paths_tested": len(API_PATHS) + len(js_paths),
+            "js_scripts_analyzed": len(script_urls),
+            "js_endpoints_probed": len(js_paths),
             "apis_found": len(discovered),
             "graphql_endpoints": len(graphql_endpoints),
             "openapi_docs": len(doc_endpoints),

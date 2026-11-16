@@ -97,16 +97,23 @@ FINDING_TO_OWASP = {
     # BFLA -> API5
     "bfla": "API5",
     "bfla_method_override": "API5",
+    "graphql_csrf_candidate": "API8",
 
     # Business logic -> API6
     "price_manipulation": "API6",
+    "price_manipulation_candidate": "API6",
     "quantity_overflow": "API6",
+    "quantity_overflow_candidate": "API6",
     "coupon_stacking": "API6",
+    "coupon_stacking_candidate": "API6",
     "race_condition": "API6",
+    "race_condition_candidate": "API6",
     "negative_amount": "API6",
+    "negative_amount_candidate": "API6",
 
     # Privilege escalation -> API5 / API3
     "privilege_escalation": "API5",
+    "privilege_escalation_candidate": "API5",
 
     # JWT claims info -> API2
     "jwt_symmetric_alg": "API2",
@@ -133,6 +140,7 @@ REMEDIATIONS = {
     "graphql_alias_batching": "Implement query complexity analysis that accounts for aliases. Limit the number of aliases per query. Set maximum query cost limits.",
     "bfla": "Implement role-based access control (RBAC). Enforce function-level authorization on every endpoint. Deny by default and explicitly grant permissions.",
     "bfla_method_override": "Disable HTTP method override headers in production. If method override is needed, ensure authorization is checked against the overridden method.",
+    "graphql_csrf_candidate": "Reject state-changing GraphQL operations over cross-site GET/form transports or apply appropriate CSRF protections. Verify cookie SameSite behavior and persisted impact in a browser before reporting.",
     "price_manipulation": "Always calculate prices on the server side. Never trust client-provided prices, totals, or discounts. Validate all financial values against server-side records.",
     "quantity_overflow": "Validate quantity ranges on the server side. Set minimum (1) and maximum bounds. Use appropriate data types to prevent integer overflow.",
     "coupon_stacking": "Implement server-side coupon validation. Prevent duplicate coupon usage. Define clear rules for coupon stacking and enforce them server-side.",
@@ -188,13 +196,25 @@ def assess_impact(finding):
         "privilege_escalation": "Users can elevate their own privileges. Complete system compromise possible.",
     }
 
+    if finding_type.endswith("_candidate") or finding.get("validated") is False:
+        confirmed_type = finding_type.removesuffix("_candidate")
+        possible_impact = impacts.get(
+            confirmed_type,
+            f"Potential impact if confirmed: unauthorized access or data manipulation ({severity} severity).",
+        )
+        return (
+            "Unverified probe candidate. No persisted state change or security impact was confirmed. "
+            f"Verify the evidence with a controlled read-back before reporting. {possible_impact}"
+        )
+
     return impacts.get(finding_type, f"Security vulnerability with {severity} severity. Potential for unauthorized access or data manipulation.")
 
 
 def generate_finding_report(finding, index):
     """Generate a detailed report for a single finding."""
     finding_type = finding.get("type", "unknown")
-    owasp_key = FINDING_TO_OWASP.get(finding_type, "API8")
+    base_type = finding_type.removesuffix("_candidate")
+    owasp_key = FINDING_TO_OWASP.get(finding_type, FINDING_TO_OWASP.get(base_type, "API8"))
     owasp = OWASP_API_TOP10.get(owasp_key, OWASP_API_TOP10["API8"])
 
     report = {
@@ -218,7 +238,10 @@ def generate_finding_report(finding, index):
         },
         "curl_command": build_curl_command(finding),
         "impact": assess_impact(finding),
-        "remediation": REMEDIATIONS.get(finding_type, "Review and fix the identified vulnerability. Implement proper input validation and access controls."),
+        "remediation": REMEDIATIONS.get(
+            finding_type,
+            REMEDIATIONS.get(base_type, "Review and fix the identified vulnerability. Implement proper input validation and access controls."),
+        ),
     }
 
     return report

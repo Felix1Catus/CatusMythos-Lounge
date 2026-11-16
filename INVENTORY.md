@@ -5,8 +5,8 @@ dependencies, test coverage, scope controls, integrations, overlaps, and the
 clearest coverage gaps. This is a map for prioritizing deeper per-skill review;
 it is not itself a line-by-line doc-vs-code audit (that happens per skill).
 Inventory structure originated at `f870a85`. Coverage status refreshed
-2026-11-16 against the verified `3aa2f62` baseline and the bootstrap/preflight
-continuation documented below. Check `git log -1` for the exact current tip.
+2026-11-16 against the verified `3aa2f62` bootstrap baseline and the API-breaker
+continuation from `a95bab9`. Check `git log -1` for the exact current tip.
 
 ## Shape of the toolkit
 
@@ -35,14 +35,14 @@ checked by `tests/test_plugin_bootstrap_hook.py` and the same matrix.
 | Coverage | Skills |
 |---|---|
 | Broad script-level regression matrices | `recon-dominator` (59), `cloud-pivot-finder` (38), `attack-path-architect` (28), `16-ai-llm-security` (87), `03-exploit-development` (14), `vuln-chain-composer` (63), legacy `webapp-exploit-hunter` testers (60) |
-| Focused or partial coverage | `webapp-exploit-hunter` browser/crawler/DOM and selected CLI paths; `api-breaker`; `web-cache-auditor` (8 tests for its script) |
+| Focused or partial coverage | `api-breaker` (26 focused scope/discovery/business-logic/GraphQL-CSRF regressions); `webapp-exploit-hunter` browser/crawler/DOM and selected CLI paths; `web-cache-auditor` (8 tests for its script) |
 | Plugin infrastructure | `tests/test_bootstrap.py` (30): parsing, install command construction, retry/cache validation, browser setup, PATH readiness, and nonzero preflight gates |
 | No scripts (manual methodology) | `web-protocol-auditor` |
 
-The full suite most recently passed **474 tests plus 21 subtests**. It includes
-local-fixture browser integration with Playwright/Chromium and the new bootstrap
-matrix. The strict bootstrap preflight also passed on the current Windows host.
-Coverage is uneven:
+The full suite most recently passed **500 tests plus 21 subtests**. It includes
+local-fixture browser integration with Playwright/Chromium, bootstrap
+regressions, and the new API-breaker matrix. The strict bootstrap preflight also
+passed on the current Windows host. Coverage is uneven:
 these matrices emphasize logic and edge cases, and do not constitute end-to-end
 validation of every CLI or prove the absence of bugs. See `HANDOVER.md` for
 specific fixes, test themes, browser limitations, and the latest verification.
@@ -89,18 +89,29 @@ specific fixes, test themes, browser limitations, and the latest verification.
 - **Scope controls:** `--active`, `--submit-forms`, `--callback-url`,
   `--allow-destructive-poc`, `--skip-lfi-chains`; HTTPS-verified default.
 
-### api-breaker — `[PARTIAL TESTS]`
+### api-breaker — `[26 FOCUSED REGRESSIONS; STILL PARTIAL]`
 - **Use:** API security from domains — discover REST/GraphQL/SOAP, rebuild
   schemas, test BOLA/IDOR, BFLA, mass assignment, JWT, rate-limit bypass, logic.
-- **CLIs (8 + `_common`):** `api_discovery`, `schema_builder` (1617 ln),
+- **CLIs (8 + `_common`):** `api_discovery`, `schema_builder` (1647 ln),
   `auth_analyzer`, `authz_tester`, `mass_assignment`, `rate_limiter`,
   `logic_tester`, `api_report`.
-- **Coverage:** `auth_analyzer`/`authz_tester`/`mass_assignment` partial
-  (hostile-import + mutation-gating tests). **Untested:** `api_discovery`,
-  `schema_builder`, `rate_limiter`, `logic_tester`, `api_report`.
-- **Scope controls:** `--allow-mutation-write` (BOLA/BFLA/mass-assignment write
-  methods), explicit trusted `--api-base` for imported endpoints, cross-origin
-  imported endpoints skipped.
+- **Coverage:** `tests/test_api_breaker.py` covers same-origin JavaScript
+  discovery, imported endpoint scoping in `schema_builder`/`rate_limiter`/
+  `logic_tester`, bounded rate-test counts, active-probe preservation, duplicate
+  single-endpoint submissions, candidate-confidence/report mapping, and the
+  explicit-cookie/canary requirements for active GraphQL CSRF GET/form submits.
+  `tests/test_targeted_audit_fixes.py` covers hostile imports and write gating
+  in `auth_analyzer`, `authz_tester`, and `mass_assignment`. This is not a full
+  per-script matrix: JWT attack cases, GraphQL depth/authz/CSRF, BOLA/BFLA
+  integration, rate-limit bypass/batching, business-state read-back, and broad
+  report input shapes remain lightly tested or untested.
+- **Scope controls:** explicit trusted `--api-base` for imported endpoints in
+  schema, auth, authz, mass assignment, rate-limit, and business-logic testing;
+  off-origin imported endpoints are skipped. `--allow-mutation-write` gates
+  BOLA/BFLA, GraphQL mutation-BOLA, and mass-assignment writes. GraphQL CSRF
+  GET/form mutations require `--cookie` and `--csrf-test-id`. Business-logic
+  POST/PUT/PATCH payloads remain active without a new flag when selected.
+  Rate-limit `--count` is bounded to 1–1000 (default 120).
 
 ### cloud-pivot-finder — `[38-TEST MATRIX; all 7 scripts covered]`
 - **Use:** map cloud infra from domains; external->internal pivot paths —

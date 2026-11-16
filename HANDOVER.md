@@ -6,10 +6,11 @@ doesn't mistake uneven coverage for uniform coverage.
 
 ## Current state
 
-- Verified starting head for the bootstrap/preflight continuation:
-  `3aa2f62090bce3f9e966cdd4361b58067d981d2b` on local `main`, with
-  `origin/main` matching and a clean tree. The focused PATH_INFO work directly
-  preceded it and remains part of the verified baseline.
+- The bootstrap/preflight pass started from clean `main` at
+  `3aa2f62090bce3f9e966cdd4361b58067d981d2b`. The API-breaker continuation
+  started from clean `main`/`origin/main` at
+  `a95bab9c9334023a82dde223190e38ca1059f82f`. Both pickup points were checked
+  before edits; the focused PATH_INFO work directly preceded the bootstrap base.
 - Full lineage since the audit baseline `73162b06b8458155cdf4113b810da3be6d8e6039`
   (chronological; all were present on `origin/main` at pickup):
   - `caed91e` — broad audit and hardening batch (details in `AUDIT.md`).
@@ -39,6 +40,8 @@ doesn't mistake uneven coverage for uniform coverage.
 - `db2c900c1238fa12980056d4c9ad4555001f4043` — installed and verified
   required tooling in bootstrap; added managed strict/narrow preflight,
   regression tests, and the dated audit/handover updates.
+- `a95bab9c9334023a82dde223190e38ca1059f82f` — recorded the bootstrap commit
+  in the living handover before this audit pass.
 - Verification at the `61aae43` code state: **441 tests + 21 subtests** passed;
   Ruff, compileall, CLI docs (`10/94/58`), and shared-helper sync passed. The
   browser feature has a real local Chromium fixture run. The focused PATH_INFO
@@ -59,6 +62,23 @@ doesn't mistake uneven coverage for uniform coverage.
   local Chromium headless launch. This host already had the managed dependencies,
   so no OS package installation ran; installer and PATH-change cases are tested
   with mocks. No live targets were contacted.
+- **API-breaker deepening pass (2026-11-16):** added 26 focused regressions and
+  fixed imported-endpoint scope gaps in `schema_builder.py`, `rate_limiter.py`,
+  and `logic_tester.py`; each now requires the operator's explicit trusted
+  `--api-base` and skips off-origin imported URLs before sending credentials or
+  probes. `api_discovery.py` now invokes its previously-unwired JavaScript
+  endpoint analyzer, limited to 20 same-origin script files, and validates its
+  target origin and worker count. The rate CLI validates delay and caps
+  `--count` at 1000 (default remains 120). `logic_tester.py` no longer repeats
+  category probes before its full `--endpoint` sequence. Its active
+  POST/PUT/PATCH probes remain enabled when selected; status/echo/race signals
+  are informational candidates until read-back confirms persisted impact.
+  GraphQL CSRF mutations now require both a session `--cookie` and an explicit
+  `--csrf-test-id`; the hardcoded fallback to ID `1` is removed, and GET/form
+  acceptance is only a candidate pending browser and state verification.
+  Full suite: **500 tests + 21 subtests passed**; Ruff, compileall, helper sync,
+  CLI docs (**10 / 95 / 58**), and `git diff --check` passed. New target-facing
+  tests use mocks; no live API targets were contacted.
 - The browser auditor has now had a **real Playwright/Chromium integration run**
   against a local fixture (passive, active query, active fragment via both
   `innerHTML` and `document.write`, and form submission all exercised). Two bugs
@@ -339,14 +359,29 @@ send active requests. Intentional write-probe gates:
 - `api-breaker/scripts/mass_assignment.py` — POST/PUT/PATCH need
   `--allow-mutation-write`; imported write endpoints need an explicit trusted
   `--api-base`; imported cross-origin endpoints are skipped.
+- `api-breaker/scripts/schema_builder.py` — GraphQL mutation-BOLA writes need
+  `--allow-mutation-write` plus a target ID; ordinary schema/GraphQL query
+  probes remain active. GraphQL CSRF GET/form mutation probes require `--cookie`
+  and `--csrf-test-id`; they can change data and are candidates until browser
+  cookie policy and state changes are verified. Imported endpoints require
+  explicit `--api-base` and are origin-scoped.
+- `api-breaker/scripts/logic_tester.py` — business-logic POST/PUT/PATCH payloads
+  and concurrent race probes remain active without a separate write flag when
+  selected. Imported endpoints require explicit `--api-base` and are scoped;
+  candidate responses need persistence/read-back confirmation.
+- `api-breaker/scripts/rate_limiter.py` — burst, path/method, and GraphQL
+  batching probes remain active. Explicit `--api-base` scopes imports;
+  `--count` is bounded from 1 to 1000.
 - `browser_security_auditor.py` — `--active` (URL probes), `--submit-forms`.
 - `web-cache-auditor` — `--probe-unkeyed`, staging replay adds `--confirm-cache-replay`.
 - Generated web PoC replays the supplied finding payload/method (no invented
   fallback probe set).
 
-The two API write gates are the clearest friction with "don't be passive":
-authorized workflows must document and pass the flags, not silently skip write
-testing.
+The explicit API mutation gates are the clearest friction with "don't be
+passive": authorized workflows must document and pass them, not silently skip
+write testing. `logic_tester.py` remains the separate active business-logic
+path without a write flag; its selected targets must still be authorized and
+its unverified candidates require read-back before being reported as findings.
 
 Bootstrap preflight checks dependency readiness only. It does not replace
 authorization/scope checks and does not change any active payload, API write,
@@ -401,7 +436,7 @@ browser `--active`, or `--submit-forms` behavior.
    uploads.
 2. **Inventory structure — coverage refreshed; structural map still needs
    review if skills, CLIs, dependencies, or plugin references move.** Inventory
-   now includes the bootstrap test matrix and its preflight behavior.
+   now includes bootstrap behavior and the 26 focused API-breaker regressions.
 3. **Bootstrap + task preflight — implemented; deeper OS-specific install
    validation remains open.** Missing Python dependencies, Chromium, Go, Go
    recon tools, and allowlisted system tools are actively installed through
@@ -416,12 +451,14 @@ browser `--active`, or `--submit-forms` behavior.
    `hooks/hooks.json` path.
 4. Consolidate the copied `_common.py` helpers? A sync check exists instead
    of consolidation. Map imports/CLI examples/plugin refs/tests before moving.
-5. Continue skill deepening where meaningful gaps remain, especially
-   `api-breaker` paths not covered by the current partial tests, the remaining
-   browser scope/state/redaction edge cases, and live-protocol methodology.
-   Ground changes in primary-source research, bounded active probes, explicit
-   evidence/confidence rules, and regression coverage. The matrices above do
-   not prove complete coverage or absence of bugs.
+5. Continue skill deepening where meaningful gaps remain. `api-breaker` is still
+   only partially audited: prioritize JWT edge-case tests, GraphQL depth/authz/
+   CSRF behavior, BOLA/BFLA integration, rate-limit bypass/batching, business-
+   state read-back, and report input shapes. Also continue the remaining browser
+   scope/state/redaction edge cases and live-protocol methodology. Ground changes
+   in primary-source research, bounded active probes, explicit evidence/confidence
+   rules, and regression coverage. The matrices above do not prove complete
+   coverage or absence of bugs.
 
 ## Standing constraints (don't re-introduce)
 - HTTPS verified by default; `CATUS_INSECURE_TLS=1` is the only opt-out.
