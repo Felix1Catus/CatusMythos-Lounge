@@ -39,6 +39,21 @@ OBJECT_ID_RESOURCES = {
     "users", "accounts", "orders", "items", "products", "posts", "messages",
     "documents", "files", "tickets",
 }
+SENSITIVE_RESPONSE_KEY = re.compile(
+    r"(?:password|passwd|secret|token|api[_-]?key|private[_-]?key|"
+    r"authorization|cookie|credit.?card|cc.?number|ssn|social.?security|"
+    r"email|phone|mobile|address|date.?of.?birth|\bdob\b|"
+    r"first.?name|last.?name|full.?name|display.?name|username|"
+    r"(?:^|[_-])name(?:$|[_-]))",
+    re.IGNORECASE,
+)
+INLINE_EMAIL = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
+INLINE_JWT = re.compile(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*\b")
+INLINE_SECRET_ASSIGNMENT = re.compile(
+    r"(?i)\b(password|passwd|secret|token|api[_-]?key|authorization|cookie)"
+    r"\b[\"']?\s*[:=]\s*[\"']?(?:Bearer\s+)?[^\s,;\"'}]+"
+)
+INLINE_BEARER = re.compile(r"(?i)\bBearer\s+[^\s,;\"'}]+")
 
 
 def parse_delay(value):
@@ -51,15 +66,46 @@ def parse_delay(value):
     return delay
 
 
+def _redact_response_values(value):
+    if isinstance(value, dict):
+        return {
+            key: "[REDACTED]" if SENSITIVE_RESPONSE_KEY.search(str(key))
+            else _redact_response_values(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_response_values(item) for item in value]
+    return value
+
+
+def safe_response_preview(body, max_chars=200):
+    """Keep short JSON evidence while redacting sensitive values and omitting HTML/text."""
+    if not isinstance(body, str):
+        return "[non-text response omitted]"
+    try:
+        parsed = json.loads(body)
+        preview = json.dumps(_redact_response_values(parsed), ensure_ascii=False)
+    except (json.JSONDecodeError, ValueError, TypeError, RecursionError):
+        return f"[non-JSON response omitted; length={len(body)}]"
+
+    preview = INLINE_SECRET_ASSIGNMENT.sub("[REDACTED]", preview)
+    preview = INLINE_BEARER.sub("Bearer [REDACTED]", preview)
+    preview = INLINE_JWT.sub("[REDACTED]", preview)
+    preview = INLINE_EMAIL.sub("[REDACTED]", preview)
+    return preview[:max_chars]
+
+
 def extract_object_ids(body):
     """Extract potential object IDs from a response body."""
     ids = set()
     try:
         data = json.loads(body)
-    except (json.JSONDecodeError, ValueError):
+    except (json.JSONDecodeError, ValueError, TypeError, RecursionError):
         return ids
 
-    def walk(obj):
+    stack = [data]
+    while stack:
+        obj = stack.pop()
         if isinstance(obj, dict):
             for key, val in obj.items():
                 if key.lower() in ("id", "uid", "user_id", "userid", "account_id",
@@ -68,12 +114,10 @@ def extract_object_ids(body):
                         object_id = str(val)
                         if object_id and len(object_id) <= 200 and not any(ord(c) < 32 for c in object_id):
                             ids.add(object_id)
-                walk(val)
+                if isinstance(val, (dict, list)):
+                    stack.append(val)
         elif isinstance(obj, list):
-            for item in obj:
-                walk(item)
-
-    walk(data)
+            stack.extend(obj)
     return ids
 
 
@@ -230,7 +274,7 @@ def test_bola(
                             "object_id": obj_id,
                             "access": "different_user",
                             "status": status_b,
-                            "response_preview": body_b[:200],
+                            "response_preview": safe_response_preview(body_b),
                             "validated": confirmed,
                         })
                         tested += 1
@@ -259,7 +303,7 @@ def test_bola(
                         "object_id": obj_id,
                         "access": "no_auth",
                         "status": status_noauth,
-                        "response_preview": body_noauth[:200],
+                        "response_preview": safe_response_preview(body_noauth),
                         "validated": confirmed,
                     })
                     tested += 1
@@ -287,7 +331,7 @@ def test_bola(
                         "url": url,
                         "test_id": test_id,
                         "status": status,
-                        "response_preview": body[:200],
+                        "response_preview": safe_response_preview(body),
                         "validated": False,
                     })
 
@@ -302,7 +346,7 @@ def test_bola(
                     "url": url,
                     "test_id": test_id,
                     "status": status,
-                    "response_preview": body[:200],
+                    "response_preview": safe_response_preview(body),
                     "validated": False,
                 })
 
@@ -344,7 +388,7 @@ def test_bfla(base_url, token, extra_headers=None, delay=0, allow_mutation_write
                     "url": url,
                     "status": status,
                     "has_data": has_data,
-                    "response_preview": body[:200],
+                    "response_preview": safe_response_preview(body),
                     "validated": False,
                 })
 

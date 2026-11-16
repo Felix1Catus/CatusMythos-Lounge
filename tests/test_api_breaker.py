@@ -386,6 +386,34 @@ class ApiBreakerScopeTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(argparse.ArgumentTypeError):
                 authz_tester.parse_delay(value)
 
+    def test_authz_response_previews_redact_sensitive_json_and_omit_text(self):
+        preview = authz_tester.safe_response_preview(json.dumps({
+            "id": "record-7",
+            "email": "alice@example.test",
+            "profile": {
+                "access_token": "credential-value",
+                "first_name": "Alice",
+                "role": "member",
+            },
+            "message": "Authorization: Bearer header-token",
+        }))
+
+        self.assertIn("record-7", preview)
+        self.assertIn("member", preview)
+        for sensitive in (
+            "alice@example.test", "credential-value", "Alice", "header-token",
+        ):
+            self.assertNotIn(sensitive, preview)
+        self.assertIn("[REDACTED]", preview)
+        self.assertTrue(authz_tester.safe_response_preview("<html>private body</html>").startswith(
+            "[non-JSON response omitted;"
+        ))
+
+    def test_extract_object_ids_handles_deep_or_invalid_json_without_crashing(self):
+        deeply_nested = "[" * 1500 + '{"id":"deep-42"}' + "]" * 1500
+        self.assertEqual(authz_tester.extract_object_ids(deeply_nested), {"deep-42"})
+        self.assertEqual(authz_tester.extract_object_ids(None), set())
+
     def test_bola_never_reuses_user_a_cookie_for_user_b(self):
         endpoint = {"url": "https://api.example.test/v1/users", "path": "/v1/users"}
 
