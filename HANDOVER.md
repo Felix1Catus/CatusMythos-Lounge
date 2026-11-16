@@ -236,7 +236,8 @@ Known-weak / unverified areas to review and add regression tests for:
   `max-pages` counts crawled docs, not probe/form pages (active mode can spawn up
   to 10 extra pages per crawled page); form-submission count counts attempts,
   not confirmed network writes.
-- **SPA timing:** fixed 250 ms settle may miss async-populated forms/DOM.
+- **SPA timing:** RESOLVED 2026-11-16 — see "third browser pass" below
+  (networkidle best-effort wait + `--settle-ms`).
 
 ## Active-testing doctrine — intentional gates (keep, document, invoke; don't drop)
 The injection scanners (SQLi/SSRF/SSTI/LFI/upload/race/WAF/reflected-XSS) still
@@ -275,16 +276,27 @@ testing.
   socket list is bounded; (3) cookie suffix-match now rejects bare single-label
   (TLD-like) parent domains while still allowing a registrable multi-label
   parent (not a full public-suffix check; routing still enforces exact origin).
-- **Still open:** the 250 ms settle can miss async SPA state; fragment/form
-  probes use the svg variant only (worked in the tested Chromium, but the img
-  variant is a cheap cross-version robustness add since svg-onload-via-innerHTML
-  is engine-dependent).
+- **Hardened (2026-11-16, third browser pass — img-variant + SPA settle):**
+  (1) fragment probes now ship in BOTH execution variants (svg-onload AND
+  img-onerror) instead of svg-only — svg-onload via innerHTML is engine/version-
+  dependent, img-onerror on `data:,` is the cheap cross-engine fallback; the
+  query probes already paired them. Verified live: the Chromium-gated
+  integration test gained a `/frag` fixture (decoded `document.write` sink,
+  linked from home so the crawler reaches it) and asserts a fragment-source
+  dom_xss finding end-to-end. (2) Form probes now try svg first and fall back
+  to the img variant only when svg did not execute (a success on either is the
+  same finding, so no budget is wasted double-submitting after a confirmation);
+  budget check runs per submission. (3) `_navigate()` adds a best-effort
+  `networkidle` wait (capped at 4× settle, silently skipped when it never fires
+  on polling/websocket pages) plus a new `--settle-ms` flag (50-5000, default
+  250 — behavior unchanged by default) so operators can wait longer for
+  async-rendered SPA DOM/forms. SKILL.md documents the variants and the flag.
 
 ## Open items
-1. Optional browser-auditor robustness: add the img-variant to fragment/form
-   probes (cross-engine), and consider a networkidle/longer settle for SPAs.
-   Re-examine the `upload_tester.py` PATH_INFO probe whose broad exception catch
-   was removed (unexpected exceptions now propagate).
+1. DONE 2026-11-16 (img-variant fragment/form probes + `--settle-ms`/networkidle
+   settle — see the third browser pass above). Still worth a look: re-examine
+   the `upload_tester.py` PATH_INFO probe whose broad exception catch was
+   removed (unexpected exceptions now propagate).
 2. Build a full skill-by-skill inventory (intended use, CLIs, I/O, deps, tests,
    scope controls, overlaps, gaps). None exists yet.
 3. Revisit bootstrap + task preflight against "install required tools directly

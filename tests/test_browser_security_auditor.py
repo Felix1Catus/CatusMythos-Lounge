@@ -175,6 +175,27 @@ class ActiveProbeTests(unittest.TestCase):
         self.assertTrue(any(src == "query" for src, _ in probes))
         self.assertTrue(any(src == "fragment" for src, _ in probes))
 
+    def test_fragment_probes_use_both_variants(self):
+        # Regression: the fragment probe used the svg variant only; svg-onload
+        # via innerHTML is engine-dependent, so an img-onerror fragment probe
+        # must also be emitted (the query probes already paired them).
+        probes = bsa.active_probe_urls("http://h.test/x", 123456789)
+        fragments = [url for src, url in probes if src == "fragment"]
+        self.assertEqual(len(fragments), 2)
+        self.assertTrue(any("onload" in f and "<svg" in f for f in fragments), fragments)
+        self.assertTrue(any("onerror" in f and "<img" in f for f in fragments), fragments)
+
+    def test_fragment_variants_share_the_marker(self):
+        probes = bsa.active_probe_urls("http://h.test/x", 424242424)
+        for _src, url in probes:
+            if "catusAuditExecuted" in url:
+                self.assertIn("424242424", url)
+
+    def test_small_budget_still_capped(self):
+        probes = bsa.active_probe_urls("http://h.test/x?a=1&b=2&c=3", 123456789, max_probes=1)
+        self.assertLessEqual(len(probes), 1)
+        self.assertEqual(bsa.active_probe_urls("http://h.test/x", 1, max_probes=0), [])
+
     def test_bounded_by_max_probes(self):
         probes = bsa.active_probe_urls("http://h.test/x?a=1&b=2&c=3", 123456789, max_probes=3)
         self.assertLessEqual(len(probes), 3)
@@ -251,6 +272,7 @@ class _FixtureA(BaseHTTPRequestHandler):
             self._send(
                 "<!doctype html><title>Home</title><body>"
                 "<a href='/reflect?q=hi'>r</a>"
+                "<a href='/frag'>f</a>"
                 "<img src='http://127.0.0.1:%d/p.png'>"
                 "<script>try{localStorage.setItem('auth_token','x');}catch(e){}"
                 "try{window.postMessage('p','*');}catch(e){}"
@@ -263,6 +285,15 @@ class _FixtureA(BaseHTTPRequestHandler):
                 "<!doctype html><title>R</title><body><div id=s></div><script>"
                 "var v=new URLSearchParams(location.search).get('q')||'';"
                 "document.getElementById('s').innerHTML=v;</script></body>"
+            )
+        elif path == "/frag":
+            # Fragment sink: decode (browsers percent-encode the hash) and
+            # write via document.write -- the fragment probes now carry both
+            # svg and img execution variants.
+            self._send(
+                "<!doctype html><title>F</title><body><script>"
+                "try{document.write(decodeURIComponent(location.hash.slice(1)));}catch(e){}"
+                "</script></body>"
             )
         else:
             self.send_response(404)
@@ -302,6 +333,7 @@ class BrowserIntegrationTests(unittest.TestCase):
             active="--active" in extra or "--submit-forms" in extra,
             submit_forms="--submit-forms" in extra,
             depth=1, max_pages=10, max_requests=500, timeout_ms=15000,
+            settle_ms=250,
             max_form_submissions=5, headed=False, storage_state=None,
         )
         target = bsa.validate_target_url("http://127.0.0.1:%d/" % self.port_a)
@@ -330,6 +362,14 @@ class BrowserIntegrationTests(unittest.TestCase):
         r = self._run(["--active"])
         dom = [f for f in r["findings"] if f["type"] == "dom_xss"]
         self.assertTrue(any(f["source"] == "query" for f in dom))
+
+    def test_active_fragment_dom_xss_detected(self):
+        # Fragment probes now ship in BOTH execution variants (svg + img);
+        # the /frag fixture's decoded document.write sink fires on either.
+        # /frag is linked from home so the crawler reaches it at depth 1.
+        r = self._run(["--active"])
+        dom = [f for f in r["findings"] if f["type"] == "dom_xss"]
+        self.assertTrue(any(f["source"] == "fragment" for f in dom))
 
 
 if __name__ == "__main__":
