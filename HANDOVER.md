@@ -6,7 +6,15 @@ doesn't mistake uneven coverage for uniform coverage.
 
 ## Current state
 
-- Latest JWT/authentication follow-up: `68dd243dc5276d1d41762a6e2c059261da7c182c`
+- Latest JWT expiry fix: `0f58b5e8a4fa6a2531bd459215f37e85c544fc7b`
+  (`Handle malformed JWT expiry values`), pushed to `origin/main` on
+  2026-11-16. Malformed, non-finite, boolean, non-numeric, and out-of-range
+  exp claims now produce an informational finding instead of crashing.
+- Latest verified suite: **521 tests + 30 subtests**; Ruff, compileall,
+  shared-helper sync, CLI docs (**10 / 95 / 58**), and `git diff --check`
+  passed. No live targets were contacted.
+
+- Previous JWT/authentication follow-up: `68dd243dc5276d1d41762a6e2c059261da7c182c`
   (`Harden API auth analyzer evidence`), pushed to `origin/main` on 2026-11-16.
   JWT/API-key 2xx responses now require an invalid-token or unauthenticated
   control rejection before they are confirmed; otherwise they are INFO
@@ -14,7 +22,7 @@ doesn't mistake uneven coverage for uniform coverage.
   JWT header/payload and nested privilege-claim values redact common secrets
   and personal data. JWT decoding rejects malformed base64url and non-object
   header/payload JSON. Active probes remain enabled.
-- Latest verified suite: **520 tests + 25 subtests**; Ruff, compileall,
+- Verification at the 68dd243 code state: **520 tests + 25 subtests**; Ruff, compileall,
   shared-helper sync, CLI docs (**10 / 95 / 58**), and `git diff --check`
   passed. No live targets were contacted.
 
@@ -92,6 +100,8 @@ doesn't mistake uneven coverage for uniform coverage.
 - `68dd243dc5276d1d41762a6e2c059261da7c182c` — added JWT/API-key invalid-token
   controls and candidate confidence, strict JWT decoding, recursive claim
   redaction, bounded delay inputs, and focused auth-analyzer regressions.
+- `0f58b5e8a4fa6a2531bd459215f37e85c544fc7b` — made JWT expiry analysis
+  resilient to huge, non-finite, boolean, and non-numeric exp claim values.
 - Verification at the `61aae43` code state: **441 tests + 21 subtests** passed;
   Ruff, compileall, CLI docs (`10/94/58`), and shared-helper sync passed. The
   browser feature has a real local Chromium fixture run. The focused PATH_INFO
@@ -167,6 +177,14 @@ doesn't mistake uneven coverage for uniform coverage.
   full suite passed **520 tests + 25 subtests**, Ruff, compileall, helper sync,
   CLI docs (**10 / 95 / 58**), and git diff --check. No live targets were
   contacted.
+- **JWT expiry boundary follow-up (2026-11-16, code commit
+  0f58b5e8a4fa6a2531bd459215f37e85c544fc7b):** direct conversion of arbitrary
+  exp numbers to datetime raised OverflowError for large but valid JSON
+  integers. The analyzer now reports malformed/non-finite/non-numeric or
+  unrepresentable expiry values as INFO and continues. Added one regression
+  with five invalid-value subcases. API-breaker matrix: **47 tests**; full
+  suite: **521 tests + 30 subtests**. Ruff, compileall, helper sync, CLI docs
+  (10 / 95 / 58), and git diff --check passed; all target requests were mocked.
 - The browser auditor has now had a **real Playwright/Chromium integration run**
   against a local fixture (passive, active query, active fragment via both
   `innerHTML` and `document.write`, and form submission all exercised). Two bugs
@@ -524,7 +542,7 @@ browser `--active`, or `--submit-forms` behavior.
    uploads.
 2. **Inventory structure — coverage refreshed; structural map still needs
    review if skills, CLIs, dependencies, or plugin references move.** Inventory
-   now includes bootstrap behavior and the 46 focused API-breaker regressions.
+   now includes bootstrap behavior and the 47 focused API-breaker regressions.
 3. **Bootstrap + task preflight — implemented; deeper OS-specific install
    validation remains open.** Missing Python dependencies, Chromium, Go, Go
    recon tools, and allowlisted system tools are actively installed through
@@ -540,7 +558,7 @@ browser `--active`, or `--submit-forms` behavior.
 4. Consolidate the copied `_common.py` helpers? A sync check exists instead
    of consolidation. Map imports/CLI examples/plugin refs/tests before moving.
 5. Continue skill deepening where meaningful gaps remain. `api-breaker` is still
-   only partially audited: JWT now has 46 offline regressions but still needs
+   only partially audited: JWT now has 47 offline regressions but still needs
    isolated HTTP integration and review of the RS/PS relabel hypothesis;
    next prioritize GraphQL depth/authz/
    CSRF behavior, BOLA/BFLA integration, rate-limit bypass/batching, business-

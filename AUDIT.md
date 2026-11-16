@@ -352,3 +352,20 @@ for all attack variants, sensitivity/ownership confirmation that needs a
 target-specific human read-back, and independent validation of the RS/PS
 relabel hypothesis. The stdlib-only decision continues to defer true-key JWKS
 verification and embedded-JWK signing.
+
+---
+
+## Follow-up addendum — JWT expiry claim bounds (2026-11-16)
+
+A direct reproduction showed analyze_jwt_claims() crashed with OverflowError
+when a syntactically valid JWT payload contained a very large numeric exp.
+Non-finite floats, booleans (which Python treats as integers), and non-numeric
+exp values also lacked safe classification. These values now produce an
+informational jwt_invalid_expiry finding and analysis continues; ordinary
+numeric expiry behavior is unchanged.
+
+One regression covers huge integers, infinity, NaN, booleans, and string
+values. The API-breaker matrix now has **47 tests**. Full verification passed
+**521 tests + 30 subtests**, Ruff, compileall, shared-helper sync, CLI docs
+(**10 skill docs / 95 command references / 58 CLIs**), and git diff --check.
+The code fix is commit 0f58b5e8a4fa6a2531bd459215f37e85c544fc7b on main.

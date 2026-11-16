@@ -7,7 +7,8 @@ it is not itself a line-by-line doc-vs-code audit (that happens per skill).
 Inventory structure originated at `f870a85`. Coverage status refreshed
 2026-11-16 against the verified `3aa2f62` bootstrap baseline, the API-breaker
 continuation from `a95bab9`, the BOLA URL fix at `9efbba5`, and the BOLA/BFLA
-evidence follow-up at `511a522`, and JWT/auth hardening at `68dd243`. Check
+evidence follow-up at `511a522`, JWT/auth hardening at `68dd243`, and the exp
+boundary fix at `0f58b5e`. Check
 `git log -1` for the exact current tip.
 
 ## Shape of the toolkit
@@ -37,11 +38,11 @@ checked by `tests/test_plugin_bootstrap_hook.py` and the same matrix.
 | Coverage | Skills |
 |---|---|
 | Broad script-level regression matrices | `recon-dominator` (59), `cloud-pivot-finder` (38), `attack-path-architect` (28), `16-ai-llm-security` (87), `03-exploit-development` (14), `vuln-chain-composer` (63), legacy `webapp-exploit-hunter` testers (60) |
-| Focused or partial coverage | `api-breaker` (46 focused scope/discovery/business-logic/GraphQL-CSRF/BOLA/BFLA/auth-analyzer regressions); `webapp-exploit-hunter` browser/crawler/DOM and selected CLI paths; `web-cache-auditor` (8 tests for its script) |
+| Focused or partial coverage | `api-breaker` (47 focused scope/discovery/business-logic/GraphQL-CSRF/BOLA/BFLA/auth-analyzer regressions); `webapp-exploit-hunter` browser/crawler/DOM and selected CLI paths; `web-cache-auditor` (8 tests for its script) |
 | Plugin infrastructure | `tests/test_bootstrap.py` (30): parsing, install command construction, retry/cache validation, browser setup, PATH readiness, and nonzero preflight gates |
 | No scripts (manual methodology) | `web-protocol-auditor` |
 
-The full suite most recently passed **520 tests plus 25 subtests**. It includes
+The full suite most recently passed **521 tests plus 30 subtests**. It includes
 local-fixture browser integration with Playwright/Chromium, bootstrap
 regressions, and the new API-breaker matrix. The strict bootstrap preflight also
 passed on the current Windows host. Coverage is uneven:
