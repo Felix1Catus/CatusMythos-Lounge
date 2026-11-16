@@ -6,42 +6,33 @@ doesn't mistake uneven coverage for uniform coverage.
 
 ## Current state
 
-- Latest code pass: `a75e337cd2cb1a025cec5d7abc35f401ce646c74`
-  (`Harden API rate-limit probe evidence`), following
-  the shared response-sanitizing pass `5d6e6b36947adfb6144eb98004227297daf805d6`
-  (`Redact API breaker response evidence consistently`) and the authz
-  fixes in `90d4fadda5ca21bfa5575f261ed32199986bc18c` and
-  `585ffa2b38aba78625e83a4eec2af2e1de3637b0`. Every API-breaker
-  `response_preview` now uses the skill-local `response_safety.py`: JSON
-  previews redact common credential/PII keys and inline email/JWT/bearer/key
-  patterns; non-JSON bodies are omitted. User A's `--cookie` is separate from
-  User B's `--cookie-b`, and authz `--delay` is finite and limited to 0–60
-  seconds. Object-ID extraction is iterative for deeply nested JSON. A real
-  loopback HTTP fixture exercises the User A collection read, User B
-  exact-object GET, regular-user admin GET, and GET-only default. API-breaker
-  matrix **69 tests + 26 subtests**; full suite **543 tests + 47 subtests**. Focused authz
-  tests passed **81 tests + 31 subtests**. Ruff, compileall, helper sync, CLI
-  docs (**10 / 95 / 58**), and diff check passed. Integration contacted only a
-  local fixture; no live external API was contacted. Redaction is pattern-based
-  and cannot identify every application-specific secret embedded in arbitrary
+- Latest code passes: `b8abc54830bbdab2ce712b6260a021395caaf46f`
+  (`Probe query cache-key behavior safely`) and
+  `c484a2834893ea7fd7af645bb9a91bd7816ad052`
+  (`Improve API rate and coupon evidence`), following rate-limit hardening
+  `a75e337cd2cb1a025cec5d7abc35f401ce646c74` and shared API response
+  sanitizing `5d6e6b36947adfb6144eb98004227297daf805d6`.
+- API-breaker now has **72 tests + 26 subtests**; cache auditor has **12 tests +
+  23 subtests**; the full suite passes **550 tests + 68 subtests**. Ruff,
+  compileall, shared-helper sync, CLI docs (**10 / 95 / 58**), and diff checks
+  pass. Local HTTP fixtures exercise rate-limit header/GraphQL probes and query
+  cache replay; no live external API was contacted.
+- Rate-limit imports now include same-origin-filtered OpenAPI records and
+  api-discovery's URL-keyed GraphQL map. Duplicate rotating XFF evidence is
+  fixed. Race, path-mutation, IP-header, and GraphQL responses without
+  application-level proof remain INFO candidates. Active probes remain enabled.
+- Cache timing is finite and bounded (timeout <= 30 seconds, delay <= 5
+  seconds). Active cache probes add a bounded set of five inert query-key
+  candidates, skip existing names and sensitive-looking query keys, and retain
+  same-nonce replay only under the existing staging-only flag. Query values
+  are omitted from reports. The local fixture models an unkeyed `utm_content`
+  cache entry; broader parser differences remain manual.
+- Coupon stacking now requires at least two entries in an explicit applied
+  coupon/discount collection before emitting an INFO candidate. All five
+  active payload cases still run; totals and persistence still require a
+  controlled business-state read-back. API response redaction remains
+  pattern-based and cannot catch every unknown secret embedded in arbitrary
   JSON strings.
-
-- Latest rate-limit pass
-  (`a75e337cd2cb1a025cec5d7abc35f401ce646c74`): imported OpenAPI endpoint
-  records and api-discovery's URL-keyed GraphQL result map are now included after strict
-  same-origin filtering. Count, worker, delay, and GraphQL baseline budgets are
-  validated. Race, IP-header, path-mutation, and GraphQL results that lack
-  application-level proof are INFO candidates, with explicit candidate-to-OWASP
-  report mappings. The active probes remain enabled. GraphQL sends bounded,
-  side-effect-free `__typename` payloads, requires clean response evidence for
-  a differential, and does not claim that safe resolver acceptance proves
-  impact on login/OTP or other sensitive actions. Four focused regressions
-  cover imported shapes, response validation, and report classification. The
-  API-breaker matrix is now 69 tests + 26 subtests; full suite is 543 tests + 47
-  subtests. Ruff, compileall, shared-helper sync, CLI docs (10 / 95 / 58), and
-  diff checks passed. Rate-limit behavior has not been integration-tested
-  against a local HTTP fixture or a live authorized API; no external target was
-  contacted during this pass.
 
 - Previous authz code pass: `585ffa2b38aba78625e83a4eec2af2e1de3637b0`
   (`Sanitize authz evidence and handle deep JSON`). See the shared redaction
@@ -674,7 +665,7 @@ browser `--active`, or `--submit-forms` behavior.
    uploads.
 2. **Inventory structure — coverage refreshed; structural map still needs
    review if skills, CLIs, dependencies, or plugin references move.** Inventory
-   now includes bootstrap behavior and the 69 focused API-breaker regressions.
+   now includes bootstrap behavior and the 72 focused API-breaker regressions.
 3. **Bootstrap + task preflight — implemented; deeper OS-specific install
    validation remains open.** Missing Python dependencies, Chromium, Go, Go
    recon tools, and allowlisted system tools are actively installed through
@@ -697,21 +688,25 @@ browser `--active`, or `--submit-forms` behavior.
    separate User A/User B cookie handling, but no live API test; continue
    reviewing ownership evidence and state-changing write/read-back behavior.
    JWT has 47 focused offline regressions but still needs isolated HTTP
-   integration and review of the RS/PS relabel hypothesis. Authz preview
-   redaction is implemented; audit the remaining raw previews in
-   `auth_analyzer.py`, `logic_tester.py`, and `mass_assignment.py`. Rate-limit
-   bypass and batching now have focused mocked regressions and candidate-aware
-   reporting, but still need a local HTTP integration fixture; response-shape
-   matches and `__typename` batches are not proof of business impact. Continue
-   with business-state read-back and broad report input shapes. The API-breaker
-   response preview emitters now use the shared sanitizer; review its pattern
-   limits against app-specific data formats.
-   Also continue the
-   remaining browser
-   scope/state/redaction edge cases and live-protocol methodology. Ground changes
-   in primary-source research, bounded active probes, explicit evidence/confidence
-   rules, and regression coverage. The matrices above do not prove complete
-   coverage or absence of bugs.
+   integration and review of the RS/PS relabel hypothesis. All API-breaker
+   response-preview emitters use the shared sanitizer; review pattern limits
+   against app-specific data formats. Rate-limit header and GraphQL behavior
+   now have loopback integration, but no live authorized API check. Coupon
+   stacking rejects generic-success and request-echo signals, while business
+   totals still need controlled read-back. `logic_tester.py` race probes still
+   send ten concurrent state-changing requests for each of three generic
+   payloads without a sequential baseline or state read-back; this remains a
+   high-priority evidence and request-budget review. Keep the active probes,
+   and improve their evidence and bounded-work model rather than converting
+   them to passive-only checks. Continue with business-state read-back and
+   broad report input shapes. Cache query probes use a five-name seed set;
+   duplicate-key, semicolon, parameter-cloaking, and broader normalization
+   cases remain manual. The plugin-wide structural reorganization and shared
+   helper consolidation have not been done. Continue the remaining browser
+   scope/state/redaction edge cases and live-protocol methodology. Ground
+   changes in primary-source research, bounded active probes, explicit
+   evidence/confidence rules, and regression coverage. The matrices above do
+   not prove complete coverage or absence of bugs.
 
 ## Standing constraints (don't re-introduce)
 - Preserve the active-testing doctrine: for explicitly authorized, in-scope

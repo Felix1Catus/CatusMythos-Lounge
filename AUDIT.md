@@ -501,11 +501,56 @@ candidate report mappings. The API-breaker test file now has **69 tests + 26
 subtests**. Full verification passed **543 tests + 47 subtests**, Ruff,
 compileall, shared-helper sync, CLI docs (**10 skill docs / 95 command
 references / 58 CLIs**), and `git diff --check`. Target behavior was mocked;
-no external API was contacted. There is still no rate-limiter local HTTP
-integration fixture, and no live authorized API integration. A `429`
-differential, matching response shape, or successful `__typename` result remains
-candidate evidence rather than proof of business impact.
+no external API was contacted at this point in the audit. The follow-up below
+adds local loopback HTTP fixtures; no live authorized API integration exists.
+A `429` differential, matching response shape, or successful `__typename`
+result remains candidate evidence rather than proof of business impact.
 
 Code, focused regressions, skill documentation, and research-note updates are
 commit `a75e337cd2cb1a025cec5d7abc35f401ce646c74`
 (`Harden API rate-limit probe evidence`) on `main`.
+
+---
+
+## Follow-up addendum — loopback evidence, query cache keys, and coupon signals (2026-11-16)
+
+Two local HTTP fixtures now exercise the rate-limiter's actual request path:
+one returns a per-client 429 baseline and permits rotating `X-Forwarded-For`
+values; the other accepts a clean unbatched GraphQL request, throttles the
+next one, then returns exact clean results for the array and alias probes.
+The first fixture exposed duplicate findings from two configured
+`X-Forwarded-For` entries that were overwritten by the same generated-IP
+sequence. The redundant sequence is now run once, retaining the active
+rotation probe. Both findings remain INFO candidates, and no external target
+was contacted.
+
+`web-cache-auditor` now rejects non-finite and over-limit timing values,
+including direct `request_get()` timeout calls: request timeout is bounded to
+30 seconds and delay to 5 seconds. Its active `--probe-unkeyed` mode also tests
+five inert query-key candidates (`utm_content`, `utm_source`, `gclid`,
+`fbclid`, `_`) on eligible URLs. It skips names already present and suppresses
+query probing when sensitive-looking keys are present. A staging-only replay
+uses the same nonce with the candidate parameter removed. A local cache fixture
+verifies a replayed canary becomes an INFO lead, with the query value omitted
+from the report. The candidate seed set is intentionally limited; duplicate
+parameter precedence, semicolon parsing, and broader cache/origin normalization
+remain manual checks. These probes follow PortSwigger's discussion of
+[cache parameter cloaking](https://portswigger.net/research/web-cache-entanglement)
+and [unkeyed query strings](https://portswigger.net/web-security/web-cache-poisoning/exploiting-implementation-flaws/lab-web-cache-poisoning-unkeyed-query).
+
+`logic_tester.py` no longer treats a generic `success` message or an echo of
+the submitted `coupons` array as coupon-stacking evidence. It emits an INFO
+candidate only when a 2xx JSON response has at least two entries in an explicit
+applied-coupon/discount collection. All five active coupon payload cases still
+run; response evidence still does not prove a changed total or persisted state.
+
+The API-breaker suite now has **72 tests + 26 subtests**; cache auditor has
+**12 tests + 23 subtests**. Full suite: **550 tests + 68 subtests**. Ruff,
+compileall, shared-helper sync, CLI docs (**10 skill docs / 95 command
+references / 58 CLIs**), and `git diff --check` passed. All integration traffic
+was loopback-only; no live external API was contacted.
+
+Code, skill/research docs, and local regression fixtures are commits
+`c484a2834893ea7fd7af645bb9a91bd7816ad052` (`Improve API rate and coupon
+evidence`) and `b8abc54830bbdab2ce712b6260a021395caaf46f`
+(`Probe query cache-key behavior safely`) on `main`.
