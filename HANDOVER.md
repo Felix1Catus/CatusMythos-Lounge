@@ -12,10 +12,14 @@ doesn't mistake uneven coverage for uniform coverage.
   - `6695fcf` — isolated browser runtime security auditor.
   - `da46b1d` — integrated the local deep-payload LFI + ImageTragick work onto
     the audited base (3-way merge of a local branch; see commit body).
-- Verification last run on `da46b1d`: 47 unit tests + 21 subtests pass; Ruff
-  clean. A real Playwright/Chromium run of the browser auditor is **still
-  pending** (Chromium binary now installed locally via
-  `python3 -m playwright install chromium`).
+- Verification: 76 unit tests + 21 subtests pass; Ruff clean; compileall ok;
+  CLI-docs 10/94/58; shared helpers in sync.
+- The browser auditor has now had a **real Playwright/Chromium integration run**
+  against a local fixture (passive, active query, active fragment via both
+  `innerHTML` and `document.write`, and form submission all exercised). Two bugs
+  were found and fixed (see below). `tests/test_browser_security_auditor.py`
+  adds pure-function coverage plus a Chromium-gated live test that skips cleanly
+  when the browser is absent.
 
 ## Depth of review so far (self-reported by the audit author, not yet
 independently re-verified line by line)
@@ -82,11 +86,30 @@ The two API write gates are the clearest friction with "don't be passive":
 authorized workflows must document and pass the flags, not silently skip write
 testing.
 
+## Browser auditor — verified by integration run (2026-11-16)
+- **Working:** missing-header/cookie-flag/sensitive-storage findings; off-origin
+  request blocking + counting; WebSocket interception (no upstream connect);
+  active query DOM-XSS (svg+img); active fragment DOM-XSS (svg fired via both
+  `innerHTML` and `document.write` in the tested Chromium); form submission with
+  marker execution; `/logout`-style links skipped.
+- **Fixed in `b-fix` commit:** (1) `redact_url` now reports `ws://`/`wss://`
+  socket URLs instead of `[invalid-url]`; (2) the wildcard-postMessage hook now
+  uses `Object.defineProperty(window, 'postMessage', …)` — the previous
+  `Window.prototype.postMessage` reassignment silently no-ops in Chromium, so
+  that finding never fired.
+- **Still open (not yet fixed):** form-POST one-shot grant is not bound to the
+  exact query/body/resource-type (a racing same-path POST could consume it);
+  cookie suffix-match still admits parent-domain cookies; the HTTP budget counts
+  blocked requests and ignores WebSockets; the 250 ms settle can miss async SPA
+  state; fragment/form probes use the svg variant only (worked here, but the img
+  variant is a cheap cross-version robustness add since svg-onload-via-innerHTML
+  is engine-dependent).
+
 ## Open items
-1. Integration-test the browser auditor against a local fixture (passive, active
-   query/fragment, and form-submit paths); fix issues; add regression tests for
-   the behaviors listed above. Re-examine the `upload_tester.py` PATH_INFO probe
-   whose broad exception catch was removed (unexpected exceptions now propagate).
+1. Harden the browser auditor's still-open items above (grant binding, budget
+   counting, optional img fragment/form variant). Re-examine the
+   `upload_tester.py` PATH_INFO probe whose broad exception catch was removed
+   (unexpected exceptions now propagate).
 2. Build a full skill-by-skill inventory (intended use, CLIs, I/O, deps, tests,
    scope controls, overlaps, gaps). None exists yet.
 3. Revisit bootstrap + task preflight against "install required tools directly
