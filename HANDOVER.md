@@ -6,19 +6,27 @@ doesn't mistake uneven coverage for uniform coverage.
 
 ## Current state
 
-- Latest code pass: `585ffa2b38aba78625e83a4eec2af2e1de3637b0`
-  (`Sanitize authz evidence and handle deep JSON`), following
-  `90d4fadda5ca21bfa5575f261ed32199986bc18c` (`Isolate BOLA user sessions and
-  verify authz flows`), both on `main`. The authz CLI now keeps User A's
-  `--cookie` separate from User B's `--cookie-b`, bounds `--delay` to finite
-  0–60 seconds, redacts common credentials/PII from JSON response previews, and
-  omits non-JSON bodies. Object-ID extraction is iterative and handles deeply
-  nested JSON. A real loopback HTTP fixture exercises User A collection read,
-  User B exact-object GET, regular-user admin GET, and GET-only default.
-  API-breaker matrix **65 tests**; full suite **539 tests + 47 subtests**.
-  Focused authz tests passed **81 tests + 31 subtests**. Ruff, compileall,
-  helper sync, CLI docs (**10 / 95 / 58**), and diff check passed. Integration
-  contacted only a local fixture; no live external API was contacted.
+- Latest code pass: `5d6e6b36947adfb6144eb98004227297daf805d6`
+  (`Redact API breaker response evidence consistently`), following the authz
+  fixes in `90d4fadda5ca21bfa5575f261ed32199986bc18c` and
+  `585ffa2b38aba78625e83a4eec2af2e1de3637b0`. Every API-breaker
+  `response_preview` now uses the skill-local `response_safety.py`: JSON
+  previews redact common credential/PII keys and inline email/JWT/bearer/key
+  patterns; non-JSON bodies are omitted. User A's `--cookie` is separate from
+  User B's `--cookie-b`, and authz `--delay` is finite and limited to 0–60
+  seconds. Object-ID extraction is iterative for deeply nested JSON. A real
+  loopback HTTP fixture exercises the User A collection read, User B
+  exact-object GET, regular-user admin GET, and GET-only default. API-breaker
+  matrix **65 tests**; full suite **539 tests + 47 subtests**. Focused authz
+  tests passed **81 tests + 31 subtests**. Ruff, compileall, helper sync, CLI
+  docs (**10 / 95 / 58**), and diff check passed. Integration contacted only a
+  local fixture; no live external API was contacted. Redaction is pattern-based
+  and cannot identify every application-specific secret embedded in arbitrary
+  JSON strings.
+
+- Previous authz code pass: `585ffa2b38aba78625e83a4eec2af2e1de3637b0`
+  (`Sanitize authz evidence and handle deep JSON`). See the shared redaction
+  follow-up below; its pattern-based limitation still applies.
 
 - Previous GraphQL code pass: `81733eee577420a8b3efebfb3117b691393a2f85`
   (`Harden GraphQL probe evidence and inputs`), on `main`. GraphQL depth,
@@ -145,6 +153,9 @@ doesn't mistake uneven coverage for uniform coverage.
 - `585ffa2b38aba78625e83a4eec2af2e1de3637b0` — redacted common sensitive
   JSON fields and inline secrets from authz response previews, omitted
   non-JSON bodies, and made object-ID extraction iterative for deep JSON.
+- `5d6e6b36947adfb6144eb98004227297daf805d6` — moved response preview
+  sanitizing into `response_safety.py` and applied it across auth, authz,
+  business-logic, and mass-assignment outputs.
 - Verification at the `61aae43` code state: **441 tests + 21 subtests** passed;
   Ruff, compileall, CLI docs (`10/94/58`), and shared-helper sync passed. The
   browser feature has a real local Chromium fixture run. The focused PATH_INFO
@@ -275,6 +286,18 @@ doesn't mistake uneven coverage for uniform coverage.
   (**10 / 95 / 58**), and diff check passed. No live external target was
   contacted. Similar raw `response_preview` fields in `auth_analyzer.py`,
   `logic_tester.py`, and `mass_assignment.py` remain to be audited.
+- **API-breaker shared response-redaction follow-up (2026-11-16, code commit
+  `5d6e6b36947adfb6144eb98004227297daf805d6`):** extracted the authz sanitizer
+  into `scripts/response_safety.py` and applied it to all response preview
+  emitters in `authz_tester.py`, `auth_analyzer.py`, `logic_tester.py`, and
+  `mass_assignment.py`. Existing auth, business-logic, and mass-assignment
+  tests now assert that preview output strips representative PII/credentials.
+  A source scan found no remaining raw `response_preview: body[:…]` in the
+  API-breaker scripts. The sanitizer is key/pattern-based; an unknown
+  application-specific secret embedded in arbitrary JSON text may still
+  escape detection, while HTML/non-JSON body snippets are omitted. Full suite:
+  **539 tests + 47 subtests**; Ruff, compileall, helper sync, CLI docs
+  (**10 / 95 / 58**), and diff check passed. No live targets contacted.
 - The browser auditor has now had a **real Playwright/Chromium integration run**
   against a local fixture (passive, active query, active fragment via both
   `innerHTML` and `document.write`, and form submission all exercised). Two bugs
@@ -659,7 +682,9 @@ browser `--active`, or `--submit-forms` behavior.
    redaction is implemented; audit the remaining raw previews in
    `auth_analyzer.py`, `logic_tester.py`, and `mass_assignment.py`. Next
    prioritize rate-limit bypass/batching, business-state read-back, and report
-   input shapes. Also continue the
+   input shapes. The API-breaker response preview emitters now use the shared
+   sanitizer; review its pattern limits against app-specific data formats.
+   Also continue the
    remaining browser
    scope/state/redaction edge cases and live-protocol methodology. Ground changes
    in primary-source research, bounded active probes, explicit evidence/confidence

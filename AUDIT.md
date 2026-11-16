@@ -447,3 +447,29 @@ Code changes are commits `90d4fadda5ca21bfa5575f261ed32199986bc18c` and
 `585ffa2b38aba78625e83a4eec2af2e1de3637b0` on `main`. Similar raw preview
 fields in `auth_analyzer.py`, `logic_tester.py`, and `mass_assignment.py` are
 not yet reviewed and remain open.
+
+---
+
+## Follow-up addendum — shared API response-preview sanitizing (2026-11-16)
+
+The prior authz-preview change was generalized into the skill-local
+`skills/api-breaker/scripts/response_safety.py` helper and applied to every
+`response_preview` emitter in `authz_tester.py`, `auth_analyzer.py`,
+`logic_tester.py`, and `mass_assignment.py`. Structured JSON redacts common
+credential, key, cookie, and personal-data field names; common inline email,
+JWT, bearer, and credential-assignment patterns are also masked. Non-JSON
+response bodies are omitted from findings, while the authz preview retains a
+body-length marker. Object ID extraction in authz stays iterative.
+
+Regressions now exercise output redaction through the no-auth, business-logic,
+and mass-assignment finding paths in addition to the authz sanitizer itself.
+`rg` confirmed there are no remaining raw `response_preview: body[:…]` slices
+in API-breaker scripts. Full suite: **539 tests + 47 subtests**; focused
+authz/API tests: **81 tests + 31 subtests**. Ruff, compileall, helper sync,
+CLI docs (**10 skill docs / 95 command references / 58 CLIs**), and
+`git diff --check` passed. All requests were mocked or directed to a local
+loopback fixture; no external targets were contacted.
+
+Redaction is pattern-based, not a guarantee that all proprietary values or
+unknown secrets embedded in arbitrary JSON strings are removed. The relevant
+code is commit `5d6e6b36947adfb6144eb98004227297daf805d6` on `main`.

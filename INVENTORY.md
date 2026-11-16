@@ -95,7 +95,7 @@ specific fixes, test themes, browser limitations, and the latest verification.
 ### api-breaker — `[65 FOCUSED REGRESSIONS; STILL PARTIAL]`
 - **Use:** API security from domains — discover REST/GraphQL/SOAP, rebuild
   schemas, test BOLA/IDOR, BFLA, mass assignment, JWT, rate-limit bypass, logic.
-- **CLIs (8 + `_common`):** `api_discovery`, `schema_builder` (1814 ln),
+- **CLIs (8; `_common.py` and `response_safety.py` are support modules):** `api_discovery`, `schema_builder` (1814 ln),
   `auth_analyzer`, `authz_tester`, `mass_assignment`, `rate_limiter`,
   `logic_tester`, `api_report`.
 - **Coverage:** `tests/test_api_breaker.py` covers same-origin JavaScript
@@ -103,10 +103,11 @@ specific fixes, test themes, browser limitations, and the latest verification.
   `logic_tester`, bounded rate-test counts, active-probe preservation, duplicate
   single-endpoint submissions, candidate-confidence/report mapping, GraphQL
   query-name/input bounds and evidence classifications, nested-field candidate
-  handling, User A/User B cookie isolation, bounded authz delay, safe authz
-  response previews, iterative ID extraction, and a local HTTP BOLA/BFLA
-  workflow fixture. Active GraphQL CSRF GET/form submits still require the
-  explicit cookie/canary, and mutation writes remain opt-in.
+  handling, User A/User B cookie isolation, bounded authz delay, sanitized
+  response previews across auth/authz/business-logic/mass-assignment outputs,
+  iterative ID extraction, and a local HTTP BOLA/BFLA workflow fixture. Active
+  GraphQL CSRF GET/form submits still require the explicit cookie/canary, and
+  mutation writes remain opt-in.
   `tests/test_targeted_audit_fixes.py` covers hostile imports and write gating
   in `auth_analyzer`, `authz_tester`, and `mass_assignment`. This is not a full
   per-script matrix: JWT attack cases still need isolated HTTP integration and
@@ -114,8 +115,8 @@ specific fixes, test themes, browser limitations, and the latest verification.
   integration; BOLA/BFLA has local loopback integration but no live API
   integration; rate-limit bypass/batching,
   business-state read-back, and broad report input shapes remain lightly tested
-  or untested. Raw response previews in `auth_analyzer`, `logic_tester`, and
-  `mass_assignment` still need sensitivity review/redaction.
+  or untested. Response redaction is pattern-based; application-specific
+  secrets embedded in arbitrary JSON strings may still escape detection.
 - **Scope controls:** explicit trusted `--api-base` for imported endpoints in
   schema, auth, authz, mass assignment, rate-limit, and business-logic testing;
   off-origin imported endpoints are skipped. `--allow-mutation-write` gates
