@@ -11,6 +11,8 @@
     "security",
     "pentest",
     "web-security",
+    "browser-testing",
+    "dom-xss",
     "api-security",
     "cloud-security",
     "bug-bounty",

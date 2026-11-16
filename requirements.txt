@@ -3,12 +3,12 @@
 # The core pipeline (recon-dominator, attack-path-architect,
 # webapp-exploit-hunter, api-breaker, cloud-pivot-finder, vuln-chain-composer)
 # needs NONE of these -- it's stdlib-only by design. 03-exploit-development is
-# also stdlib-only. Everything below is used by one or more of the two
-# remaining domain skills (03/16), and every import site already guards
-# against the package being missing (the script degrades or explains what's
-# unavailable rather than crashing on import). This file exists so
+# also stdlib-only. Optional packages below are used by specialized skills;
+# import sites guard for missing packages and explain how to install them.
+# This file exists so
 # `scripts/bootstrap.py` (wired to the SessionStart hook in
 # .claude-plugin/hooks.json) can install it in one step; nothing here is
 # required for the pipeline skills to work.
 
 requests>=2.31.0           # skills/16-ai-llm-security/scripts/prompt_injection_tester.py (HTTP calls to the target's API)
+playwright>=1.48.0         # webapp-exploit-hunter/scripts/browser_security_auditor.py (isolated Chromium testing)

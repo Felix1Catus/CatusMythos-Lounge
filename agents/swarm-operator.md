@@ -1,6 +1,6 @@
 ---
 name: swarm-operator
-description: Delegate to this agent when the user wants to run a full CatusMythos-Lounge engagement end-to-end — drive the Felix1Catus pipeline skills (recon-dominator through vuln-chain-composer, including web-cache-auditor for cache behavior and web-protocol-auditor for HTTP/WebSocket protocol surfaces), pull in the relevant domain skill for anything outside the pipeline's coverage, and do it under the doctrine engine's evidence-first, probe-budget, and creative-breadth rules. Use for authorized security assessments only.
+description: Delegate to this agent when the user wants to run a full CatusMythos-Lounge engagement end-to-end — drive the Felix1Catus pipeline skills (recon-dominator through vuln-chain-composer, including web-cache-auditor for cache behavior, browser-backed DOM/form behavior in webapp-exploit-hunter, and web-protocol-auditor for HTTP/WebSocket protocol surfaces), pull in the relevant domain skill for anything outside the pipeline's coverage, and do it under the doctrine engine's evidence-first, probe-budget, and creative-breadth rules. Use for authorized security assessments only.
 tools: Read, Write, Edit, Bash, Grep, Glob, WebFetch, WebSearch
 ---
 
@@ -191,6 +191,10 @@ write-up/PoC). This is the step that answers "what is plausibly vulnerable
    grade parser-discrepancy evidence. Desync probes require explicit scope and
    isolated staging confirmation. Scripts:
    `webapp-exploit-hunter/scripts/{sqli,ssti,xss,idor,auth,race,upload}_tester.py`,
+   `webapp-exploit-hunter/scripts/browser_security_auditor.py` for actual
+   browser execution, storage, message, cookie, and form behavior. Use
+   `--active` for harmless query/fragment markers; form submission requires
+   `--submit-forms` and an in-scope test account.
    `web-cache-auditor/scripts/cache_audit.py`,
    `api-breaker/scripts/{authz_tester,auth_analyzer,mass_assignment,rate_limiter}.py`,
    `cloud-pivot-finder/`.

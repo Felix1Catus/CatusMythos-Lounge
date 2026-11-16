@@ -83,7 +83,7 @@ runs as a normal Claude Code plugin or skill set.
 | Recon | `port_scanner.py` / `tech_fingerprint.py` | Port scanning, stack/CDN/WAF fingerprinting |
 | Recon | `cve_lookup.py` | Version-matched CVE hypotheses (NVD + OSV) |
 | Recon | `google_dorker.py` / `osint_correlator.py` / `js_recon.py` / `wayback_analyzer.py` | Dorking, OSINT, JS-bundle mining, historical snapshots |
-| Web app | `sqli_tester.py` / `xss_tester.py` / `dom_xss_auditor.py` / `ssrf_tester.py` / `ssti_tester.py` | Injection checks plus heuristic client-side XSS source-to-sink review; findings need manual validation |
+| Web app | `sqli_tester.py` / `xss_tester.py` / `dom_xss_auditor.py` / `browser_security_auditor.py` / `ssrf_tester.py` / `ssti_tester.py` | Injection checks, static DOM XSS leads, and isolated browser checks for runtime DOM execution, storage, cookie flags, messages, forms, and headers |
 | Web app | `idor_tester.py` / `auth_tester.py` / `race_tester.py` | Access-control, auth, and race-condition testing |
 | Web app | `lfi_tester.py` | LFI/path-traversal (incl. sibling-parameter-gated sanitization), XXE including the `php://filter`-as-SSRF variant, and PHP object-injection surface detection — from a real disclosed LFI→deserialization→XXE→SSRF→RCE chain |
 | Web app | `upload_tester.py` | File-upload bypass + **stack-aware PHP RCE**: fingerprints nginx/Apache/Caddy/FrankenPHP first, then runs the matching strategy — PATH_INFO path confusion (CVE-2019-11043/2026-27590/2026-24895 class), Apache `.htaccess` handler remap, or direct php-fpm/FastCGI TCP exposure (common in unhardened Docker) via a minimal stdlib FastCGI client |
@@ -150,6 +150,8 @@ cp -r skills/* ~/.claude/skills/
 - Claude Code with skills support
 - Optional, for faster recon: `subfinder`, `httpx`, `puredns`, `naabu`,
   `dig`, `whois`, `nmap`
+- Optional browser testing: the bootstrap installs Playwright; install its
+  Chromium binary once with `python3 -m playwright install chromium`.
 
 At session start, the plugin installs missing optional Python dependencies
 and user-scoped Go recon tools when Go is available. Missing system packages
