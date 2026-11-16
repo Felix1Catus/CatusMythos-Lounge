@@ -45,8 +45,21 @@ finding-confidence, PoC-generation safety.
   `metadata_paths` SSRF-vector/recon-extraction/`build_pivot_path` (incl.
   ECScape-note-only-for-AWS), `cicd_finder.load_hosts`/`probe_host_path`, and
   `cloud_report`'s remediation prioritization + section summaries.
-- `attack-path-architect` — mostly repo-wide lint/timestamp and shared-helper
-  coverage; little domain-specific end-to-end testing.
+- `attack-path-architect` — DEEPENED 2026-11-16: all 5 scripts now have a
+  28-test matrix (`tests/test_attack_path_architect.py`). One real bug fixed:
+  `classify_assets` raised `NameError` when a `tech_fingerprint` host absent
+  from the port-scan map carried a `details` key (the tech-merge `else` branch
+  referenced a `details` bound only in the `if` branch) — now reads `details`
+  locally. Covered: `mitre_mapper` lookup (flat/sub-technique/unknown) +
+  `map_techniques` multi-tactic grouping + SIEM/Navigator generation;
+  `generate_attack_tree` `_ttp_lookup` (Enterprise/ATLAS/Unknown), `generate_paths`
+  scoring (condition match, risk/WAF feasibility adjustment, stealth, WEB_APP
+  fallback for HTTP-serving non-web assets, sort order), and
+  `generate_chain_opportunities` (XSS+shared-cookie, SSRF+storage, dangling
+  CNAME); `classify_assets` subdomain/port classification, `calculate_risk_score`
+  clamping, `determine_exposure`; `map_trust.build_trust_graph`
+  (source/target edge + fully-connected hosts); and `engagement_planner`'s
+  authorization-defaults-false gate + markdown render.
 - `recon-dominator` — FULLY DEEPENED 2026-11-16: every script now has
   regression coverage (58-test matrix in `tests/test_recon_dominator.py`).
   `cve_lookup` version-range matching and `active_recon`'s Sitting-Ducks SOA

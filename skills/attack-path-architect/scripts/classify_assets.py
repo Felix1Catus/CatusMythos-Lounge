@@ -229,10 +229,15 @@ def classify_assets(recon_data):
             details = result.get("details", {})
             host_map[host]["missing_security_headers"] = details.get("missing_security_headers", [])
         else:
+            # `details` must be read from THIS result -- the previous code
+            # referenced the `details` bound only inside the `if` branch
+            # above, so a tech_fingerprint host absent from the port-scan map
+            # (first such host carrying a "details" key) raised NameError.
+            details = result.get("details", {})
             host_map[host] = {
                 "host": host,
                 "technologies": result.get("technologies", []),
-                "missing_security_headers": details.get("missing_security_headers", []) if "details" in result else [],
+                "missing_security_headers": details.get("missing_security_headers", []),
                 "open_ports": [],
             }
 
