@@ -169,9 +169,48 @@ finding-confidence, PoC-generation safety.
   shell-safe `generate_curl_command` + `generate_python_poc` AST-compilability
   even with hostile chain metadata; and generate_report `get_remediation`/
   `get_vrt`/ascii diagram/HackerOne + Bugcrowd (P1/VRT) formatters.
-- `web-protocol-auditor` — manual methodology skill, no automated protocol tests.
-- Legacy web active testers (LFI/upload/auth/race/SQLi/SSRF/SSTI) — targeted
-  fixes only, no full per-script test matrix.
+- `web-protocol-auditor` — manual methodology skill (SKILL.md + research notes
+  only, no scripts); nothing to regression-test beyond the docs themselves.
+- Legacy web active testers (webapp-exploit-hunter: LFI/upload/auth/race/SQLi/
+  SSRF/SSTI/XSS/WAF-bypass) — DEEPENED 2026-11-16: added a 58-test matrix
+  (`tests/test_webapp_legacy_testers.py`) covering every previously-uncovered
+  tester offline (each network touch goes through a monkeypatched module-global
+  `http_request`, never a real socket). One real bug found and fixed:
+  `race_tester.main()` clamped the test burst to `max(2, min(threads, 50))` but
+  the PoC-generation loop reassigned `threads = args.threads`, so a `--threads
+  500` run tested with 50 while its xargs PoC and report meta claimed 500 (and
+  `--threads 1` tested 2, PoC said 1) — the reproduction never matched the
+  tested concurrency. Fixed by extracting pure `_clamp_threads()` used for both
+  the burst and the PoC/meta. Covered: race `analyze_results` (multi-success,
+  unique-body inconsistency even when `expect_single_success` is False,
+  all-success-no-rejection, status distribution, SCENARIOS integrity) +
+  `send_parallel_requests` ordering + the clamp bounds; idor `detect_id_type`/
+  `generate_test_ids` (numeric incl. base64/hex encodings, UUID last-segment,
+  slug)/`replace_id_in_url` (query + `path:` marker) + horizontal IDOR
+  detection (different-200-body flagged, error-page body not) — note the
+  documented aggressive heuristic that ANY encoding-shaped test ID returning
+  200 flags regardless of body; ssrf `is_ssrf_param` + `test_ssrf` (metadata
+  AccessKeyId → CRITICAL, localhost, clean → none); ssti reflection gate,
+  polyglot, Jinja2 fingerprint via `49`, engine-error confirmation, and a
+  clean-negative polyglot (engine names like "erb" hide inside ordinary words —
+  "verbatim" false-positives the substring check, so clean bodies must be
+  chosen carefully); waf `_looks_blocked` (status/body/transport-error) +
+  `_looks_passed_and_reconstructed` + parameter-pollution differential
+  (blocked-baseline-required discipline); lfi `is_lfi_param`,
+  `_extract_referenced_path`, `parse_proc_net_tcp` (0100007F:0539 →
+  127.0.0.1:1337, port-0 skip, dedupe), `_inject_param` (note urlencode
+  escapes the `/` in traversal payloads), `test_lfi` passwd-read → CRITICAL;
+  upload `build_multipart_body`, `extract_upload_path` (JSON + Location),
+  `check_execution` (executed / accessible-not-executed / 404 → None), the
+  stdlib FastCGI record/name-value encoding (8-byte alignment, 4-byte length
+  form), and `detect_php_handler_stack` (nginx guess + PATH_INFO-permissive
+  behavioral probe); xss `detect_reflection_context` (attribute/script/body —
+  a quote before the canary classifies as attribute first) + candidate shape
+  (unvalidated/INFO/low-confidence, encoded reflection not flagged); and the
+  auth `decode_jwt_part` / sqli `detect_sql_errors` pure helpers (MySQL's
+  pattern needs "MySQL" after "SQL syntax" — the Generic table catches the
+  bare phrase first). auth_tester/sqli_tester network paths and
+  generate_poc/vuln_report remain covered only by their earlier targeted tests.
 
 ## Browser auditor (`webapp-exploit-hunter/scripts/browser_security_auditor.py`)
 Known-weak / unverified areas to review and add regression tests for:
