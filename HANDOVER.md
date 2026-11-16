@@ -6,14 +6,26 @@ doesn't mistake uneven coverage for uniform coverage.
 
 ## Current state
 
-- Latest API authorization follow-up: `511a522909c15d0687743683916217a1e892af40`
+- Latest JWT/authentication follow-up: `68dd243dc5276d1d41762a6e2c059261da7c182c`
+  (`Harden API auth analyzer evidence`), pushed to `origin/main` on 2026-11-16.
+  JWT/API-key 2xx responses now require an invalid-token or unauthenticated
+  control rejection before they are confirmed; otherwise they are INFO
+  candidates. No-auth data remains a candidate pending sensitivity review.
+  JWT header/payload and nested privilege-claim values redact common secrets
+  and personal data. JWT decoding rejects malformed base64url and non-object
+  header/payload JSON. Active probes remain enabled.
+- Latest verified suite: **520 tests + 25 subtests**; Ruff, compileall,
+  shared-helper sync, CLI docs (**10 / 95 / 58**), and `git diff --check`
+  passed. No live targets were contacted.
+
+- Previous API authorization follow-up: `511a522909c15d0687743683916217a1e892af40`
   (`Improve API authorization test evidence`), pushed to `origin/main` on
   2026-11-16. The active BOLA initial read substitutes a bounded seed for
   OpenAPI path placeholders. Status-only BOLA/BFLA responses are unverified
   candidates; exact-object BOLA GET responses remain confirmed findings.
   Existing active GET probes and explicitly enabled write/method-override
   probes still run.
-- Latest verified suite at that code state: **509 tests + 21 subtests**;
+- Verification at the 511a522 code state: **509 tests + 21 subtests**;
   Ruff, compileall, shared-helper sync, CLI docs (**10 / 95 / 58**), and
   `git diff --check` passed. All target-facing requests were mocked.
 
@@ -77,6 +89,9 @@ doesn't mistake uneven coverage for uniform coverage.
 - `511a522909c15d0687743683916217a1e892af40` — fixed literal OpenAPI path
   placeholders in initial BOLA reads and changed status-only BOLA/BFLA
   responses into unverified candidates while preserving active probes.
+- `68dd243dc5276d1d41762a6e2c059261da7c182c` — added JWT/API-key invalid-token
+  controls and candidate confidence, strict JWT decoding, recursive claim
+  redaction, bounded delay inputs, and focused auth-analyzer regressions.
 - Verification at the `61aae43` code state: **441 tests + 21 subtests** passed;
   Ruff, compileall, CLI docs (`10/94/58`), and shared-helper sync passed. The
   browser feature has a real local Chromium fixture run. The focused PATH_INFO
@@ -138,6 +153,20 @@ doesn't mistake uneven coverage for uniform coverage.
   The API-breaker test file now has **35 tests**; the full suite passed
   **509 tests + 21 subtests**, Ruff, compileall, helper sync, CLI docs
   (**10 / 95 / 58**), and git diff --check. All target requests were mocked.
+- **JWT/auth analyzer follow-up (2026-11-16, code commit
+  68dd243dc5276d1d41762a6e2c059261da7c182c):** JWT and API-key acceptance
+  now uses a malformed-token/unauthenticated baseline; a 2xx becomes a
+  confirmed auth finding only when the baseline is rejected with 401/403.
+  Public or control-ambiguous endpoints produce INFO candidates. No-auth data
+  remains a candidate until sensitivity and intended access are established.
+  JWT header, payload, and nested privilege values redact common credential,
+  key-material, and personal-data keys in JSON output. The decoder rejects
+  invalid base64url segments and non-object JSON. CLI delay is bounded to
+  0–60 seconds and the timing sleep to 1–10 seconds. Active probes still run.
+  Added 11 regressions; the API-breaker test file now has **46 tests**. The
+  full suite passed **520 tests + 25 subtests**, Ruff, compileall, helper sync,
+  CLI docs (**10 / 95 / 58**), and git diff --check. No live targets were
+  contacted.
 - The browser auditor has now had a **real Playwright/Chromium integration run**
   against a local fixture (passive, active query, active fragment via both
   `innerHTML` and `document.write`, and form submission all exercised). Two bugs
@@ -495,7 +524,7 @@ browser `--active`, or `--submit-forms` behavior.
    uploads.
 2. **Inventory structure — coverage refreshed; structural map still needs
    review if skills, CLIs, dependencies, or plugin references move.** Inventory
-   now includes bootstrap behavior and the 35 focused API-breaker regressions.
+   now includes bootstrap behavior and the 46 focused API-breaker regressions.
 3. **Bootstrap + task preflight — implemented; deeper OS-specific install
    validation remains open.** Missing Python dependencies, Chromium, Go, Go
    recon tools, and allowlisted system tools are actively installed through
@@ -511,7 +540,9 @@ browser `--active`, or `--submit-forms` behavior.
 4. Consolidate the copied `_common.py` helpers? A sync check exists instead
    of consolidation. Map imports/CLI examples/plugin refs/tests before moving.
 5. Continue skill deepening where meaningful gaps remain. `api-breaker` is still
-   only partially audited: prioritize JWT edge-case tests, GraphQL depth/authz/
+   only partially audited: JWT now has 46 offline regressions but still needs
+   isolated HTTP integration and review of the RS/PS relabel hypothesis;
+   next prioritize GraphQL depth/authz/
    CSRF behavior, BOLA/BFLA integration, rate-limit bypass/batching, business-
    state read-back, and report input shapes. Also continue the remaining browser
    scope/state/redaction edge cases and live-protocol methodology. Ground changes

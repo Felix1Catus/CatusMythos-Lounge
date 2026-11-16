@@ -314,3 +314,41 @@ API-breaker matrix now has **35 tests**. Full verification passed **509 tests
 + 21 subtests**, Ruff, compileall, shared-helper sync, CLI docs (**10 / 95 /
 58**), and git diff --check. All target requests were mocked. The code
 change is commit 511a522909c15d0687743683916217a1e892af40 on main.
+
+---
+
+## Follow-up addendum — JWT/auth analyzer evidence and output safety (2026-11-16)
+
+Review of auth_analyzer.py found that JWT forgery, key-confusion, kid
+injection, weak-secret, and API-key-position checks treated a 200/201 response
+as proof even when the endpoint also accepted an invalid token. No-auth scans
+also elevated a sufficiently large response without establishing that the
+endpoint's data was sensitive. The probes remain active, but JWT/API-key
+success is confirmed only when the malformed-token or unauthenticated control
+is rejected with 401/403; ambiguous/public endpoints yield INFO candidates.
+No-auth data stays a candidate until its sensitivity and intended access are
+established.
+
+The report previously copied decoded JWT header and payload values directly
+into JSON. A recursive redactor now masks common credential, key-material,
+and personal-data claim keys, including nested privilege claims. JWT decoding
+also rejects malformed base64url segments and non-object header/payload JSON,
+preventing a malformed three-part token from reaching code that assumes
+dictionary claims. CLI inter-request delay is restricted to 0-60 seconds; the
+time-injection sleep is restricted to 1-10 seconds.
+
+Eleven regressions cover malformed token shapes, recursive redaction,
+invalid-token differential controls, public-endpoint candidates, API-key
+position confirmation, no-auth candidate confidence, crit-header acceptance
+with differing 2xx codes, and delay bounds. The API-breaker test file has
+**46 tests**. Full verification passed **520 tests + 25 subtests**, Ruff,
+compileall, shared-helper sync, CLI docs (**10 skill docs / 95 command
+references / 58 CLIs**), and git diff --check. All network calls in the new
+tests are mocked; no live targets were contacted. The code change is commit
+68dd243dc5276d1d41762a6e2c059261da7c182c on main.
+
+Remaining auth-analyzer limits include the lack of end-to-end HTTP integration
+for all attack variants, sensitivity/ownership confirmation that needs a
+target-specific human read-back, and independent validation of the RS/PS
+relabel hypothesis. The stdlib-only decision continues to defer true-key JWKS
+verification and embedded-JWK signing.
