@@ -28,6 +28,26 @@ request, and reports reflection as a candidate only. Cache replay is a
 separate explicit option because no client can guarantee that a cache honors
 the cache-buster.
 
+### Query-parameter cache-key differences
+
+PortSwigger's [Web Cache Entanglement research](https://portswigger.net/research/web-cache-entanglement)
+describes parameter cloaking: a cache may exclude a parameter while the
+origin's parser still treats delimiters or trailing content as meaningful.
+The [Web Security Academy's unkeyed-query lab](https://portswigger.net/web-security/web-cache-poisoning/exploiting-implementation-flaws/lab-web-cache-poisoning-unkeyed-query)
+demonstrates that query-string changes can still receive a cache hit when the
+query is not part of the cache key.
+
+The active helper now probes a bounded seed set of common tracking parameter
+names (`utm_content`, `utm_source`, `gclid`, `fbclid`, `_`) with inert
+`.invalid` canaries. It adds a unique nonce, then the staging-only replay
+removes only the candidate parameter while preserving that nonce. Existing
+candidate names are skipped, and all query probes are skipped when the input
+URL contains a sensitive-looking key. A marker reappearing on replay is still
+only a manual-review lead: the helper does not prove which cache layer served
+it or whether a victim could receive harmful content. Duplicate-key
+precedence, semicolon delimiters, parameter cloaking, and framework-specific
+query parsing remain manual checks.
+
 ### Cache deception and normalization
 
 The [Web cache deception guide](https://portswigger.net/web-security/web-cache-deception)
@@ -49,3 +69,9 @@ target-specific staging plan.
   custom cache rules, or browser/service-worker caches.
 - Cache-busting only reduces accidental collisions. If the cache ignores the
   query string, active probes can still affect a shared entry; prefer staging.
+- Request timeouts and inter-request delays are finite and bounded by the
+  CLI limits; this bounds local waiting but does not make an active cache probe
+  safe for a shared production cache.
+
+The numeric CLI limits use Python's `math.isfinite()` so `NaN` and infinities
+cannot bypass ordinary comparisons; see the [Python math documentation](https://docs.python.org/3/library/math.html#math.isfinite).

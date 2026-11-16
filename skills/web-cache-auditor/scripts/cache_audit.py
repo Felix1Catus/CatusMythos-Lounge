@@ -9,6 +9,7 @@ ignores the query string.
 
 import argparse
 import json
+import math
 import os
 import re
 import secrets
@@ -24,6 +25,17 @@ from pathlib import Path
 
 BODY_LIMIT = 128 * 1024
 DEFAULT_DELAY = 0.35
+MAX_REQUEST_TIMEOUT = 30.0
+MAX_DELAY = 5.0
+QUERY_PARAMETER_CANDIDATES = ("utm_content", "utm_source", "gclid", "fbclid", "_")
+SENSITIVE_QUERY_PARAMETER_NAMES = frozenset({
+    "access_token", "accesstoken", "api_key", "apikey", "auth",
+    "auth_token", "authtoken", "authorization", "client_secret",
+    "clientsecret", "email", "jwt", "key", "password", "refresh_token",
+    "refreshtoken", "secret", "session", "session_id", "sessionid",
+    "session_token", "sessiontoken", "sid", "token", "user", "userid",
+    "username",
+})
 CACHE_HEADERS = {
     "age",
     "cache-control",
@@ -94,6 +106,41 @@ def add_cache_buster(url, token):
     )
 
 
+def add_query_parameter(url, name, value):
+    """Append one encoded parameter while preserving the existing raw query."""
+    parts = urllib.parse.urlsplit(url)
+    pair = "{}={}".format(
+        urllib.parse.quote(str(name), safe=""),
+        urllib.parse.quote(str(value), safe=""),
+    )
+    if parts.query and not parts.query.endswith("&"):
+        query = parts.query + "&" + pair
+    else:
+        query = parts.query + pair
+    return urllib.parse.urlunsplit(parts._replace(query=query))
+
+
+def query_probe_parameter_names(url):
+    """Return unused low-impact query candidates, or none for sensitive URLs."""
+    existing = urllib.parse.parse_qsl(
+        urllib.parse.urlsplit(url).query, keep_blank_values=True
+    )
+    names = {
+        "".join(ch for ch in name.casefold() if ch.isalnum())
+        for name, _ in existing
+    }
+    sensitive_names = {
+        "".join(ch for ch in name.casefold() if ch.isalnum())
+        for name in SENSITIVE_QUERY_PARAMETER_NAMES
+    }
+    if names.intersection(sensitive_names):
+        return []
+    return [
+        name for name in QUERY_PARAMETER_CANDIDATES
+        if "".join(ch for ch in name.casefold() if ch.isalnum()) not in names
+    ]
+
+
 class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
     """Keep all traffic on the user-supplied origin; report redirects only."""
 
@@ -108,6 +155,10 @@ def _read_body(stream):
 
 def request_get(url, headers=None, timeout=8.0):
     """Perform one GET without following redirects or retaining response bodies."""
+    timeout = _bounded_float(
+        timeout, minimum=0.0, maximum=MAX_REQUEST_TIMEOUT, allow_minimum=False,
+        label="timeout",
+    )
     context = ssl.create_default_context()
     if os.environ.get("CATUS_INSECURE_TLS") == "1":
         context.check_hostname = False
@@ -208,23 +259,28 @@ def cache_findings(target, probes):
     findings = []
     for probe in probes:
         replay = probe.get("cache_replay") or {}
-        if not replay.get("canary_reappeared_without_header"):
+        if not replay.get(
+            "canary_reappeared_without_input",
+            replay.get("canary_reappeared_without_header"),
+        ):
             continue
+        input_label = probe.get("input_label", probe.get("header", "unknown input"))
         confidence = "likely_cache_reuse" if replay.get("likely_cache_reuse") else "possible_cache_reuse"
         cache_hint = replay.get("cache_state_hint", "unknown")
         findings.append({
             "type": "cache_unkeyed_replay",
-            "title": "Potential unkeyed cache input: {}".format(probe["header"]),
+            "title": "Potential unkeyed cache input: {}".format(input_label),
             "severity": "INFO",
             "confidence": confidence,
             "url": safe_target_label(target),
-            "parameter": probe["header"],
+            "parameter": probe.get("query_parameter", probe.get("header")),
+            "input_type": probe.get("input_type", "header"),
             "method": "GET",
             "evidence": (
                 "An inert canary sent in {} reappeared in the response to a matched GET "
-                "without that header; cache signal was {}. This is a lead for manual "
+                "without that input; cache signal was {}. This is a lead for manual "
                 "cache-key validation, not proof of harmful cache poisoning."
-            ).format(probe["header"], cache_hint),
+            ).format(input_label, cache_hint),
             "source_tool": "web-cache-auditor",
         })
     return findings
@@ -249,22 +305,46 @@ def _run_demo():
     assert cache_state({"X-Cache": "MISS"})[0] == "miss"
     assert cache_state({"Cache-Control": "private, no-store"})[0] == "unknown"
     assert len(probe_headers(marker)) == 7
+    assert len(QUERY_PARAMETER_CANDIDATES) == 5
     print("[+] cache audit offline demo passed")
     return 0
 
 
-def _positive_float(value):
-    number = float(value)
-    if number <= 0:
-        raise argparse.ArgumentTypeError("must be greater than zero")
+def _bounded_float(value, *, minimum, maximum, allow_minimum, label):
+    if isinstance(value, bool):
+        raise ValueError(f"{label} must be a finite number")
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"{label} must be a finite number") from exc
+    if not math.isfinite(number):
+        raise ValueError(f"{label} must be a finite number")
+    if number < minimum or (number == minimum and not allow_minimum):
+        operator = "at least" if allow_minimum else "greater than"
+        raise ValueError(f"{label} must be {operator} {minimum:g}")
+    if number > maximum:
+        raise ValueError(f"{label} must not exceed {maximum:g}")
     return number
+
+
+def _positive_float(value):
+    try:
+        return _bounded_float(
+            value, minimum=0.0, maximum=MAX_REQUEST_TIMEOUT,
+            allow_minimum=False, label="timeout",
+        )
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
 
 
 def _nonnegative_float(value):
-    number = float(value)
-    if number < 0:
-        raise argparse.ArgumentTypeError("must not be negative")
-    return number
+    try:
+        return _bounded_float(
+            value, minimum=0.0, maximum=MAX_DELAY,
+            allow_minimum=True, label="delay",
+        )
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
 
 
 def _build_parser():
@@ -274,14 +354,20 @@ def _build_parser():
     parser.add_argument("--target", help="authorized absolute HTTP(S) URL; GET-only")
     parser.add_argument(
         "--probe-unkeyed", action="store_true",
-        help="send seven inert header canaries, each with a fresh cache-buster",
+        help="send inert header and eligible query canaries, each with a fresh cache-buster",
     )
     parser.add_argument(
         "--confirm-cache-replay", action="store_true",
-        help="for reflected canaries, repeat without the header using the same nonce (staging only)",
+        help="replay reflected canaries without their tested input using the same nonce (staging only)",
     )
-    parser.add_argument("--timeout", type=_positive_float, default=8.0, help="per-request timeout in seconds")
-    parser.add_argument("--delay", type=_nonnegative_float, default=DEFAULT_DELAY, help="delay between requests")
+    parser.add_argument(
+        "--timeout", type=_positive_float, default=8.0,
+        help=f"per-request timeout in seconds (0 < timeout <= {MAX_REQUEST_TIMEOUT:g})",
+    )
+    parser.add_argument(
+        "--delay", type=_nonnegative_float, default=DEFAULT_DELAY,
+        help=f"delay between requests in seconds (0 <= delay <= {MAX_DELAY:g})",
+    )
     parser.add_argument("--output", help="optional JSON output path (query values and bodies are omitted)")
     parser.add_argument("--demo", action="store_true", help="run offline self-checks")
     return parser
@@ -301,7 +387,7 @@ def main(argv=None):
     except ValueError as exc:
         parser.error(str(exc))
 
-    mode = "active_header_probes" if args.probe_unkeyed else "passive_cache_headers"
+    mode = "active_input_probes" if args.probe_unkeyed else "passive_cache_headers"
     if args.confirm_cache_replay:
         print("[!] Cache replay enabled: use an isolated staging cache. A target may ignore the cache-buster.", file=sys.stderr)
     elif args.probe_unkeyed:
@@ -320,6 +406,7 @@ def main(argv=None):
         "limitations": [
             "Cache headers are hints and may be absent, rewritten, or inaccurate.",
             "A fresh query parameter is a best-effort cache buster; some caches ignore query strings.",
+            "Query-parameter probes use a small seed set and skip sensitive-looking target query keys.",
             "A reflection candidate is not proof of cacheability or exploitability.",
             "Path-normalization and authenticated cache-deception checks require manual, target-aware validation.",
             "Response bodies and query values are not written to the report.",
@@ -335,6 +422,8 @@ def main(argv=None):
             injected = request_get(probe_url, headers={header_name: header_value}, timeout=args.timeout)
             entry = {
                 "header": header_name,
+                "input_label": header_name,
+                "input_type": "header",
                 "canary": marker,
                 "response": response_summary(injected, marker),
                 "cache_replay": None,
@@ -350,6 +439,43 @@ def main(argv=None):
             result["probes"].append(entry)
             if args.delay:
                 time.sleep(args.delay)
+
+        # Test a small seed set of common cache-excluded tracking parameters.
+        # Do not duplicate names already present in the user's query, and skip
+        # query probing entirely when the URL contains sensitive-looking keys.
+        for parameter_name in query_probe_parameter_names(target):
+            nonce = secrets.token_urlsafe(12)
+            marker = "catus-probe-{}.invalid".format(secrets.token_hex(8))
+            query_target = add_query_parameter(target, parameter_name, marker)
+            probe_url = add_cache_buster(query_target, nonce)
+            injected = request_get(probe_url, timeout=args.timeout)
+            input_label = "query parameter {}".format(parameter_name)
+            entry = {
+                "input_label": input_label,
+                "input_type": "query_parameter",
+                "query_parameter": parameter_name,
+                "response": response_summary(injected, marker),
+                "cache_replay": None,
+            }
+            if args.confirm_cache_replay and marker_locations(injected, marker):
+                time.sleep(args.delay)
+                # Keep the nonce and original raw query, removing only the
+                # candidate parameter. Any canary returned now indicates
+                # possible cache-key omission; it remains a manual-review lead.
+                replay_url = add_cache_buster(target, nonce)
+                replay = request_get(replay_url, timeout=args.timeout)
+                locations = marker_locations(replay, marker)
+                replay_summary = response_summary(replay, marker)
+                replay_summary["canary_reappeared_without_input"] = bool(locations)
+                replay_summary["canary_reappeared_without_query_parameter"] = bool(locations)
+                replay_summary["likely_cache_reuse"] = (
+                    bool(locations) and replay_summary["cache_state_hint"] == "hit"
+                )
+                entry["cache_replay"] = replay_summary
+            result["probes"].append(entry)
+            if args.delay:
+                time.sleep(args.delay)
+
         result["findings"] = cache_findings(target, result["probes"])
 
     print("Target: {}".format(result["target"]))
@@ -357,12 +483,17 @@ def main(argv=None):
     baseline_state = result["baseline"]["cache_state_hint"]
     print("Baseline: HTTP {} (cache signal: {})".format(result["baseline"]["status"], baseline_state))
     for entry in result["probes"]:
+        input_label = entry.get("input_label", entry.get("header", "unknown input"))
         reflected = bool(entry["response"]["marker_locations"])
         label = "canary reflected" if reflected else "no canary reflection observed"
         replay = entry["cache_replay"]
-        if replay and replay["canary_reappeared_without_header"]:
+        if replay and entry.get("input_type", "header") == "header" \
+                and replay.get("canary_reappeared_without_header"):
             label += "; canary reappeared without header"
-        print("  {}: HTTP {} - {}".format(entry["header"], entry["response"]["status"], label))
+        if replay and entry.get("input_type") == "query_parameter" \
+                and replay.get("canary_reappeared_without_query_parameter"):
+            label += "; canary reappeared without query parameter"
+        print("  {}: HTTP {} - {}".format(input_label, entry["response"]["status"], label))
 
     if args.output:
         output = Path(args.output)
