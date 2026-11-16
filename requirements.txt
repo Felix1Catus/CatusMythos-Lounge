@@ -7,7 +7,7 @@
 # import sites guard for missing packages and explain how to install them.
 # This file exists so
 # `scripts/bootstrap.py` (wired to the SessionStart hook in
-# .claude-plugin/hooks.json) can install it in one step; nothing here is
+# hooks/hooks.json) can install it in one step; nothing here is
 # required for the pipeline skills to work.
 
 requests>=2.31.0           # skills/16-ai-llm-security/scripts/prompt_injection_tester.py (HTTP calls to the target's API)
