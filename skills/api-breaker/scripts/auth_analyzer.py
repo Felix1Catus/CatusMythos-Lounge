@@ -14,7 +14,7 @@ import re
 import time
 import urllib.request
 import urllib.parse
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Real-key JWKS extraction and jwk-header-injection forgery (building/
 # signing with actual RSA key material) were implemented and verified in
@@ -30,7 +30,7 @@ from datetime import datetime
 # zero-new-dependency and stdlib-only, same as the rest of this skill.
 
 
-from _common import http_request, log, success, vuln, warn
+from _common import http_request, log, same_origin_url, success, vuln, warn
 # Common weak JWT secrets for brute-force
 WEAK_SECRETS = [
     "secret", "password", "123456", "key", "private", "public",
@@ -492,7 +492,14 @@ def test_api_key_positions(base_url, api_key, endpoints=None, delay=0):
     log("Testing API key in various positions...")
     findings = []
 
-    test_urls = endpoints or [base_url]
+    candidates = endpoints or [base_url]
+    test_urls = []
+    for candidate in candidates:
+        url = same_origin_url(base_url, candidate)
+        if url:
+            test_urls.append(url)
+        else:
+            warn(f"Skipping API-key probe outside the API base origin: {candidate}")
     positions = [
         ("header_authorization", {"Authorization": f"Bearer {api_key}"}),
         ("header_x_api_key", {"X-API-Key": api_key}),
@@ -523,8 +530,12 @@ def test_api_key_positions(base_url, api_key, endpoints=None, delay=0):
                 })
 
         for pos_name, param in query_positions:
-            sep = "&" if "?" in url else "?"
-            test_url = f"{url}{sep}{param}={api_key}"
+            parsed_url = urllib.parse.urlsplit(url)
+            query = urllib.parse.parse_qsl(parsed_url.query, keep_blank_values=True)
+            query.append((param, api_key))
+            test_url = urllib.parse.urlunsplit(
+                parsed_url._replace(query=urllib.parse.urlencode(query))
+            )
             status, _, body = http_request(test_url)
             if delay:
                 time.sleep(delay)
@@ -549,8 +560,11 @@ def test_no_auth_access(base_url, endpoints, delay=0):
         url = ep if isinstance(ep, str) else ep.get("url", "")
         if not url:
             continue
-        if not url.startswith("http"):
-            url = urllib.parse.urljoin(base_url, url)
+        scoped_url = same_origin_url(base_url, url)
+        if not scoped_url:
+            warn(f"Skipping no-auth probe outside the API base origin: {url}")
+            continue
+        url = scoped_url
 
         status, _, body = http_request(url)
         if delay:
@@ -611,8 +625,8 @@ def analyze_jwt_claims(decoded_jwt):
         vuln("JWT has no expiration claim!")
         findings.append({"type": "jwt_no_expiry", "severity": "high"})
     elif isinstance(exp, (int, float)):
-        exp_dt = datetime.utcfromtimestamp(exp)
-        now = datetime.utcnow()
+        exp_dt = datetime.fromtimestamp(exp, timezone.utc)
+        now = datetime.now(timezone.utc)
         if exp_dt < now:
             warn(f"JWT is expired (exp: {exp_dt.isoformat()})")
         else:
@@ -681,16 +695,28 @@ def main():
         log(f"Loading data from {args.input}")
         with open(args.input) as f:
             input_data = json.load(f)
-        base_url = base_url or input_data.get("meta", {}).get("base_url", "")
         for api in input_data.get("discovered_apis", []):
             endpoints.append(api.get("url", ""))
         for ep in input_data.get("endpoints", []):
             endpoints.append(ep.get("url", ""))
         endpoints = [e for e in endpoints if e]
 
-    if not base_url and endpoints:
-        parsed = urllib.parse.urlparse(endpoints[0])
-        base_url = f"{parsed.scheme}://{parsed.netloc}"
+    if endpoints and not args.api_base:
+        parser.error("Imported endpoints require an explicit trusted --api-base")
+
+    if base_url:
+        validated_base_url = same_origin_url(base_url, base_url)
+        if not validated_base_url:
+            parser.error("API base must be a credential-free absolute HTTP(S) URL")
+        base_url = validated_base_url
+        scoped_endpoints = []
+        for endpoint in endpoints:
+            scoped_endpoint = same_origin_url(base_url, endpoint)
+            if scoped_endpoint:
+                scoped_endpoints.append(scoped_endpoint)
+            else:
+                warn(f"Skipping imported endpoint outside the API base origin: {endpoint}")
+        endpoints = scoped_endpoints
 
     log(f"Analyzing authentication for: {base_url}")
 
@@ -775,7 +801,7 @@ def main():
     output = {
         "meta": {
             "base_url": base_url,
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
             "type": "auth_analysis",
             "tool": "api-breaker by orizon.one",
         },

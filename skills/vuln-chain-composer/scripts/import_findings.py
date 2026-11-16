@@ -7,10 +7,9 @@ Author: orizon.one
 
 import argparse
 import json
-import glob
 import re as _re
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 def _finding_blob(finding):
@@ -33,6 +32,8 @@ SEVERITY_MAP = {
     "boolean_based_sqli": "MEDIUM",
     "time_based_sqli": "HIGH",
     "reflected_xss": "MEDIUM",
+    "reflected_xss_candidate": "INFO",
+    "dom_xss_candidate": "INFO",
     "stored_xss": "HIGH",
     "dom_xss": "MEDIUM",
     "ssrf": "HIGH",
@@ -46,6 +47,7 @@ SEVERITY_MAP = {
     "bola": "HIGH",
     "bfla": "HIGH",
     "mass_assignment": "MEDIUM",
+    "mass_assignment_candidate": "INFO",
     "jwt_none_algorithm": "CRITICAL",
     "jwt_weak_secret": "HIGH",
     "subdomain_takeover": "HIGH",
@@ -67,6 +69,7 @@ SEVERITY_MAP = {
     "mcptoolpoisoning": "MEDIUM",  # schema-field injection or tool-shadowing; per-finding severity usually overrides this
     "mcprugpull": "MEDIUM",  # a tool's hash changed, or a new tool appeared, since baseline
     "mcpcve": "MEDIUM",  # a version-matched (or name-only) MCP-component CVE hypothesis, not confirmed
+    "cache_unkeyed_replay": "INFO",  # inert canary replay signal; requires manual cache-key/impact validation
     "mcptokenpassthrough": "HIGH",  # server accepted a token explicitly issued for a different audience (MCP spec MUST violation)
     "ragtenantleak": "HIGH",  # cross-tenant canary observed via a normal second-tenant session -- confirmed, not a bypass precondition
     "embeddingexposure": "MEDIUM",  # raw embedding-shaped float array readable without tenant scoping -- an exposure precondition, not itself chainable
@@ -136,6 +139,7 @@ def normalize_finding(finding, source_tool):
         "type": vuln_type,
         "category": vuln_type.split("_")[0] if "_" in vuln_type else vuln_type,
         "severity": severity,
+        "confidence": finding.get("confidence", ""),
         "owasp": owasp,
         "domain": domain,
         "url": url,
@@ -168,6 +172,14 @@ def normalize_finding(finding, source_tool):
     # graph matching rather than needing a named template per pair.
     if "sqli" in vuln_type:
         normalized["chainable_as"] = ["data_access", "credential_theft", "rce_potential"]
+    elif "xss" in vuln_type and (
+        finding.get("validated") is False
+        or "candidate" in vuln_type.lower()
+        or str(finding.get("confidence", "")).lower() in ("low", "tentative")
+    ):
+        # A reflection or static source-to-sink lead is not confirmed XSS and
+        # must not become a chain-enabling capability before browser validation.
+        normalized["chainable_as"] = []
     elif "xss" in vuln_type:
         normalized["chainable_as"] = ["session_theft", "phishing", "keylogging", "cookie_scope_write"]
         if "self" in vuln_type or "post_only" in vuln_type or "postonly" in vuln_type:
@@ -346,13 +358,25 @@ def load_findings_from_file(filepath):
         warn(f"Could not load {filepath}: {e}")
         return []
 
+    if not isinstance(data, dict):
+        warn(f"Could not load {filepath}: expected a JSON object at the root")
+        return []
+
     # Detect source tool
-    tool = data.get("meta", {}).get("tool", "unknown")
-    finding_type = data.get("meta", {}).get("type", "")
+    meta = data.get("meta")
+    if not isinstance(meta, dict):
+        meta = {}
+    tool = meta.get("tool", "unknown")
+    metadata_type = str(meta.get("type", "")).lower()
 
     # Infer vulnerability type from filename when data lacks explicit type info
     fname = Path(filepath).stem.lower()
-    inferred_type = ""
+    inferred_type = {
+        "sqli_test": "sqli",
+        "xss_test": "xss",
+        "ssrf_test": "ssrf",
+        "ssti_test": "ssti",
+    }.get(metadata_type, "")
     if "sqli" in fname:
         inferred_type = "sqli"
     elif "xss" in fname:
@@ -369,12 +393,23 @@ def load_findings_from_file(filepath):
         inferred_type = "attack_path"
 
     findings = data.get("findings", [])
+    if isinstance(findings, dict):
+        findings = [findings]
+    elif not isinstance(findings, list):
+        findings = []
     if not findings:
         # Try other common keys
         for key in ["vulnerabilities", "results", "issues"]:
-            if key in data:
-                findings = data[key]
+            candidate_findings = data.get(key)
+            if isinstance(candidate_findings, dict):
+                findings = [candidate_findings]
                 break
+            if isinstance(candidate_findings, list):
+                findings = candidate_findings
+                break
+    # Ignore malformed individual entries rather than aborting an otherwise
+    # usable import when an upstream scanner emits mixed result shapes.
+    findings = [finding for finding in findings if isinstance(finding, dict)]
 
     # Handle recon-dominator consolidated.json format
     # Structure: {"meta": {...}, "data": {"passive_recon": {...}, "port_scan": {"results": [...]}, "tech_fingerprint": {...}}}
@@ -383,9 +418,17 @@ def load_findings_from_file(filepath):
 
         # Import port scan results
         port_scan = consolidated.get("port_scan", {})
-        for result in port_scan.get("results", []):
+        if not isinstance(port_scan, dict):
+            port_scan = {}
+        port_results = port_scan.get("results", [])
+        for result in port_results if isinstance(port_results, list) else []:
+            if not isinstance(result, dict):
+                continue
             host = result.get("host", result.get("ip", ""))
-            for port_info in result.get("ports", result.get("open_ports", [])):
+            ports = result.get("ports", result.get("open_ports", []))
+            for port_info in ports if isinstance(ports, list) else []:
+                if not isinstance(port_info, (int, str, dict)):
+                    continue
                 port = port_info if isinstance(port_info, (int, str)) else port_info.get("port", "")
                 service = port_info.get("service", "unknown") if isinstance(port_info, dict) else "unknown"
                 findings.append({
@@ -411,7 +454,12 @@ def load_findings_from_file(filepath):
 
         # Import passive recon data (subdomains, DNS records, etc.)
         passive = consolidated.get("passive_recon", {})
-        for sub in passive.get("subdomains", []):
+        if not isinstance(passive, dict):
+            passive = {}
+        subdomains = passive.get("subdomains", [])
+        for sub in subdomains if isinstance(subdomains, list) else []:
+            if not isinstance(sub, (str, dict)):
+                continue
             subdomain = sub if isinstance(sub, str) else sub.get("hostname", sub.get("subdomain", ""))
             if subdomain:
                 findings.append({
@@ -431,7 +479,9 @@ def load_findings_from_file(filepath):
 
     # Also import from attack trees
     if "attack_paths" in data:
-        for path in data["attack_paths"]:
+        for path in data["attack_paths"] if isinstance(data["attack_paths"], list) else []:
+            if not isinstance(path, dict):
+                continue
             findings.append({
                 "type": f"attack_path_{path.get('attack_name', 'unknown').lower().replace(' ', '_')}",
                 "url": f"https://{path.get('target', '')}",
@@ -441,7 +491,9 @@ def load_findings_from_file(filepath):
 
     # Import bucket findings
     if "public_buckets" in data:
-        for bucket in data["public_buckets"]:
+        for bucket in data["public_buckets"] if isinstance(data["public_buckets"], list) else []:
+            if not isinstance(bucket, dict):
+                continue
             findings.append({
                 "type": "public_bucket",
                 "url": f"https://{bucket['name']}.s3.amazonaws.com/" if bucket.get("provider") == "aws_s3" else bucket["name"],
@@ -457,8 +509,10 @@ def load_findings_from_file(filepath):
     # produced silently never reached vuln-chain-composer -- found while
     # wiring this sub-phase's fingerprint refresh through the pipeline.
     if "vulnerable" in data and isinstance(data["vulnerable"], list) and \
-            data.get("meta", {}).get("type") == "subdomain_takeover_scan":
+            meta.get("type") == "subdomain_takeover_scan":
         for v in data["vulnerable"]:
+            if not isinstance(v, dict):
+                continue
             findings.append({
                 "type": "subdomain_takeover",
                 "url": f"https://{v.get('subdomain', '')}",
@@ -475,8 +529,12 @@ def load_findings_from_file(filepath):
     # also never previously picked up by any generic key.
     if "findings_by_severity" in data and isinstance(data["findings_by_severity"], dict):
         for sev, items in data["findings_by_severity"].items():
-            for item in items:
+            for item in items if isinstance(items, list) else []:
+                if not isinstance(item, dict):
+                    continue
                 probe = item.get("probe", {}) or {}
+                if not isinstance(probe, dict):
+                    probe = {}
                 findings.append({
                     "type": f"cicdexposure_{item.get('category', 'unknown')}",
                     "url": probe.get("url", f"https://{item.get('host', '')}"),
@@ -493,8 +551,10 @@ def load_findings_from_file(filepath):
     # type, since an accessible unauthenticated endpoint needs no SSRF/IMDS
     # precondition to already be directly reachable.
     if "all_results" in data and isinstance(data["all_results"], list) and \
-            data.get("meta", {}).get("type") == "serverless_discovery":
+            meta.get("type") == "serverless_discovery":
         for r in data["all_results"]:
+            if not isinstance(r, dict):
+                continue
             if r.get("accessible"):
                 findings.append({
                     "type": "info_disclosure",
@@ -504,6 +564,8 @@ def load_findings_from_file(filepath):
                                 f"({r.get('provider', '')})",
                 })
             for issue in r.get("issues", []):
+                if not isinstance(issue, dict):
+                    continue
                 if str(issue.get("type", "")).startswith("info_leak"):
                     findings.append({
                         "type": "info_disclosure",
@@ -514,7 +576,9 @@ def load_findings_from_file(filepath):
 
     # Import subdomain takeover findings
     if "relationships" in data:
-        for rel in data["relationships"]:
+        for rel in data["relationships"] if isinstance(data["relationships"], list) else []:
+            if not isinstance(rel, dict):
+                continue
             if rel.get("type") == "DANGLING_CNAME":
                 findings.append({
                     "type": "subdomain_takeover",
@@ -529,6 +593,8 @@ def load_findings_from_file(filepath):
         trust_data = data.get("trust_relationships", data.get("trust_map", []))
         if isinstance(trust_data, list):
             for rel in trust_data:
+                if not isinstance(rel, dict):
+                    continue
                 findings.append({
                     "type": "trust_relationship",
                     "url": f"https://{rel.get('source', rel.get('from', ''))}",
@@ -539,7 +605,9 @@ def load_findings_from_file(filepath):
             for source, targets in trust_data.items():
                 target_list = targets if isinstance(targets, list) else [targets]
                 for t in target_list:
-                    target_name = t if isinstance(t, str) else t.get("target", t.get("to", str(t)))
+                    target_name = t if isinstance(t, str) else (
+                        t.get("target", t.get("to", str(t))) if isinstance(t, dict) else str(t)
+                    )
                     findings.append({
                         "type": "trust_relationship",
                         "url": f"https://{source}",
@@ -596,6 +664,8 @@ def load_findings_from_file(filepath):
 
     normalized = []
     for finding in findings:
+        if not isinstance(finding, dict):
+            continue
         normalized.append(normalize_finding(finding, tool))
 
     return normalized
@@ -652,7 +722,7 @@ def main():
 
     output = {
         "meta": {
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
             "type": "normalized_findings",
             "tool": "vuln-chain-composer by orizon.one",
             "files_processed": files_processed,

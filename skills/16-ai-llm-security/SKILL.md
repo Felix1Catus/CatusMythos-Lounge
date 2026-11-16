@@ -271,19 +271,19 @@ Date: [Date] | Scope: [Endpoints/Models] | Model: [name/version] | Analyst: [Nam
 ### `prompt_injection_tester.py`
 ```bash
 # Run the built-in injection/jailbreak corpus against an endpoint
-python scripts/prompt_injection_tester.py --url https://app.test/api/chat --field message --output results.json
+python3 scripts/prompt_injection_tester.py --url https://app.test/api/chat --field message --output results.json
 
 # Use a custom payload corpus and a refusal-detection keyword set
-python scripts/prompt_injection_tester.py --url ... --corpus payloads.txt --judge-keywords refusals.txt
+python3 scripts/prompt_injection_tester.py --url ... --corpus payloads.txt --judge-keywords refusals.txt
 
 # Verify the judge logic offline before trusting live verdicts
-python scripts/prompt_injection_tester.py --demo
+python3 scripts/prompt_injection_tester.py --demo
 
 # Export confirmed successes as findings vuln-chain-composer can correlate
-python scripts/prompt_injection_tester.py --url ... --export-findings findings.json
+python3 scripts/prompt_injection_tester.py --url ... --export-findings findings.json
 
 # Best-of-N: resample each payload with random mutations up to N times
-python scripts/prompt_injection_tester.py --url ... --best-of-n 10
+python3 scripts/prompt_injection_tester.py --url ... --best-of-n 10
 ```
 The judge scores each response **SUCCESS / BLOCKED / PARTIAL**: an echoed canary
 is authoritative; an explicit refusal outranks weak leak-phrase matches (so
@@ -299,12 +299,12 @@ cost-exhaustion flood.
 
 ```bash
 # Run all exposure checks against a chat/completions endpoint
-python scripts/unbounded_consumption_tester.py --url https://app.test/api/chat --field message
+python3 scripts/unbounded_consumption_tester.py --url https://app.test/api/chat --field message
 
 # Export exposed-control findings for vuln-chain-composer
-python scripts/unbounded_consumption_tester.py --url ... --export-findings findings.json
+python3 scripts/unbounded_consumption_tester.py --url ... --export-findings findings.json
 
-python scripts/unbounded_consumption_tester.py --demo   # self-test the check logic offline
+python3 scripts/unbounded_consumption_tester.py --demo   # self-test the check logic offline
 ```
 Checks: oversized-input rejection, `logprobs`/`logit_bias` exposure (the
 exact surface Carlini et al.'s embedding-extraction attack exploits,
@@ -323,20 +323,20 @@ two scripts above, not a replacement for either.
 # Cross-tenant canary test: query as tenant B with a canary known only to
 # exist in tenant A's scope (planted via the app's own UI, NOT a fresh
 # uuid -- it has to actually be in tenant A's corpus already)
-python scripts/rag_security_tester.py --url https://app.test/api/chat --field message \
+python3 scripts/rag_security_tester.py --url https://app.test/api/chat --field message \
     --header "Authorization: Bearer <tenant-a-token>" \
     --header-b "Authorization: Bearer <tenant-b-token>" \
     --tenant-param tenant_id --tenant-value-a acme --tenant-value-b globex \
     --canary "INV-2024-Q3-ACME-OVERDUE-NOTICE" --concurrent
 
 # Hidden-Unicode / citation-drift probes over a specific response field
-python scripts/rag_security_tester.py --url ... --chunk-path "sources.0.text" \
+python3 scripts/rag_security_tester.py --url ... --chunk-path "sources.0.text" \
     --claim-path "answer" --citation-path "sources.0.text"
 
 # Offline CVE fingerprint lookup (no --url needed)
-python scripts/rag_security_tester.py --product milvus --version 2.4.10
+python3 scripts/rag_security_tester.py --product milvus --version 2.4.10
 
-python scripts/rag_security_tester.py --demo   # self-test all 4 checks offline
+python3 scripts/rag_security_tester.py --demo   # self-test all 4 checks offline
 ```
 `--header-b` identifies tenant B; `--tenant-param` is the body field
 carrying the tenant/workspace ID (omit if scoping is 100% auth/header-
@@ -352,19 +352,19 @@ JSON dump of a `tools/list` response.
 
 ```bash
 # Scan a local tools/list dump for schema-field poisoning and shadowing
-python scripts/mcp_security_tester.py --tools-file tools_list.json
+python3 scripts/mcp_security_tester.py --tools-file tools_list.json
 
 # Save a baseline, then later diff against it to catch a rug-pull
-python scripts/mcp_security_tester.py --tools-file tools.json --save-baseline baseline.json
-python scripts/mcp_security_tester.py --tools-file tools.json --baseline baseline.json
+python3 scripts/mcp_security_tester.py --tools-file tools.json --save-baseline baseline.json
+python3 scripts/mcp_security_tester.py --tools-file tools.json --baseline baseline.json
 
 # CVE fingerprint check for a named MCP server component
-python scripts/mcp_security_tester.py --server-name mcp-remote --server-version 0.1.10
+python3 scripts/mcp_security_tester.py --server-name mcp-remote --server-version 0.1.10
 
 # Live token-passthrough probe + export findings
-python scripts/mcp_security_tester.py --url http://localhost:8080/mcp --check-token-passthrough --export-findings findings.json
+python3 scripts/mcp_security_tester.py --url http://localhost:8080/mcp --check-token-passthrough --export-findings findings.json
 
-python scripts/mcp_security_tester.py --demo   # self-test all 4 checks offline
+python3 scripts/mcp_security_tester.py --demo   # self-test all 4 checks offline
 ```
 The schema scanner is deliberately narrower than a bare case-insensitive
 keyword match: `IMPORTANT:`/`SYSTEM:`-style directives are matched in their
@@ -420,15 +420,15 @@ safe" — "is the thing that will load it safe here."
 
 ```bash
 # Scan a model directory/file for unsafe pickle opcodes and risky imports
-python scripts/model_supply_chain.py --path ./models/model.pt
-python scripts/model_supply_chain.py --path ./models/ --recursive --output scan.json
+python3 scripts/model_supply_chain.py --path ./models/model.pt
+python3 scripts/model_supply_chain.py --path ./models/ --recursive --output scan.json
 
 # Gate CI on findings (exit 3 if any DANGEROUS artifact); verify the detector first
-python scripts/model_supply_chain.py --path ./models/ --recursive --strict
-python scripts/model_supply_chain.py --demo        # self-test the opcode resolver
+python3 scripts/model_supply_chain.py --path ./models/ --recursive --strict
+python3 scripts/model_supply_chain.py --demo        # self-test the opcode resolver
 
 # Export DANGEROUS verdicts as findings vuln-chain-composer can correlate
-python scripts/model_supply_chain.py --path ./models/ --recursive --export-findings findings.json
+python3 scripts/model_supply_chain.py --path ./models/ --recursive --export-findings findings.json
 ```
 `--export-findings` writes only confirmed `DANGEROUS` verdicts (never `review`
 or `safe`) as `type: "modelsupplychain"` findings — feed straight into

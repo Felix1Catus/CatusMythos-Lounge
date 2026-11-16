@@ -14,7 +14,11 @@ Blocking: print reason to stderr, exit 2. (JSON hookSpecificOutput.permissionDec
 Born from feedback_escape_harness_safety (modprobe/core_pattern left armed twice).
 LOCATION: ~/.claude/mythos/pretooluse_guard.py
 """
-import json, sys, os, re, datetime
+import json
+import sys
+import os
+import re
+import datetime
 
 LOG = os.path.expanduser("~/.claude/mythos/safety.log")
 
@@ -118,7 +122,8 @@ def selftest():
     """Known-answer two-arm test (P03). BLOCK arm = must be caught; ALLOW arm = must pass.
     The ALLOW arm is the one that matters: a guard that blocks authorised read-only work
     is not 'safe', it is broken. Run: python3 pretooluse_guard.py --selftest"""
-    import io, contextlib
+    import io
+    import contextlib
     BLOCK = [
         "modprobe dummy",
         "echo '|/tmp/x' > /proc/sys/kernel/core_pattern",

@@ -14,7 +14,11 @@ Contract: fail-open (any error -> exit 0, never block a tool call), fast (<30ms,
 never write to stdout (would pollute the tool result); errors are swallowed silently.
 LOCATION: ~/.claude/mythos/journal.py   Reader: resume.sh   Intent head: STATE/CHECKPOINT.md
 """
-import json, sys, os, re, datetime
+import json
+import sys
+import os
+import re
+import datetime
 
 def clip(s, n=150):
     return " ".join(str(s).split())[:n]

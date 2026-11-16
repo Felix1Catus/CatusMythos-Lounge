@@ -7,8 +7,7 @@ Author: orizon.one
 
 import argparse
 import json
-from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 from _common import log, success, warn
@@ -245,8 +244,6 @@ def build_detailed_chain(chain):
     """Build a detailed exploit chain with concrete steps from a correlation chain."""
     primary = chain.get("primary_finding", {})
     supporting = chain.get("supporting_findings", [])
-    original_steps = chain.get("steps", [])
-
     # Build detailed steps for primary finding
     detailed_steps = []
     step_num = 0
@@ -406,7 +403,7 @@ def main():
 
     output = {
         "meta": {
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
             "type": "detailed_exploit_chains",
             "tool": "vuln-chain-composer by orizon.one",
             "chains_built": len(built_chains),

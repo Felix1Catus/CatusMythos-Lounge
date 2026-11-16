@@ -25,7 +25,6 @@ import argparse
 import json
 import re
 import ssl
-import sys
 import time
 import urllib.error
 import urllib.parse
@@ -33,7 +32,7 @@ import urllib.request
 from datetime import datetime, timezone
 
 
-from _common import log, success, warn
+from _common import log, scoped_urlopen, success, warn
 NVD_CVE_API = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 OSV_API = "https://api.osv.dev/v1/query"
 # OSV.dev's own ecosystem identifiers -- tried in this order when the caller
@@ -56,7 +55,7 @@ def _http_get_json(url, timeout=20):
         "Accept": "application/json",
     })
     try:
-        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
+        with scoped_urlopen(req, timeout=timeout, context=ctx) as resp:
             return json.loads(resp.read().decode("utf-8", errors="replace")), None
     except urllib.error.HTTPError as e:
         if e.code == 403 or e.code == 429:
@@ -458,7 +457,7 @@ def lookup_via_osv(name, version, ecosystem=None, recent_years=5, timeout=20):
         )
         try:
             ctx = ssl.create_default_context()
-            with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
+            with scoped_urlopen(req, timeout=timeout, context=ctx) as resp:
                 data = json.loads(resp.read().decode("utf-8", errors="replace"))
         except Exception as e:
             warn(f"  OSV lookup failed for '{name}' ({eco}): {e}")

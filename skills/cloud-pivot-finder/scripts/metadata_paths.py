@@ -8,15 +8,15 @@ Author: orizon.one
 import argparse
 import json
 import re
+import os
 import ssl
 import urllib.parse
 import urllib.request
 import urllib.error
-from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 
 
-from _common import log, success, vuln, warn
+from _common import log, scoped_urlopen, success, warn
 # Cloud metadata service endpoints
 METADATA_ENDPOINTS = {
     "AWS IMDSv1": {
@@ -221,14 +221,15 @@ IAM_ROLE_RISKS = {
 def http_get(url, timeout=5, extra_headers=None):
     """HTTP GET with SSL bypass."""
     ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
+    if os.environ.get("CATUS_INSECURE_TLS") == "1":
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
     headers = {"User-Agent": "orizon-recon/1.0"}
     if extra_headers:
         headers.update(extra_headers)
     req = urllib.request.Request(url, headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
+        with scoped_urlopen(req, timeout=timeout, context=ctx) as resp:
             body = resp.read(32768).decode("utf-8", errors="replace")
             return resp.status, body
     except urllib.error.HTTPError as e:
@@ -454,7 +455,7 @@ def main():
 
     output = {
         "meta": {
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
             "type": "metadata_pivot_paths",
             "tool": "cloud-pivot-finder by orizon.one",
             "hosts_analyzed": len(hosts),

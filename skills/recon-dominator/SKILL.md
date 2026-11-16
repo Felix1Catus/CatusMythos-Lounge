@@ -26,7 +26,7 @@ Before ANY reconnaissance activity:
 Run passive enumeration first (no direct contact with target):
 
 ```bash
-python scripts/passive_recon.py --domain {target_domain}
+python3 scripts/passive_recon.py --domain {target_domain}
 ```
 
 This collects subdomains from:
@@ -41,7 +41,7 @@ Expected output: JSON list of discovered subdomains with source attribution.
 After passive phase, run active enumeration:
 
 ```bash
-python scripts/active_recon.py --domain {target_domain} --wordlist references/subdomains-wordlist.txt
+python3 scripts/active_recon.py --domain {target_domain} --wordlist references/subdomains-wordlist.txt
 ```
 
 This performs:
@@ -67,7 +67,7 @@ This performs:
 ### Step 4: Live Host Detection and Port Scanning
 
 ```bash
-python scripts/port_scanner.py --input {subdomains_file} --top-ports 1000
+python3 scripts/port_scanner.py --input {subdomains_file} --top-ports 1000
 ```
 
 For each live subdomain:
@@ -79,7 +79,7 @@ For each live subdomain:
 ### Step 5: Technology Fingerprinting
 
 ```bash
-python scripts/tech_fingerprint.py --input {live_hosts_file}
+python3 scripts/tech_fingerprint.py --input {live_hosts_file}
 ```
 
 Detect:
@@ -99,7 +99,7 @@ Detect:
 ### Step 5a: JS Bundle & Source-Map Mining
 
 ```bash
-python scripts/js_recon.py --target https://{live_host} --output js_recon_results.json
+python3 scripts/js_recon.py --target https://{live_host} --output js_recon_results.json
 ```
 
 Modern frontends ship whole route tables, API clients, and sometimes build
@@ -133,7 +133,7 @@ of CVEs.
 ### Step 5b: CVE / Public-Exploit Lookup — THIS is what should drive exploitation choices, not a blind vuln-class sweep
 
 ```bash
-python scripts/cve_lookup.py --input {tech_fingerprint_output.json} --output cve_lookup_results.json
+python3 scripts/cve_lookup.py --input {tech_fingerprint_output.json} --output cve_lookup_results.json
 ```
 
 Takes every versioned component Step 5 found and queries NVD's public CVE
@@ -195,7 +195,7 @@ wrong:
 ### Step 6: OSINT Correlation
 
 ```bash
-python scripts/osint_correlator.py --domain {target_domain}
+python3 scripts/osint_correlator.py --domain {target_domain}
 ```
 
 Gather:
@@ -209,7 +209,7 @@ Gather:
 ### Step 7: Google Dorking
 
 ```bash
-python scripts/google_dorker.py --domain {target_domain} --dork-file references/dorks-database.txt
+python3 scripts/google_dorker.py --domain {target_domain} --dork-file references/dorks-database.txt
 ```
 
 Automated searches for:
@@ -222,7 +222,7 @@ Automated searches for:
 ### Step 8: Wayback Machine Analysis
 
 ```bash
-python scripts/wayback_analyzer.py --domain {target_domain}
+python3 scripts/wayback_analyzer.py --domain {target_domain}
 ```
 
 Extract:
@@ -236,7 +236,7 @@ Extract:
 Compile all findings into a structured report:
 
 ```bash
-python scripts/generate_report.py --project {project_name}
+python3 scripts/generate_report.py --project {project_name}
 ```
 
 Output format:

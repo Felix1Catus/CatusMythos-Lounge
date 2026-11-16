@@ -27,7 +27,7 @@ If the user provides only a domain, run a quick recon summary first using recon-
 ### Step 2: Asset Classification
 
 ```bash
-python scripts/classify_assets.py --input {recon_data}
+python3 scripts/classify_assets.py --input {recon_data}
 ```
 
 Classify every discovered asset by:
@@ -62,7 +62,7 @@ Classify every discovered asset by:
 ### Step 3: Trust Relationship Mapping
 
 ```bash
-python scripts/map_trust.py --input {recon_data}
+python3 scripts/map_trust.py --input {recon_data}
 ```
 
 Identify trust relationships between assets:
@@ -78,7 +78,7 @@ Output: Directed graph of trust relationships in JSON format.
 ### Step 4: Attack Tree Generation
 
 ```bash
-python scripts/generate_attack_tree.py --input {classified_assets} --trust-map {trust_map} --objective {objective}
+python3 scripts/generate_attack_tree.py --input {classified_assets} --trust-map {trust_map} --objective {objective}
 ```
 
 For each objective (RCE, Data Access, Lateral Movement, Privilege Escalation), generate attack trees:
@@ -146,7 +146,7 @@ produces chain opportunities (`generate_chain_opportunities()`) as part of
 its own output when given a trust map:
 
 ```bash
-python scripts/generate_attack_tree.py --input {classified_assets.json} --trust-map {trust_map.json} --output {tree_file.json}
+python3 scripts/generate_attack_tree.py --input {classified_assets.json} --trust-map {trust_map.json} --output {tree_file.json}
 ```
 
 Identify where vulnerabilities on different assets can be chained:
@@ -188,9 +188,9 @@ Score each attack path on:
 Two standalone scripts for when a path needs more than a quick TTP tag:
 
 ```bash
-python scripts/mitre_mapper.py --technique T1190
-python scripts/mitre_mapper.py --technique T1190 --detection-query splunk
-python scripts/mitre_mapper.py --input {technique_ids_file} --navigator --output layer.json
+python3 scripts/mitre_mapper.py --technique T1190
+python3 scripts/mitre_mapper.py --technique T1190 --detection-query splunk
+python3 scripts/mitre_mapper.py --input {technique_ids_file} --navigator --output layer.json
 ```
 
 `mitre_mapper.py` carries a richer per-technique database (descriptions,
@@ -226,7 +226,7 @@ covers the AI-agent-specific steps no current Enterprise technique fits
 Enterprise-ATT&CK-only in scope.
 
 ```bash
-python scripts/engagement_planner.py --scope {scope_json_file} --format markdown
+python3 scripts/engagement_planner.py --scope {scope_json_file} --format markdown
 ```
 
 `engagement_planner.py` turns a scoped target list into a structured,
@@ -242,7 +242,7 @@ attack-path-architect's output feeds into vuln-chain-composer, which owns
 final report generation:
 
 ```bash
-python "${CLAUDE_PLUGIN_ROOT}/skills/vuln-chain-composer/scripts/generate_report.py" --input {chains_with_impact.json} --format all --output-dir {reports_dir}
+python3 "${CLAUDE_PLUGIN_ROOT}/skills/vuln-chain-composer/scripts/generate_report.py" --input {chains_with_impact.json} --format all --output-dir {reports_dir}
 ```
 
 Output:

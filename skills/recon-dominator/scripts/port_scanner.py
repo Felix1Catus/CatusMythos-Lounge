@@ -10,14 +10,15 @@ import json
 import re
 import socket
 import subprocess
+import os
 import ssl
 import urllib.request
 import concurrent.futures
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 
 
-from _common import log, success, warn
+from _common import log, scoped_urlopen, success, warn
 TOP_100_PORTS = [
     21, 22, 23, 25, 53, 80, 110, 111, 135, 139, 143, 443, 445, 993, 995,
     1433, 1521, 1723, 2049, 3306, 3389, 5432, 5900, 5985, 6379, 8000,
@@ -135,12 +136,13 @@ def http_probe(host, port=80, use_https=False, timeout=5):
     url = f"{scheme}://{host}:{port}/"
 
     ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
+    if os.environ.get("CATUS_INSECURE_TLS") == "1":
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
 
     req = urllib.request.Request(url, headers={"User-Agent": "orizon-recon/1.0"})
     try:
-        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
+        with scoped_urlopen(req, timeout=timeout, context=ctx) as resp:
             body = resp.read(8192).decode("utf-8", errors="replace")
             title = ""
             if "<title>" in body.lower():
@@ -167,7 +169,7 @@ def http_probe(host, port=80, use_https=False, timeout=5):
                 },
                 "redirect": headers.get("Location", ""),
             }
-    except Exception as e:
+    except Exception:
         return None
 
 
@@ -175,7 +177,6 @@ def detect_waf(http_info):
     """Basic WAF/CDN detection from headers."""
     if not http_info:
         return "unknown"
-    server = (http_info.get("server", "") or "").lower()
     headers_str = json.dumps(http_info).lower()
 
     waf_signatures = {
@@ -313,7 +314,7 @@ def main():
     args = parser.parse_args()
 
     log(f"Starting port scan...")
-    log(f"Timestamp: {datetime.utcnow().isoformat()}Z")
+    log(f"Timestamp: {datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')}")
 
     # Load hosts
     input_path = Path(args.input)
@@ -356,7 +357,7 @@ def main():
 
     output = {
         "meta": {
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
             "type": "port_scan",
             "tool": "recon-dominator by orizon.one",
             "hosts_scanned": len(hosts),

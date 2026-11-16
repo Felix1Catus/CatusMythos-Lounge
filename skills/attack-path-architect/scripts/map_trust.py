@@ -7,25 +7,25 @@ Author: orizon.one
 
 import argparse
 import json
-import re
 import socket
 import subprocess
+import os
 import ssl
 import urllib.request
-from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 from collections import defaultdict
 
 
-from _common import log, success, warn
+from _common import log, scoped_urlopen, success
 def http_get_headers(url, timeout=5):
     """Get HTTP headers from a URL."""
     ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
+    if os.environ.get("CATUS_INSECURE_TLS") == "1":
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
     req = urllib.request.Request(url, headers={"User-Agent": "orizon-recon/1.0"})
     try:
-        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
+        with scoped_urlopen(req, timeout=timeout, context=ctx) as resp:
             return dict(resp.headers)
     except Exception:
         return {}
@@ -175,6 +175,8 @@ def check_certificate_sharing(assets):
     for asset in assets:
         host = asset.get("host", "")
         try:
+            # This probe sends no application data; disabling validation lets us inspect
+            # expired and self-signed peer certificates for trust-relationship mapping.
             ctx = ssl.create_default_context()
             ctx.check_hostname = False
             ctx.verify_mode = ssl.CERT_NONE
@@ -352,7 +354,7 @@ def main():
     output = {
         "meta": {
             "domain": domain,
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
             "type": "trust_mapping",
             "tool": "attack-path-architect by orizon.one",
             "total_relationships": len(all_relationships),

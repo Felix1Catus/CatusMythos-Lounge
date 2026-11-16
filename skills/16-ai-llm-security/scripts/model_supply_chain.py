@@ -12,9 +12,9 @@ the module and attribute as separate string opcodes first), so dangerous imports
 in modern PyTorch/transformers checkpoints are not missed.
 
 Usage:
-    python model_supply_chain.py --path model.pt
-    python model_supply_chain.py --path ./models --recursive --output scan.json
-    python model_supply_chain.py --demo            # self-test on a synthetic pickle
+    python3 model_supply_chain.py --path model.pt
+    python3 model_supply_chain.py --path ./models --recursive --output scan.json
+    python3 model_supply_chain.py --demo            # self-test on a synthetic pickle
 """
 from __future__ import annotations
 
@@ -29,12 +29,15 @@ import pickletools
 import re
 import struct
 import sys
+import tempfile
 import zipfile
 
 logger = logging.getLogger("model_supply_chain")
 
 UNSAFE_EXT = {".pkl", ".pickle", ".pt", ".pth", ".bin", ".ckpt", ".joblib", ".dill", ".npy", ".npz"}
 SAFE_EXT = {".safetensors", ".onnx", ".gguf", ".ggml", ".json"}
+MAX_SCAN_BYTES = 64 * 1024 * 1024
+MAX_ARCHIVE_ENTRIES = 10000
 
 # Opcodes that push a string literal onto the stack (candidate STACK_GLOBAL operands).
 _STRING_OPS = {"SHORT_BINUNICODE", "BINUNICODE", "BINUNICODE8", "UNICODE", "SHORT_BINSTRING", "BINSTRING", "STRING"}
@@ -72,10 +75,6 @@ def scan_pickle_bytes(data: bytes) -> list[str]:
     """Return an ordered, de-duplicated list of dangerous findings from a pickle stream."""
     findings: list[str] = []
     recent_strings: list[str] = []  # trailing string literals, for STACK_GLOBAL resolution
-    try:
-        ops = list(pickletools.genops(data))
-    except Exception as exc:  # noqa: BLE001 — malformed/truncated streams are expected input
-        return [f"unparseable pickle stream ({exc})"]
 
     def flag_global(module: str, attr: str) -> None:
         ref = f"{module}.{attr}" if attr else module
@@ -83,27 +82,32 @@ def scan_pickle_bytes(data: bytes) -> list[str]:
         if base in DANGEROUS_MODULES or attr in DANGEROUS_CALLABLES:
             findings.append(f"GLOBAL import: {ref}")
 
-    for opcode, arg, _pos in ops:
-        name = opcode.name
-        if name in _STRING_OPS and arg is not None:
-            recent_strings.append(str(arg))
-            recent_strings = recent_strings[-2:]
-        elif name == "GLOBAL" and arg:
-            parts = str(arg).split(" ", 1)
-            flag_global(parts[0], parts[1] if len(parts) > 1 else "")
-            recent_strings.clear()
-        elif name == "STACK_GLOBAL":
-            if len(recent_strings) >= 2:
-                flag_global(recent_strings[-2], recent_strings[-1])
-            else:
-                findings.append("STACK_GLOBAL with undetermined operands (manual review)")
-            recent_strings.clear()
-        elif name == "REDUCE":
-            findings.append("REDUCE opcode (callable invocation on load)")
-        elif name in ("INST", "OBJ", "NEWOBJ", "NEWOBJ_EX"):
-            findings.append(f"{name} opcode (object construction on load)")
-        elif name in ("GLOBAL", "STACK_GLOBAL"):
-            recent_strings.clear()
+    try:
+        # Keep this iterator lazy: materializing every opcode can multiply
+        # memory use for large or hostile streams before the scan limit helps.
+        for opcode, arg, _pos in pickletools.genops(data):
+            name = opcode.name
+            if name in _STRING_OPS and arg is not None:
+                recent_strings.append(str(arg))
+                recent_strings = recent_strings[-2:]
+            elif name == "GLOBAL" and arg:
+                parts = str(arg).split(" ", 1)
+                flag_global(parts[0], parts[1] if len(parts) > 1 else "")
+                recent_strings.clear()
+            elif name == "STACK_GLOBAL":
+                if len(recent_strings) >= 2:
+                    flag_global(recent_strings[-2], recent_strings[-1])
+                else:
+                    findings.append("STACK_GLOBAL with undetermined operands (manual review)")
+                recent_strings.clear()
+            elif name == "REDUCE":
+                findings.append("REDUCE opcode (callable invocation on load)")
+            elif name in ("INST", "OBJ", "NEWOBJ", "NEWOBJ_EX"):
+                findings.append(f"{name} opcode (object construction on load)")
+            elif name in ("GLOBAL", "STACK_GLOBAL"):
+                recent_strings.clear()
+    except Exception as exc:  # noqa: BLE001 — malformed/truncated streams are expected input
+        findings.append(f"unparseable pickle stream ({exc})")
 
     seen: set[str] = set()
     out: list[str] = []
@@ -120,6 +124,20 @@ def _verdict_from_findings(findings: list[str]) -> str:
     if any(f.startswith("REDUCE") or "STACK_GLOBAL" in f for f in findings):
         return "review"
     return "review" if findings else "info"
+
+
+def _read_limited(stream, limit: int = MAX_SCAN_BYTES) -> tuple[bytes, bool]:
+    """Read at most limit bytes, plus one sentinel byte to detect truncation."""
+    data = stream.read(limit + 1)
+    return data[:limit], len(data) > limit
+
+
+def _mark_incomplete(result: dict, context: str) -> None:
+    result["findings"].append(
+        f"scan incomplete: {context} exceeded the {MAX_SCAN_BYTES}-byte scan limit"
+    )
+    if result["verdict"] != "DANGEROUS":
+        result["verdict"] = "review"
 
 
 def parse_npy_header(data: bytes):
@@ -208,12 +226,32 @@ def _gguf_skip_value(data: bytes, offset: int, value_type: int):
             raise ValueError("truncated GGUF array header")
         elem_type, count = struct.unpack_from("<IQ", data, offset)
         offset += 12
+        # Validate counts against the bytes available before looping. A
+        # hostile header can otherwise request billions of zero-progress
+        # scalar reads and tie up the scanner.
+        if elem_type == _GGUF_TYPE_STRING:
+            min_size = 8  # every encoded string starts with a uint64 length
+        elif elem_type == _GGUF_TYPE_ARRAY:
+            min_size = 12  # every nested array starts with a type and count
+        else:
+            elem_size = _GGUF_SCALAR_SIZES.get(elem_type)
+            if elem_size is None:
+                raise ValueError(f"unknown GGUF array element type {elem_type}")
+            min_size = elem_size
+            required = count * elem_size
+            if required > len(data) - offset:
+                raise ValueError("truncated GGUF scalar array")
+            return None, offset + required
+        if count > (len(data) - offset) // min_size:
+            raise ValueError("GGUF array count exceeds available data")
         for _ in range(count):
             _, offset = _gguf_skip_value(data, offset, elem_type)
         return None, offset
     size = _GGUF_SCALAR_SIZES.get(value_type)
     if size is None:
         raise ValueError(f"unknown GGUF value type {value_type}")
+    if offset + size > len(data):
+        raise ValueError("truncated GGUF scalar")
     return None, offset + size
 
 
@@ -316,10 +354,14 @@ def scan_file(path: str) -> dict:
             # involved at all. See scan_gguf_metadata().
             try:
                 with open(path, "rb") as fh:
-                    result["findings"] = scan_gguf_metadata(fh.read())
+                    data, truncated = _read_limited(fh)
+                    result["findings"] = scan_gguf_metadata(data)
+                result["verdict"] = _verdict_from_findings(result["findings"]) if result["findings"] else "safe"
+                if truncated:
+                    _mark_incomplete(result, "GGUF metadata")
             except Exception as exc:  # noqa: BLE001
                 result["findings"] = [f"error reading GGUF metadata: {exc}"]
-            result["verdict"] = _verdict_from_findings(result["findings"]) if result["findings"] else "safe"
+                result["verdict"] = "review"
             if not result["findings"]:
                 result["findings"].append("safe-by-design tensor format; no chat_template metadata found")
             return result
@@ -332,10 +374,14 @@ def scan_file(path: str) -> dict:
         result["verdict"] = "review"
         return result
 
+    incomplete_context = None
     try:
         if ext == ".npy":
             with open(path, "rb") as fh:
-                result["findings"] += scan_npy_bytes(fh.read())
+                data, truncated = _read_limited(fh)
+                result["findings"] += scan_npy_bytes(data)
+            if truncated:
+                incomplete_context = "NPY artifact"
         elif zipfile.is_zipfile(path):
             # PyTorch .pt/.pth and many .ckpt are zip archives containing
             # pickle(s); .npz is a zip of .npy arrays (each member needs the
@@ -343,16 +389,37 @@ def scan_file(path: str) -> dict:
             # matching only "pickle" in the member name, as before, missed
             # every .npz member entirely, since numpy names them "<name>.npy").
             with zipfile.ZipFile(path) as zf:
-                for nm in zf.namelist():
+                entries = zf.infolist()
+                if len(entries) > MAX_ARCHIVE_ENTRIES:
+                    incomplete_context = "archive entry list"
+                    entries = entries[:MAX_ARCHIVE_ENTRIES]
+                remaining = MAX_SCAN_BYTES
+                for entry in entries:
+                    nm = entry.filename
                     if nm.endswith((".pkl", ".pickle")) or nm.endswith("data.pkl") or "pickle" in nm.lower():
-                        result["findings"] += [f"[{nm}] {x}" for x in scan_pickle_bytes(zf.read(nm))]
+                        scan = scan_pickle_bytes
                     elif nm.endswith(".npy"):
-                        result["findings"] += [f"[{nm}] {x}" for x in scan_npy_bytes(zf.read(nm))]
+                        scan = scan_npy_bytes
+                    else:
+                        continue
+                    if remaining <= 0:
+                        incomplete_context = "archive scan"
+                        break
+                    with zf.open(entry) as member:
+                        data, truncated = _read_limited(member, remaining)
+                    remaining -= len(data)
+                    result["findings"] += [f"[{nm}] {x}" for x in scan(data)]
+                    if truncated:
+                        incomplete_context = "archive member"
+                        break
             if not result["findings"]:
                 result["findings"].append("zip archive, no embedded pickle entries detected")
         else:
             with open(path, "rb") as fh:
-                result["findings"] += scan_pickle_bytes(fh.read())
+                data, truncated = _read_limited(fh)
+                result["findings"] += scan_pickle_bytes(data)
+            if truncated:
+                incomplete_context = "pickle artifact"
     except Exception as exc:  # noqa: BLE001 — report I/O/zip errors as findings, never crash a batch scan
         logger.warning("error scanning %s: %s", path, exc)
         result["findings"].append(f"error: {exc}")
@@ -360,6 +427,8 @@ def scan_file(path: str) -> dict:
         return result
 
     result["verdict"] = _verdict_from_findings([f.split("] ", 1)[-1] for f in result["findings"]])
+    if incomplete_context:
+        _mark_incomplete(result, incomplete_context)
     return result
 
 
@@ -416,6 +485,25 @@ def _run_demo() -> int:
         if not named:
             print("  [!] demo FAILED: dangerous global not resolved", file=sys.stderr)
             return 1
+    malformed_array = struct.pack("<IQ", 0, (1 << 64) - 1)
+    try:
+        _gguf_skip_value(malformed_array, 0, _GGUF_TYPE_ARRAY)
+    except ValueError:
+        print("  [OK] oversized GGUF array count rejected before iteration")
+    else:
+        print("  [!] demo FAILED: oversized GGUF array count was accepted", file=sys.stderr)
+        return 1
+    with tempfile.TemporaryDirectory(prefix="model-supply-chain-demo-") as tmp:
+        oversized = os.path.join(tmp, "oversized.pkl")
+        with open(oversized, "wb") as fh:
+            fh.truncate(MAX_SCAN_BYTES + 1)
+        result = scan_file(oversized)
+        if result["verdict"] != "review" or not any(
+            "scan incomplete" in item for item in result["findings"]
+        ):
+            print("  [!] demo FAILED: oversized artifact was not marked for review", file=sys.stderr)
+            return 1
+        print("  [OK] oversized artifact is bounded and marked for review")
     print("[+] demo passed — GLOBAL/STACK_GLOBAL imports resolved at both protocols")
     return 0
 

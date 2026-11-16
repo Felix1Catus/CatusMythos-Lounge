@@ -7,8 +7,7 @@ Author: orizon.one
 
 import argparse
 import json
-from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 from _common import log, success
@@ -286,10 +285,6 @@ def generate_paths(assets, trust_map=None):
     """Generate attack paths for all assets."""
     paths = []
 
-    trust_relationships = []
-    if trust_map:
-        trust_relationships = trust_map.get("relationships", [])
-
     for asset in assets:
         host = asset.get("host", "")
         asset_type = asset.get("asset_type", "WEB_APP")
@@ -478,7 +473,7 @@ def main():
 
     output = {
         "meta": {
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
             "type": "attack_tree",
             "tool": "attack-path-architect by orizon.one",
             "total_paths": len(paths),

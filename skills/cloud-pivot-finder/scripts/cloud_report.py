@@ -7,12 +7,11 @@ Author: orizon.one
 
 import argparse
 import json
-import os
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 
 
-from _common import log, success, vuln, warn
+from _common import log, success, warn
 # Severity weights for prioritization
 SEVERITY_WEIGHTS = {
     "critical": 4,
@@ -463,7 +462,7 @@ def main():
 
     report = {
         "meta": {
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
             "type": "cloud_security_report",
             "tool": "cloud-pivot-finder by orizon.one",
             "project": args.project,

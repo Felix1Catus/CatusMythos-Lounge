@@ -10,13 +10,14 @@ import json
 import re
 import socket
 import subprocess
+import os
 import ssl
 import urllib.request
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 
 
-from _common import log, success, warn
+from _common import log, scoped_urlopen, success
 # Cloud service CNAME patterns
 CNAME_PATTERNS = {
     "AWS S3": [r"\.s3[-.].*\.amazonaws\.com", r"\.s3\.amazonaws\.com"],
@@ -111,11 +112,12 @@ def detect_from_headers(hostname):
     for scheme in ["https", "http"]:
         url = f"{scheme}://{hostname}/"
         ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
+        if os.environ.get("CATUS_INSECURE_TLS") == "1":
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
         req = urllib.request.Request(url, headers={"User-Agent": "orizon-recon/1.0"})
         try:
-            with urllib.request.urlopen(req, timeout=5, context=ctx) as resp:
+            with scoped_urlopen(req, timeout=5, context=ctx) as resp:
                 headers = dict(resp.headers)
                 headers_str = json.dumps(headers).lower()
 
@@ -364,7 +366,7 @@ def main():
 
     output = {
         "meta": {
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
             "type": "cloud_detection",
             "tool": "cloud-pivot-finder by orizon.one",
             "hosts_analyzed": len(hosts),

@@ -16,7 +16,7 @@ round(value * 100000) integer approach sidesteps that representation error.
 
 import argparse
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 from _common import cvss_round_up, log, score_to_severity, success, warn
@@ -342,7 +342,7 @@ def main():
 
     output = {
         "meta": {
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
             "type": "impact_analysis",
             "tool": "vuln-chain-composer by orizon.one",
             "chains_analyzed": len(recalculated),

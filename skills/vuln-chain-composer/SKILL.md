@@ -18,13 +18,14 @@ CRITICAL: This skill produces offensive security analysis. Only use with explici
 
 ### Step 1: Import Findings
 Accept vulnerability data from:
-1. JSON output from webapp-exploit-hunter, api-breaker, cloud-pivot-finder
+1. JSON output from webapp-exploit-hunter, web-cache-auditor, api-breaker,
+   cloud-pivot-finder
 2. Manual finding descriptions from the user
 3. Attack tree data from attack-path-architect
 4. Mixed sources - consolidate everything
 
 ```bash
-python scripts/import_findings.py --input {findings_dir_or_files}
+python3 scripts/import_findings.py --input {findings_dir_or_files}
 ```
 
 Normalize all findings to a common format:
@@ -34,10 +35,15 @@ Normalize all findings to a common format:
 - PoC (if available)
 - Prerequisites (authentication level, specific conditions)
 
+`web-cache-auditor` exports cache-replay signals as `INFO` findings with an
+explicit confidence value. Keep these as leads until the cache key, affected
+cache layer, and meaningful impact are independently confirmed; do not turn
+a reflected marker or a cache `HIT` into a confirmed exploit chain by itself.
+
 ### Step 2: Cross-Domain Correlation
 
 ```bash
-python scripts/correlate.py --findings {normalized_findings}
+python3 scripts/correlate.py --findings {normalized_findings}
 ```
 
 Analyze relationships between findings:
@@ -133,7 +139,7 @@ inflated one).
 ### Step 3: Chain Construction
 
 ```bash
-python scripts/build_chains.py --correlations {correlation_data}
+python3 scripts/build_chains.py --input {correlation_data}
 ```
 
 For each identified chain:
@@ -151,7 +157,7 @@ For each identified chain:
 ### Step 4: Impact Recalculation
 
 ```bash
-python scripts/calculate_impact.py --chains {chains_file}
+python3 scripts/calculate_impact.py --input {chains_file}
 ```
 
 Recalculate severity based on chain context:
@@ -173,7 +179,7 @@ For each chain, calculate:
 ### Step 5: PoC Generation
 
 ```bash
-python scripts/generate_chain_poc.py --chain {chain_file}
+python3 scripts/generate_chain_poc.py --input {chain_file}
 ```
 
 For each confirmed chain, generate:
@@ -190,7 +196,7 @@ For each confirmed chain, generate:
 ### Step 6: Bug Bounty Report Generation
 
 ```bash
-python scripts/generate_report.py --chains {chains_file} --format {platform}
+python3 scripts/generate_report.py --input {chains_file} --format {platform}
 ```
 
 Platform-optimized reports for:

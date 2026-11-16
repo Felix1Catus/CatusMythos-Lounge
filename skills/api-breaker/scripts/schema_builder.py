@@ -11,7 +11,7 @@ import re
 import time
 import urllib.request
 import urllib.parse
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 from _common import http_request, log, success, vuln, warn
@@ -1270,9 +1270,10 @@ GRAPHQL_CVE_TABLE = [
 def _version_in_ranges(parsed, ranges):
     for lo, hi in ranges:
         n = max(len(parsed), len(lo), len(hi))
-        pad = lambda t: t + (0,) * (n - len(t))
-        p, l, h = pad(parsed), pad(lo), pad(hi)
-        if l <= p < h:
+        p = parsed + (0,) * (n - len(parsed))
+        lower = lo + (0,) * (n - len(lo))
+        h = hi + (0,) * (n - len(hi))
+        if lower <= p < h:
             return True
     return False
 
@@ -1570,7 +1571,7 @@ def main():
     output = {
         "meta": {
             "base_url": base_url,
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
             "type": "schema_reconstruction",
             "tool": "api-breaker by orizon.one",
         },

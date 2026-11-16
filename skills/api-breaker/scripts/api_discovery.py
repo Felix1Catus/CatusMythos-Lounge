@@ -11,8 +11,7 @@ import re
 import urllib.request
 import urllib.parse
 import concurrent.futures
-from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 from _common import http_request, log, success, vuln, warn
@@ -651,7 +650,7 @@ def main():
         "meta": {
             "domain": domain,
             "base_url": base_url,
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
             "type": "api_discovery",
             "tool": "api-breaker by orizon.one",
         },

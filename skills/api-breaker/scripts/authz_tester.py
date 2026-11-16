@@ -11,10 +11,10 @@ import re
 import time
 import urllib.request
 import urllib.parse
-from datetime import datetime
+from datetime import datetime, timezone
 
 
-from _common import http_request, log, success, vuln, warn
+from _common import http_request, log, same_origin_url, success, vuln, warn
 # Admin/privileged endpoint patterns
 ADMIN_PATTERNS = [
     "/admin", "/admin/", "/api/admin", "/api/v1/admin",
@@ -64,8 +64,14 @@ def find_id_endpoints(base_url, endpoints):
     id_endpoints = []
 
     for ep in endpoints:
-        path = ep.get("path", "") if isinstance(ep, dict) else ep
-        url = ep.get("url", "") if isinstance(ep, dict) else ""
+        if isinstance(ep, dict):
+            path = ep.get("path", "")
+            if not path and ep.get("url"):
+                path = urllib.parse.urlsplit(ep["url"]).path
+        else:
+            candidate = str(ep)
+            parsed = urllib.parse.urlsplit(candidate)
+            path = parsed.path if parsed.scheme or parsed.netloc else candidate
 
         # Match patterns like /users/1, /api/v1/orders/123
         if re.search(r'/\d+(?:/|$)', path) or re.search(r'/\{[^}]+\}', path):
@@ -77,7 +83,10 @@ def find_id_endpoints(base_url, endpoints):
     return id_endpoints
 
 
-def test_bola(base_url, endpoints, token_a, token_b=None, extra_headers=None, delay=0):
+def test_bola(
+    base_url, endpoints, token_a, token_b=None, extra_headers=None, delay=0,
+    allow_mutation_write=False,
+):
     """Test for Broken Object Level Authorization (BOLA/IDOR)."""
     log("Testing for BOLA (Broken Object Level Authorization)...")
     findings = []
@@ -94,11 +103,15 @@ def test_bola(base_url, endpoints, token_a, token_b=None, extra_headers=None, de
 
     # Phase 1: Get objects owned by user A
     tested = 0
+    methods_to_test = HTTP_METHODS if allow_mutation_write else ["GET"]
     for ep in endpoints:
-        url = ep.get("url", "") if isinstance(ep, dict) else ep
-        path = ep.get("path", "") if isinstance(ep, dict) else ep
+        candidate = (ep.get("url") or ep.get("path", "")) if isinstance(ep, dict) else ep
+        url = same_origin_url(base_url, candidate)
         if not url:
-            url = urllib.parse.urljoin(base_url, path)
+            warn(f"Skipping endpoint outside the API base origin: {candidate}")
+            continue
+        path = ep.get("path", "") if isinstance(ep, dict) else str(ep)
+        path = path or urllib.parse.urlsplit(url).path
 
         # Get resources as User A
         status_a, _, body_a = http_request(url, headers=headers_a)
@@ -120,7 +133,7 @@ def test_bola(base_url, endpoints, token_a, token_b=None, extra_headers=None, de
             # Build URL with ID
             id_url = url.rstrip("/") + f"/{obj_id}"
 
-            for method in HTTP_METHODS:
+            for method in methods_to_test:
                 # Test with User B token
                 if token_b:
                     status_b, _, body_b = http_request(id_url, method=method, headers=headers_b)
@@ -203,7 +216,7 @@ def test_bola(base_url, endpoints, token_a, token_b=None, extra_headers=None, de
     return findings
 
 
-def test_bfla(base_url, token, extra_headers=None, delay=0):
+def test_bfla(base_url, token, extra_headers=None, delay=0, allow_mutation_write=False):
     """Test for Broken Function Level Authorization (BFLA)."""
     log("Testing for BFLA (Broken Function Level Authorization)...")
     findings = []
@@ -212,10 +225,11 @@ def test_bfla(base_url, token, extra_headers=None, delay=0):
     if extra_headers:
         headers_user.update(extra_headers)
 
+    methods_to_test = HTTP_METHODS if allow_mutation_write else ["GET"]
     for admin_path in ADMIN_PATTERNS:
         url = urllib.parse.urljoin(base_url, admin_path)
 
-        for method in HTTP_METHODS:
+        for method in methods_to_test:
             data = None
             req_headers = dict(headers_user)
             if method in ("POST", "PUT", "PATCH"):
@@ -239,6 +253,9 @@ def test_bfla(base_url, token, extra_headers=None, delay=0):
                     "has_data": has_data,
                     "response_preview": body[:200],
                 })
+
+    if not allow_mutation_write:
+        return findings
 
     # Test method override (X-HTTP-Method-Override)
     log("Testing HTTP method override headers...")
@@ -282,22 +299,26 @@ def main():
     parser.add_argument("--token", required=True, help="User A auth token")
     parser.add_argument("--token-b", help="User B auth token (for BOLA cross-user testing)")
     parser.add_argument("--cookie", help="Session cookie")
-    parser.add_argument("--api-base", help="API base URL")
+    parser.add_argument("--api-base", required=True, help="Trusted API base URL for endpoint scoping")
     parser.add_argument("--delay", type=float, default=0, help="Delay between requests (seconds)")
+    parser.add_argument(
+        "--allow-mutation-write",
+        action="store_true",
+        help="Enable POST/PUT/PATCH/DELETE authorization probes that can change target state",
+    )
     args = parser.parse_args()
 
     extra_headers = {}
     if args.cookie:
         extra_headers["Cookie"] = args.cookie
 
-    base_url = args.api_base or ""
+    base_url = args.api_base
     endpoints = []
 
     if args.input:
         log(f"Loading data from {args.input}")
         with open(args.input) as f:
             input_data = json.load(f)
-        base_url = base_url or input_data.get("meta", {}).get("base_url", "")
         for api in input_data.get("discovered_apis", []):
             endpoints.append(api)
         for ep in input_data.get("endpoints", []):
@@ -307,6 +328,10 @@ def main():
 
     if not base_url:
         parser.error("--api-base or --input with base_url is required")
+    validated_base_url = same_origin_url(base_url, base_url)
+    if not validated_base_url:
+        parser.error("API base must be a credential-free absolute HTTP(S) URL")
+    base_url = validated_base_url
 
     log(f"Testing authorization for: {base_url}")
     log(f"Endpoints loaded: {len(endpoints)}")
@@ -314,11 +339,17 @@ def main():
     all_findings = []
 
     # Test BOLA
-    bola_findings = test_bola(base_url, endpoints, args.token, args.token_b, extra_headers, args.delay)
+    bola_findings = test_bola(
+        base_url, endpoints, args.token, args.token_b, extra_headers, args.delay,
+        allow_mutation_write=args.allow_mutation_write,
+    )
     all_findings.extend(bola_findings)
 
     # Test BFLA
-    bfla_findings = test_bfla(base_url, args.token, extra_headers, args.delay)
+    bfla_findings = test_bfla(
+        base_url, args.token, extra_headers, args.delay,
+        allow_mutation_write=args.allow_mutation_write,
+    )
     all_findings.extend(bfla_findings)
 
     # Categorize
@@ -332,7 +363,7 @@ def main():
     output = {
         "meta": {
             "base_url": base_url,
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
             "type": "authz_testing",
             "tool": "api-breaker by orizon.one",
         },

@@ -10,10 +10,10 @@ import json
 import time
 import urllib.request
 import urllib.parse
-from datetime import datetime
+from datetime import datetime, timezone
 
 
-from _common import http_request, log, success, vuln, warn
+from _common import http_request, log, same_origin_url, success, warn
 # Extra fields to inject for mass assignment testing
 INJECTION_FIELDS = {
     # Privilege escalation
@@ -69,6 +69,20 @@ NESTED_INJECTIONS = [
     {"settings": {"isAdmin": True}},
     {"metadata": {"role": "admin", "permissions": ["*"]}},
 ]
+
+
+def find_reflected_field(data, field_name):
+    """Find a field in nested response JSON without recursion or loop closures."""
+    pending = [data]
+    while pending:
+        value = pending.pop()
+        if isinstance(value, dict):
+            if field_name in value:
+                return True, value[field_name]
+            pending.extend(value.values())
+        elif isinstance(value, list):
+            pending.extend(value)
+    return False, None
 
 
 def get_writable_endpoints(input_data):
@@ -157,36 +171,28 @@ def test_mass_assignment_flat(url, method, auth_headers, baseline_payload, delay
                 except (json.JSONDecodeError, ValueError):
                     resp_data = {}
 
-                field_reflected = False
-                reflected_value = None
-
-                def check_obj(obj):
-                    nonlocal field_reflected, reflected_value
-                    if isinstance(obj, dict):
-                        if field in obj:
-                            field_reflected = True
-                            reflected_value = obj[field]
-                        for v in obj.values():
-                            check_obj(v)
-                    elif isinstance(obj, list):
-                        for item in obj:
-                            check_obj(item)
-
-                check_obj(resp_data)
+                field_reflected, reflected_value = find_reflected_field(resp_data, field)
 
                 if field_reflected:
-                    severity = "critical" if field in (
+                    potential_impact = "CRITICAL" if field in (
                         "role", "isAdmin", "is_admin", "admin", "is_superuser",
                         "permissions", "privilege"
-                    ) else "high" if field in (
+                    ) else "HIGH" if field in (
                         "price", "amount", "discount", "total", "balance",
                         "verified", "approved", "status"
-                    ) else "medium"
+                    ) else "MEDIUM"
 
-                    vuln(f"Mass assignment: {field}={test_val} accepted at {method} {url}")
+                    warn(
+                        f"Possible mass assignment: {field} echoed at {method} {url}; "
+                        "verify a persisted state change before reporting"
+                    )
                     findings.append({
-                        "type": "mass_assignment",
-                        "severity": severity,
+                        "type": "mass_assignment_candidate",
+                        "severity": "INFO",
+                        "confidence": "low",
+                        "validated": False,
+                        "evidence": f"Field '{field}' was echoed; persisted assignment is unverified",
+                        "potential_impact_if_confirmed": potential_impact,
                         "field": field,
                         "injected_value": test_val if not isinstance(test_val, list) else str(test_val),
                         "reflected_value": reflected_value if not isinstance(reflected_value, list) else str(reflected_value),
@@ -232,22 +238,34 @@ def test_mass_assignment_nested(url, method, auth_headers, baseline_payload, del
             nested_key = list(nested_payload.keys())[0]
             nested_val = nested_payload[nested_key]
 
-            def find_nested(obj, key, expected):
-                if isinstance(obj, dict):
-                    if key in obj and isinstance(obj[key], dict):
-                        for ek, ev in expected.items():
-                            if ek in obj[key]:
-                                return True
-                    for v in obj.values():
-                        if find_nested(v, key, expected):
-                            return True
-                return False
+            pending = [resp_data]
+            nested_reflected = False
+            while pending:
+                current = pending.pop()
+                if isinstance(current, dict):
+                    reflected = current.get(nested_key)
+                    if isinstance(reflected, dict) and any(
+                        key in reflected and reflected[key] == value
+                        for key, value in nested_val.items()
+                    ):
+                        nested_reflected = True
+                        break
+                    pending.extend(current.values())
+                elif isinstance(current, list):
+                    pending.extend(current)
 
-            if find_nested(resp_data, nested_key, nested_val):
-                vuln(f"Nested mass assignment: {nested_key} accepted at {method} {url}")
+            if nested_reflected:
+                warn(
+                    f"Possible nested mass assignment: {nested_key} echoed at {method} {url}; "
+                    "verify a persisted state change before reporting"
+                )
                 findings.append({
-                    "type": "mass_assignment_nested",
-                    "severity": "high",
+                    "type": "mass_assignment_candidate",
+                    "severity": "INFO",
+                    "confidence": "low",
+                    "validated": False,
+                    "evidence": f"Nested field '{nested_key}' was echoed; persisted assignment is unverified",
+                    "potential_impact_if_confirmed": "HIGH",
                     "nested_key": nested_key,
                     "injected_payload": str(nested_payload),
                     "method": method,
@@ -265,9 +283,14 @@ def main():
     parser.add_argument("--output", "-o", help="Output JSON file")
     parser.add_argument("--token", help="Auth token (Bearer)")
     parser.add_argument("--cookie", help="Session cookie")
-    parser.add_argument("--api-base", help="API base URL (used with --endpoint)")
+    parser.add_argument("--api-base", help="Trusted API base URL for scoping imported endpoints")
     parser.add_argument("--endpoint", help="Specific endpoint path to test")
     parser.add_argument("--delay", type=float, default=0, help="Delay between requests (seconds)")
+    parser.add_argument(
+        "--allow-mutation-write",
+        action="store_true",
+        help="Enable active POST/PUT/PATCH tests that create or modify target data",
+    )
     args = parser.parse_args()
 
     if not args.input and not (args.api_base and args.endpoint):
@@ -290,7 +313,6 @@ def main():
         log(f"Loading data from {args.input}")
         with open(args.input) as f:
             input_data = json.load(f)
-        base_url = base_url or input_data.get("meta", {}).get("base_url", "")
         writable_endpoints = get_writable_endpoints(input_data)
 
     if args.endpoint:
@@ -302,27 +324,31 @@ def main():
             "fields": {},
         })
 
-    if not base_url and writable_endpoints:
-        first_url = writable_endpoints[0].get("url", "")
-        if first_url:
-            parsed = urllib.parse.urlparse(first_url)
-            base_url = f"{parsed.scheme}://{parsed.netloc}"
-
     log(f"Testing mass assignment for: {base_url}")
     log(f"Writable endpoints: {len(writable_endpoints)}")
+
+    if writable_endpoints and not args.api_base:
+        parser.error("Writable imported endpoints require an explicit trusted --api-base")
+    if writable_endpoints and not same_origin_url(base_url, base_url):
+        parser.error("Writable endpoints require a credential-free absolute HTTP(S) API base")
+    if writable_endpoints and not args.allow_mutation_write:
+        parser.error(
+            "Mass-assignment probes send write requests; rerun with --allow-mutation-write "
+            "only when writes are authorized and safe"
+        )
 
     all_findings = []
     tested_count = 0
 
     for ep in writable_endpoints:
-        url = ep.get("url", "")
+        candidate_url = ep.get("url", "")
         path = ep.get("path", "")
         method = ep.get("method", "POST").upper()
         known_fields = ep.get("fields", {})
 
+        url = same_origin_url(base_url, candidate_url or path)
         if not url:
-            url = urllib.parse.urljoin(base_url, path)
-        if not url:
+            warn(f"Skipping endpoint outside the API base origin: {candidate_url or path}")
             continue
 
         log(f"Testing: {method} {path or url}")
@@ -354,7 +380,7 @@ def main():
     output = {
         "meta": {
             "base_url": base_url,
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
             "type": "mass_assignment_testing",
             "tool": "api-breaker by orizon.one",
         },

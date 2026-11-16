@@ -8,7 +8,7 @@ Author: orizon.one
 import argparse
 import json
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 from _common import log, success, warn
@@ -299,7 +299,6 @@ def _impact_detail(chain, metric):
 
 def generate_bugcrowd_report(chain, poc_data=None):
     """Generate a Bugcrowd-formatted report."""
-    chain_name = chain.get("name", "Vulnerability Chain")
     severity = chain.get("chain_severity", chain.get("overall_severity", "HIGH"))
     primary = chain.get("primary_finding", chain.get("original_correlation", {}).get("primary_finding", {}))
     supporting = chain.get("supporting_findings", chain.get("original_correlation", {}).get("supporting_findings", []))
@@ -331,7 +330,7 @@ def generate_generic_report(chain, poc_data=None):
     header = f"""---
 Report Type: Penetration Test Finding
 Classification: CONFIDENTIAL
-Generated: {datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")}
+Generated: {datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")}
 Tool: vuln-chain-composer by orizon.one
 ---
 
@@ -414,7 +413,7 @@ def main():
 
     output = {
         "meta": {
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
             "type": "bug_bounty_reports",
             "tool": "vuln-chain-composer by orizon.one",
             "chains_reported": len(report_results),

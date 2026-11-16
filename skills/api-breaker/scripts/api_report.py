@@ -8,11 +8,11 @@ Author: orizon.one
 import argparse
 import json
 import os
-import urllib.parse
-from datetime import datetime
+import shlex
+from datetime import datetime, timezone
 
 
-from _common import log, success, vuln, warn
+from _common import log, success, warn
 # OWASP API Security Top 10 (2023) mapping
 OWASP_API_TOP10 = {
     "API1": {
@@ -151,14 +151,16 @@ def build_curl_command(finding):
     method = finding.get("method", "GET")
     payload = finding.get("payload")
 
-    parts = [f"curl -X {method}"]
-    parts.append(f"'{url}'")
+    parts = ["curl", "-X", shlex.quote(str(method))]
     parts.append("-H 'Content-Type: application/json'")
     parts.append("-H 'Accept: application/json'")
 
     if payload:
         payload_str = json.dumps(payload) if isinstance(payload, dict) else str(payload)
-        parts.append(f"-d '{payload_str}'")
+        parts.append(f"-d {shlex.quote(payload_str)}")
+
+    # Stop option parsing before the untrusted URL so it cannot become a curl flag.
+    parts.extend(["--", shlex.quote(str(url))])
 
     return " \\\n  ".join(parts)
 
@@ -306,7 +308,7 @@ def main():
 
     output = {
         "meta": {
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
             "type": "api_security_report",
             "tool": "api-breaker by orizon.one",
             "findings_source": args.input,

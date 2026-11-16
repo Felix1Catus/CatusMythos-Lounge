@@ -105,8 +105,8 @@ def _quarantine(L, bad):
     p = L / 'events.jsonl'
     if seatlib._acquire(L / 'lock', 'events', timeout=30.0, stale=30.0):
         try:
-            keep = [l for l in p.read_text().splitlines(keepends=True)
-                    if l.strip() not in bad_set]
+            keep = [line for line in p.read_text().splitlines(keepends=True)
+                    if line.strip() not in bad_set]
             p.write_text(''.join(keep))
         finally:
             seatlib._release(L / 'lock', 'events')

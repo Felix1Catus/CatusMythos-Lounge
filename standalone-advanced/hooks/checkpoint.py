@@ -20,7 +20,10 @@ Fields:
   FILES    live artifact paths for this work item
 LOCATION: ~/.claude/mythos/checkpoint.py
 """
-import sys, os, re, datetime
+import sys
+import os
+import re
+import datetime
 
 FIELDS = ["NOW", "GOAL", "APPROACH", "PROVEN", "NEXT", "BLOCKERS", "FILES"]
 FLAG = {"--now": "NOW", "--goal": "GOAL", "--approach": "APPROACH",

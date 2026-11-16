@@ -8,12 +8,13 @@ Author: orizon.one
 import argparse
 import json
 import re
+import os
 import ssl
 import urllib.request
 import urllib.parse
 import concurrent.futures
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Credential-shaped strings worth scanning sample bucket contents for.
 # Cross-cloud by design -- the real-world pattern this targets isn't
@@ -41,14 +42,15 @@ COMMON_CONTAINERS = [
 ]
 
 
-from _common import log, success, vuln, warn
+from _common import log, scoped_urlopen, success, vuln
 def http_get(url, timeout=5, max_bytes=32768):
     ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
+    if os.environ.get("CATUS_INSECURE_TLS") == "1":
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
     req = urllib.request.Request(url, headers={"User-Agent": "orizon-recon/1.0"})
     try:
-        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
+        with scoped_urlopen(req, timeout=timeout, context=ctx) as resp:
             return resp.status, resp.read(max_bytes).decode("utf-8", errors="replace"), dict(resp.headers)
     except urllib.error.HTTPError as e:
         body = e.read(8192).decode("utf-8", errors="replace") if hasattr(e, "read") else ""
@@ -360,7 +362,7 @@ def main():
     output = {
         "meta": {
             "domain": domain,
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
             "type": "bucket_enumeration",
             "tool": "cloud-pivot-finder by orizon.one",
             "names_tested": len(names),

@@ -10,8 +10,7 @@ import json
 import re
 import urllib.request
 import urllib.parse
-from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 from collections import Counter
 
 
@@ -206,7 +205,7 @@ def main():
 
     domain = args.domain.strip().lower().rstrip(".")
     log(f"Starting Wayback Machine analysis for: {domain}")
-    log(f"Timestamp: {datetime.utcnow().isoformat()}Z")
+    log(f"Timestamp: {datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')}")
 
     # Fetch archived URLs
     entries = fetch_wayback_urls(domain, args.limit)
@@ -226,7 +225,7 @@ def main():
     output = {
         "meta": {
             "domain": domain,
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
             "type": "wayback_analysis",
             "tool": "recon-dominator by orizon.one",
             "total_archived_urls": len(entries)

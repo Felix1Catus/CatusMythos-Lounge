@@ -2,6 +2,7 @@
 # seat_launcher.sh - start one PROJECT LOUNGE seat.
 # Usage: bash seat_launcher.sh --program <slug> --seat <id> --role <ROLE>
 #        [--doctrine-dir <path>] [--launch] [--grok-home <dir>]
+#        [--dangerously-skip-permissions]
 #
 # Seat id -> agent + account (matches your shell aliases):
 #   grok / grok2 / grok3 / grok4   -> grok binary, GROK_HOME = ~/.grok / .grok2 / .grok3 / .grok4
@@ -14,7 +15,7 @@
 set -uo pipefail
 
 TOOLKIT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROGRAM=""; SEAT_ID=""; ROLE="PROBER"; STATE_ROOT="$HOME/targets"; DOCTRINE_DIR=""; LAUNCH=0
+PROGRAM=""; SEAT_ID=""; ROLE="PROBER"; STATE_ROOT="$HOME/targets"; DOCTRINE_DIR=""; LAUNCH=0; SKIP_PERMISSIONS=0
 GROK_HOME_ARG=""
 
 while [[ $# -gt 0 ]]; do
@@ -26,6 +27,7 @@ while [[ $# -gt 0 ]]; do
     --doctrine-dir) DOCTRINE_DIR="$2"; shift 2 ;;
     --grok-home) GROK_HOME_ARG="$2"; shift 2 ;;
     --launch) LAUNCH=1; shift ;;
+    --dangerously-skip-permissions) SKIP_PERMISSIONS=1; shift ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
@@ -113,6 +115,8 @@ GROK_CWD=(--cwd /home/RESEARCHER)
 PIDFILE="$RUNTIME/seats/$SEAT_ID.pid"
 
 launch_agent() {
+  local -a CLAUDE_FLAGS=(--effort high)
+  [[ "$SKIP_PERMISSIONS" == "1" ]] && CLAUDE_FLAGS+=(--dangerously-skip-permissions)
   case "$AGENT" in
     grok)
       [[ -n "$GROK_HOME_ARG" ]] && export GROK_HOME="$GROK_HOME_ARG"
@@ -129,12 +133,12 @@ launch_agent() {
             CLAUDE_CODE_MAX_CONTEXT_TOKENS="1048576" \
             CLAUDE_CODE_AUTO_COMPACT_WINDOW="1000000" \
             CLAUDE_CODE_MAX_OUTPUT_TOKENS="393216" \
-            "$CLAUDE" --effort high --dangerously-skip-permissions "$@"
+            "$CLAUDE" "${CLAUDE_FLAGS[@]}" "$@"
       else
         env -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_MODEL \
             -u ANTHROPIC_SMALL_FAST_MODEL -u ANTHROPIC_DEFAULT_HAIKU_MODEL \
             -u DEEPSEEK_API_KEY \
-            CLAUDE_CONFIG_DIR="$CONFIG_DIR" "$CLAUDE" --dangerously-skip-permissions "$@"
+            CLAUDE_CONFIG_DIR="$CONFIG_DIR" "$CLAUDE" "${CLAUDE_FLAGS[@]}" "$@"
       fi
       ;;
   esac

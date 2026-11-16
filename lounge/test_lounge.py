@@ -2,6 +2,7 @@
 """In-process tests for lounge upgrades from the 2026-10-17 PROGRAM_68 hunt."""
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -162,45 +163,44 @@ def test_inotify_wake():
     threading.Thread(target=kick, daemon=True).start()
     woke = seatlib.wait_paths([p], 1.0)
     dt = (time.perf_counter() - t0) * 1000
-    assert woke, 'inotify did not wake'
-    assert dt < 200, f'wake {dt:.1f}ms'
-    print(f'inotify wake {dt:.1f}ms')
+    if sys.platform.startswith('linux'):
+        assert woke, 'inotify did not wake'
+        assert dt < 200, f'wake {dt:.1f}ms'
+        print(f'inotify wake {dt:.1f}ms')
+    else:
+        # Non-Linux systems intentionally use a short polling sleep; the
+        # caller rereads the paths on its next loop instead of waiting on
+        # Linux-only inotify.
+        assert not woke, f'poll fallback unexpectedly reported an event after {dt:.1f}ms'
+        assert dt < 200, f'poll fallback sleep took {dt:.1f}ms'
+        print(f'poll fallback {dt:.1f}ms')
 
 
 def test_install_parses():
-    r = subprocess.run(['bash', '-n', str(HERE / 'install.sh')], capture_output=True, text=True)
-    assert r.returncode == 0, r.stderr
-    r = subprocess.run(['bash', '-n', str(HERE / 'go.sh')], capture_output=True, text=True)
-    assert r.returncode == 0, r.stderr
-    r = subprocess.run(['bash', '-n', str(HERE / 'stop.sh')], capture_output=True, text=True)
-    assert r.returncode == 0, r.stderr
-    r = subprocess.run(['bash', '-n', str(HERE / 'seat_launcher.sh')], capture_output=True, text=True)
-    assert r.returncode == 0, r.stderr
+    bash = shutil.which('bash')
+    if not bash:
+        print('skip bash syntax checks (bash is not installed)')
+        return
+    for name in ('install.sh', 'go.sh', 'stop.sh', 'seat_launcher.sh'):
+        r = subprocess.run([bash, '-n', name], cwd=HERE, capture_output=True, text=True)
+        assert r.returncode == 0, f'{name}: {r.stderr}'
 
 
 def test_hooks_do_not_exec_live_talk():
-    """F2: exec live_talk made the hunt router dead code."""
-    roots = [
-        Path.home() / '.grok/mythos',
-        Path.home() / '.claude/mythos',
-        Path.home() / '.claude-deepseek/mythos',
-    ]
-    found = 0
-    for root in roots:
-        for name in ('context_router.sh', 'stop_guard.sh'):
-            p = root / name
-            if not p.exists():
-                continue
-            text = p.read_text()
-            found += 1
-            assert 'exec python3' not in text or 'live_talk.py' not in text.split('exec python3')[-1][:80]
-            assert 'live_talk.py' in text
-            # exec of live_talk specifically must be gone
-            for line in text.splitlines():
-                s = line.strip()
-                if s.startswith('exec ') and 'live_talk.py' in s:
-                    raise AssertionError(f'{p} still execs live_talk: {s}')
-    assert found >= 4, f'expected hook files, found {found}'
+    """F2: exec live_talk made the hunt router dead code.
+
+    Check repository sources, not user-installed copies: tests must pass in
+    a clean checkout and must not depend on a particular machine's home dir.
+    """
+    hook_root = HERE.parent / 'standalone-advanced' / 'hooks'
+    for name in ('context_router.sh', 'stop_guard.sh'):
+        p = hook_root / name
+        text = p.read_text(encoding='utf-8')
+        assert 'live_talk.py' in text
+        assert not any(
+            line.strip().startswith('exec ') and 'live_talk.py' in line
+            for line in text.splitlines()
+        ), f'{p} still execs live_talk'
 
 
 def test_lounge_session_gate():

@@ -9,16 +9,17 @@ import argparse
 import json
 import re
 import socket
+import os
 import ssl
 import subprocess
 import urllib.request
 import urllib.error
 import concurrent.futures
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 
 
-from _common import log, success, vuln, warn
+from _common import log, scoped_urlopen, success, vuln
 # Fingerprints: service -> {cname_patterns, response_fingerprints, info}
 #
 # Refreshed against 2024-2026 can-i-take-over-xyz / nuclei-templates data
@@ -263,8 +264,9 @@ def check_nxdomain(hostname):
 def http_probe(hostname, timeout=5):
     """Probe a hostname via HTTP/HTTPS and return status + body."""
     ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
+    if os.environ.get("CATUS_INSECURE_TLS") == "1":
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
 
     for scheme in ["https", "http"]:
         url = f"{scheme}://{hostname}/"
@@ -273,7 +275,7 @@ def http_probe(hostname, timeout=5):
             "Host": hostname,
         })
         try:
-            with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
+            with scoped_urlopen(req, timeout=timeout, context=ctx) as resp:
                 body = resp.read(16384).decode("utf-8", errors="replace")
                 return resp.status, body
         except urllib.error.HTTPError as e:
@@ -371,7 +373,7 @@ def scan_subdomain(subdomain):
         # HTTP probe for error signatures (fetched once, reused across services)
         if probed_body is None:
             probed_status, probed_body = http_probe(subdomain)
-            probed_status, probed_body = probed_status, probed_body or ""
+            probed_body = probed_body or ""
 
         if probed_body:
             # Negative/suppression fingerprints are checked FIRST and, on a
@@ -475,7 +477,7 @@ def main():
 
     output = {
         "meta": {
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
             "type": "subdomain_takeover_scan",
             "tool": "cloud-pivot-finder by orizon.one",
             "subdomains_scanned": len(subdomains),

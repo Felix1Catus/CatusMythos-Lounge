@@ -12,10 +12,10 @@ import time
 import urllib.request
 import urllib.parse
 import concurrent.futures
-from datetime import datetime
+from datetime import datetime, timezone
 
 
-from _common import http_request, log, success, vuln, warn
+from _common import http_request, log, success, vuln
 # IP spoofing headers for rate limit bypass
 #
 # NOT implemented, by design (research_notes/API breaker depth
@@ -803,7 +803,7 @@ def main():
     output = {
         "meta": {
             "base_url": base_url,
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
             "type": "rate_limit_testing",
             "tool": "api-breaker by orizon.one",
         },

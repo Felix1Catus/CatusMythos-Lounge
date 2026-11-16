@@ -5,7 +5,7 @@
 ### Run the built-in corpus against a chat endpoint
 
 ```bash
-python scripts/prompt_injection_tester.py \
+python3 scripts/prompt_injection_tester.py \
   --url https://app.test/api/chat \
   --field message \
   --output injection_results.json
@@ -14,7 +14,7 @@ python scripts/prompt_injection_tester.py \
 ### OpenAI-style response shape (dotted response path)
 
 ```bash
-python scripts/prompt_injection_tester.py \
+python3 scripts/prompt_injection_tester.py \
   --url https://app.test/v1/chat \
   --field message \
   --response-path "choices.0.message.content" \
@@ -24,7 +24,7 @@ python scripts/prompt_injection_tester.py \
 ### Custom payload corpus + custom refusal keywords
 
 ```bash
-python scripts/prompt_injection_tester.py \
+python3 scripts/prompt_injection_tester.py \
   --url https://app.test/api/chat \
   --corpus my_payloads.txt \
   --judge-keywords refusal_words.txt
@@ -35,13 +35,13 @@ python scripts/prompt_injection_tester.py \
 ### Scan a single PyTorch checkpoint
 
 ```bash
-python scripts/model_supply_chain.py --path ./models/model.pt
+python3 scripts/model_supply_chain.py --path ./models/model.pt
 ```
 
 ### Recursively scan a model directory and export JSON
 
 ```bash
-python scripts/model_supply_chain.py --path ./models --recursive --output model_scan.json
+python3 scripts/model_supply_chain.py --path ./models --recursive --output model_scan.json
 ```
 
 ## Conversational Examples (skill activates automatically)
@@ -58,10 +58,10 @@ python scripts/model_supply_chain.py --path ./models --recursive --output model_
 
 ```bash
 # 1. Scan model artifacts before deployment (supply chain / LLM03)
-python scripts/model_supply_chain.py --path ./models --recursive -o model_scan.json
+python3 scripts/model_supply_chain.py --path ./models --recursive -o model_scan.json
 
 # 2. Test the running app for prompt injection (LLM01)
-python scripts/prompt_injection_tester.py --url https://app.test/api/chat --field message -o inj.json
+python3 scripts/prompt_injection_tester.py --url https://app.test/api/chat --field message -o inj.json
 
 # 3. Feed confirmed injection signatures to Skill 12 for SIEM detection rules
 # 4. Feed app web/API surface to Skill 09 for traditional vuln testing

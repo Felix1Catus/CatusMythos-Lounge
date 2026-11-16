@@ -12,8 +12,10 @@ copies and fails loudly if they drift, since they're intentionally
 duplicated-by-design across skills, not meant to diverge within one.
 """
 
+import os
 import ssl
 import urllib.error
+import urllib.parse
 import urllib.request
 
 
@@ -29,14 +31,73 @@ def warn(msg):
     print(f"[!] {msg}")
 
 
+def _http_origin(url):
+    try:
+        parsed = urllib.parse.urlsplit(url)
+        scheme = parsed.scheme.lower()
+        if (
+            scheme not in ("http", "https")
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+        ):
+            return None
+        port = parsed.port or (443 if scheme == "https" else 80)
+        if port == 0:
+            return None
+        return scheme, parsed.hostname.lower(), port
+    except (TypeError, ValueError):
+        return None
+
+
+def same_origin_url(base_url, candidate):
+    """Resolve a URL only when it remains on the base HTTP origin."""
+    base_origin = _http_origin(base_url)
+    if not base_origin:
+        return None
+    try:
+        url = urllib.parse.urljoin(base_url, str(candidate or ""))
+        if _http_origin(url) != base_origin:
+            return None
+        parsed = urllib.parse.urlsplit(url)
+        return urllib.parse.urlunsplit(parsed._replace(fragment=""))
+    except (TypeError, ValueError):
+        return None
+
+
+class SameOriginRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Allow redirects only when scheme, host, and effective port stay fixed."""
+
+    def __init__(self, initial_url):
+        self.expected_origin = _http_origin(initial_url)
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not self.expected_origin or _http_origin(newurl) != self.expected_origin:
+            raise urllib.error.HTTPError(req.full_url, code, "cross-origin redirect blocked", headers, fp)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def scoped_urlopen(request, timeout=10, context=None):
+    """Open a request while preventing urllib from forwarding headers off-origin."""
+    url = request.full_url if isinstance(request, urllib.request.Request) else request
+    if not _http_origin(url):
+        raise ValueError("only credential-free HTTP(S) request URLs are allowed")
+    opener = urllib.request.build_opener(
+        SameOriginRedirectHandler(url),
+        urllib.request.HTTPSHandler(context=context or ssl.create_default_context()),
+    )
+    return opener.open(request, timeout=timeout)
+
+
 def vuln(msg):
     print(f"[!!] VULNERABILITY: {msg}")
 
 
 def http_request(url, method="GET", headers=None, data=None, timeout=8):
     ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
+    if os.environ.get("CATUS_INSECURE_TLS") == "1":
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
     default_headers = {
         "User-Agent": "Mozilla/5.0 (compatible; orizon-hunter/1.0)",
         "Accept": "application/json, text/html, */*",
@@ -47,7 +108,7 @@ def http_request(url, method="GET", headers=None, data=None, timeout=8):
         data = data.encode("utf-8")
     req = urllib.request.Request(url, data=data, headers=default_headers, method=method)
     try:
-        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
+        with scoped_urlopen(req, timeout=timeout, context=ctx) as resp:
             body = resp.read(65536).decode("utf-8", errors="replace")
             return resp.status, dict(resp.headers), body
     except urllib.error.HTTPError as e:

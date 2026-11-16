@@ -8,11 +8,11 @@ the first time a session starts after install, without re-running pip on
 every single session. It also best-effort installs the Go-based recon
 tools the pipeline's own scripts already know how to use when present
 (subfinder, httpx, puredns, naabu -- all user-scoped, no sudo needed), and
-reports (never silently auto-installs, since these usually need sudo/a
-system package manager) anything else that's missing.
+reports system-level tools that are missing (these need a system package
+manager and are left for the user to install).
 
-Safe to run by hand too: `python scripts/bootstrap.py` from the plugin root,
-or `python "${CLAUDE_PLUGIN_ROOT}/scripts/bootstrap.py"` from anywhere.
+Safe to run by hand too: `python3 scripts/bootstrap.py` from the plugin root,
+or `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/bootstrap.py"` from anywhere.
 
 Always exits 0 -- a SessionStart hook failing should never block a session
 over an optional dependency; everything here is best-effort and reported,

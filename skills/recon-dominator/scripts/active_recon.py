@@ -16,11 +16,10 @@ import json
 import re
 import socket
 import subprocess
-import sys
 import time
 import concurrent.futures
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 from _common import log, success, warn
@@ -335,7 +334,7 @@ def main():
 
     domain = args.domain.strip().lower().rstrip(".")
     log(f"Starting active reconnaissance on: {domain}")
-    log(f"Timestamp: {datetime.utcnow().isoformat()}Z")
+    log(f"Timestamp: {datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')}")
 
     all_found = {}
 
@@ -418,7 +417,7 @@ def main():
     output = {
         "meta": {
             "domain": domain,
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
             "type": "active_recon",
             "tool": "recon-dominator by orizon.one",
             "total_unique": len(all_found)

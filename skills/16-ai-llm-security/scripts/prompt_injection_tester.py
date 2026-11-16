@@ -8,8 +8,8 @@ canary detection. Built for OWASP LLM01 testing of systems you are authorized
 to assess.
 
 Usage:
-    python prompt_injection_tester.py --url https://app.test/api/chat --field message
-    python prompt_injection_tester.py --url ... --corpus payloads.txt --output results.json
+    python3 prompt_injection_tester.py --url https://app.test/api/chat --field message
+    python3 prompt_injection_tester.py --url ... --corpus payloads.txt --output results.json
 
 The endpoint is expected to accept JSON and return JSON or text. Adjust
 --field (request key) and --response-path (dotted key into JSON response) for
@@ -263,8 +263,13 @@ def judge(text: str, refusals: list[str]) -> str:
 
 def send(url: str, field: str, payload: str, headers: dict, resp_path: str,
          timeout: int) -> str:
+    if requests is None:
+        raise RuntimeError(
+            "optional dependency 'requests' is missing; "
+            "run `python3 -m pip install -r requirements.txt`"
+        )
     body = {field: payload}
-    r = requests.post(url, json=body, headers=headers, timeout=timeout)
+    r = requests.post(url, json=body, headers=headers, timeout=timeout, allow_redirects=False)
     r.raise_for_status()
     ctype = r.headers.get("content-type", "")
     if "application/json" in ctype:

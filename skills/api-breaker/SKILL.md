@@ -19,7 +19,7 @@ CRITICAL: Only test APIs you have explicit authorization to test.
 ### Step 1: API Discovery
 
 ```bash
-python scripts/api_discovery.py --domain {target_domain}
+python3 scripts/api_discovery.py --domain {target_domain}
 ```
 
 Discovery methods:
@@ -55,7 +55,7 @@ cap request volume.
 ### Step 2: Schema Reconstruction
 
 ```bash
-python scripts/schema_builder.py --api-base {api_url}
+python3 scripts/schema_builder.py --api-base {api_url}
 ```
 
 Even without documentation:
@@ -111,7 +111,7 @@ Output: Reconstructed API schema in OpenAPI format.
 ### Step 3: Authentication Analysis
 
 ```bash
-python scripts/auth_analyzer.py --api-base {api_url}
+python3 scripts/auth_analyzer.py --api-base {api_url}
 ```
 
 Detect and test:
@@ -139,10 +139,15 @@ Detect and test:
 - **Session tokens**: Predictability, fixation, rotation on privilege change
 - **No auth**: Endpoints accessible without any authentication
 
+Authentication analysis filters imported endpoint URLs against the supplied
+API base origin before sending a token or cookie. Supply `--api-base` when the
+input file does not contain a trustworthy base URL; off-origin endpoints are
+skipped.
+
 ### Step 4: Authorization Testing (BOLA/BFLA)
 
 ```bash
-python scripts/authz_tester.py --schema {schema_file} --token {user_token}
+python3 scripts/authz_tester.py --input {schema_file} --api-base {api_url} --token {user_token}
 ```
 
 **BOLA (Broken Object-Level Authorization):**
@@ -156,11 +161,23 @@ For every endpoint with an object ID:
 2. Test admin endpoints with regular user token
 3. Test all HTTP methods (GET, POST, PUT, DELETE, PATCH) on each endpoint
 
+`authz_tester.py` runs read-only GET probes by default. POST/PUT/PATCH/DELETE
+checks, including method-override probes, require the explicit
+`--allow-mutation-write` option because they can change or delete target data.
+Supply `--api-base` explicitly as the trusted target origin. Imported file
+metadata is not used to select a target. Endpoint URLs are restricted to the
+exact scheme, host, and effective port in `--api-base`; off-origin entries are
+skipped before credentials are sent.
+
 ### Step 5: Mass Assignment Testing
 
 ```bash
-python scripts/mass_assignment.py --schema {schema_file} --token {token}
+python3 scripts/mass_assignment.py --input {schema_file} --api-base {api_url} --token {token} --allow-mutation-write
 ```
+
+This active probe can create or modify records, so the explicit write flag is
+required. An echoed field is reported as an unverified candidate until a
+follow-up read confirms the persisted value and its security impact.
 
 For each creation/update endpoint:
 1. Send normal request, note accepted fields
@@ -171,7 +188,7 @@ For each creation/update endpoint:
 ### Step 6: Rate Limiting and Resource Testing
 
 ```bash
-python scripts/rate_limiter.py --api-base {api_url}
+python3 scripts/rate_limiter.py --api-base {api_url}
 ```
 
 Test:
@@ -220,7 +237,7 @@ breaker depth techniques/rate_limit_versioning.md):
 ### Step 7: Business Logic Testing
 
 ```bash
-python scripts/logic_tester.py --schema {schema_file} --token {token}
+python3 scripts/logic_tester.py --input {schema_file} --token {token}
 ```
 
 Context-aware tests:
@@ -232,7 +249,7 @@ Context-aware tests:
 ### Step 8: Report Generation
 
 ```bash
-python scripts/api_report.py --findings {findings_dir}
+python3 scripts/api_report.py --input {findings_dir}
 ```
 
 Per-finding output:

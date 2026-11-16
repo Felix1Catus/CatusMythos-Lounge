@@ -8,16 +8,16 @@ Author: orizon.one
 
 import argparse
 import json
-import re
+import os
 import ssl
 import urllib.request
 import urllib.error
 import concurrent.futures
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 
 
-from _common import log, success, vuln, warn
+from _common import log, scoped_urlopen, success, vuln, warn
 # Paths to probe for CI/CD and IaC exposure
 PROBE_PATHS = {
     "jenkins": {
@@ -216,11 +216,12 @@ CLOUD_STATE_URLS = {
 def http_get(url, timeout=5):
     """HTTP GET with SSL bypass."""
     ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
+    if os.environ.get("CATUS_INSECURE_TLS") == "1":
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
     req = urllib.request.Request(url, headers={"User-Agent": "orizon-recon/1.0"})
     try:
-        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
+        with scoped_urlopen(req, timeout=timeout, context=ctx) as resp:
             headers = dict(resp.headers)
             body = resp.read(32768).decode("utf-8", errors="replace")
             return resp.status, headers, body
@@ -403,7 +404,6 @@ def main():
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.threads) as executor:
         futures = {executor.submit(scan_host, host, args.categories): host for host in hosts}
         for future in concurrent.futures.as_completed(futures):
-            host = futures[future]
             findings = future.result()
             for f in findings:
                 all_findings.append(f)
@@ -438,7 +438,7 @@ def main():
 
     output = {
         "meta": {
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
             "type": "cicd_iac_exposure",
             "tool": "cloud-pivot-finder by orizon.one",
             "domain": args.domain or "multi",

@@ -58,13 +58,13 @@ same pattern applied to Crescendo/Echo Chamber/Skeleton Key):
     instead, per the task's own "OR" framing.
 
 Usage:
-    python mcp_security_tester.py --tools-file tools_list.json
-    python mcp_security_tester.py --url http://localhost:8080/mcp
-    python mcp_security_tester.py --tools-file tools.json --baseline baseline.json
-    python mcp_security_tester.py --tools-file tools.json --save-baseline baseline.json
-    python mcp_security_tester.py --server-name mcp-remote --server-version 0.1.10
-    python mcp_security_tester.py --url http://localhost:8080/mcp --check-token-passthrough
-    python mcp_security_tester.py --demo
+    python3 mcp_security_tester.py --tools-file tools_list.json
+    python3 mcp_security_tester.py --url http://localhost:8080/mcp
+    python3 mcp_security_tester.py --tools-file tools.json --baseline baseline.json
+    python3 mcp_security_tester.py --tools-file tools.json --save-baseline baseline.json
+    python3 mcp_security_tester.py --server-name mcp-remote --server-version 0.1.10
+    python3 mcp_security_tester.py --url http://localhost:8080/mcp --check-token-passthrough
+    python3 mcp_security_tester.py --demo
 """
 import argparse
 import base64
@@ -451,8 +451,10 @@ def send_jsonrpc(url: str, method: str, params: dict, headers: dict, timeout: in
     expected outcome, same convention as unbounded_consumption_tester.py's
     _post()."""
     body = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params or {}}
+    if requests is None:
+        return None, None, "optional dependency 'requests' is missing; run `python3 -m pip install -r requirements.txt`"
     try:
-        r = requests.post(url, json=body, headers=headers, timeout=timeout)
+        r = requests.post(url, json=body, headers=headers, timeout=timeout, allow_redirects=False)
     except requests.exceptions.Timeout:
         return None, None, "timeout"
     except requests.exceptions.RequestException as e:

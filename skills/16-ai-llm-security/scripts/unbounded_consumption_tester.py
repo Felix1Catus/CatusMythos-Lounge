@@ -22,14 +22,13 @@ Checks:
   - 429 behavior under a small, pre-capped burst (default 5 requests)
 
 Usage:
-    python unbounded_consumption_tester.py --url https://app.test/api/chat --field message
-    python unbounded_consumption_tester.py --demo
+    python3 unbounded_consumption_tester.py --url https://app.test/api/chat --field message
+    python3 unbounded_consumption_tester.py --demo
 """
 import argparse
 import json
 import logging
 import sys
-import time
 from typing import Any
 
 logger = logging.getLogger("unbounded_consumption_tester")
@@ -89,8 +88,10 @@ def _post(url: str, body: dict, headers: dict, timeout: int):
     raw_text_or_None, error_or_None). Never raises -- every failure mode
     (timeout, connection error, non-JSON body) is reported as data, since
     several of these checks treat the FAILURE itself as the safe outcome."""
+    if requests is None:
+        return None, {}, None, None, "optional dependency 'requests' is missing; run `python3 -m pip install -r requirements.txt`"
     try:
-        r = requests.post(url, json=body, headers=headers, timeout=timeout)
+        r = requests.post(url, json=body, headers=headers, timeout=timeout, allow_redirects=False)
     except requests.exceptions.Timeout:
         return None, {}, None, None, "timeout"
     except requests.exceptions.RequestException as e:

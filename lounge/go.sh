@@ -54,7 +54,7 @@ Until that name arrives, your only reply is that you are waiting for the target.
       CLAUDE_CODE_MAX_CONTEXT_TOKENS="1048576" \
       CLAUDE_CODE_AUTO_COMPACT_WINDOW="1000000" \
       CLAUDE_CODE_MAX_OUTPUT_TOKENS="393216" \
-      claude --effort high --dangerously-skip-permissions "$PROMPT"
+      claude --effort high "$PROMPT"
   elif [[ "$SEAT" == claude || "$SEAT" == claude2 || "$SEAT" == claude3 ]]; then
     case "$SEAT" in
       claude) CFG="$HOME/.claude" ;;

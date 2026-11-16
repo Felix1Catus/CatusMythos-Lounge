@@ -12,14 +12,15 @@ against stdlib urllib instead of `requests` so this skill keeps its zero-pip-dep
 import argparse
 import json
 import re
+import os
 import ssl
 import urllib.request
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
-from _common import log, success, warn
+from _common import log, scoped_urlopen, success
 # Technology signatures: pattern -> technology name
 HEADER_SIGNATURES = {
     "server": {
@@ -134,13 +135,14 @@ COOKIE_SIGNATURES = {
 def fetch_page(url, timeout=10):
     """Fetch a page and return headers + body."""
     ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
+    if os.environ.get("CATUS_INSECURE_TLS") == "1":
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
     req = urllib.request.Request(url, headers={
         "User-Agent": "Mozilla/5.0 (compatible; orizon-recon/1.0)"
     })
     try:
-        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
+        with scoped_urlopen(req, timeout=timeout, context=ctx) as resp:
             body = resp.read(32768).decode("utf-8", errors="replace")
             headers = dict(resp.headers)
             return headers, body
@@ -302,7 +304,7 @@ def main():
     args = parser.parse_args()
 
     log("Starting technology fingerprinting...")
-    log(f"Timestamp: {datetime.utcnow().isoformat()}Z")
+    log(f"Timestamp: {datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')}")
 
     # Load hosts
     input_path = Path(args.input)
@@ -343,7 +345,7 @@ def main():
 
     output = {
         "meta": {
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
             "type": "tech_fingerprint",
             "tool": "recon-dominator by orizon.one",
             "hosts_analyzed": len(hosts),

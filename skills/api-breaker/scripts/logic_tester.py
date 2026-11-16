@@ -11,10 +11,10 @@ import time
 import urllib.request
 import urllib.parse
 import concurrent.futures
-from datetime import datetime
+from datetime import datetime, timezone
 
 
-from _common import http_request, log, success, vuln, warn
+from _common import http_request, log, success, vuln
 def classify_endpoints(endpoints):
     """Classify endpoints by likely business function."""
     classified = {
@@ -455,7 +455,7 @@ def main():
     output = {
         "meta": {
             "base_url": base_url,
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
             "type": "business_logic_testing",
             "tool": "api-breaker by orizon.one",
         },

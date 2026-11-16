@@ -68,14 +68,14 @@ itself. Likewise, the encrypted-vector-index membership-inference attack
 database knowledge and is not automated here.
 
 Usage:
-    python rag_security_tester.py --demo
-    python rag_security_tester.py --url https://app.test/api/chat --field message \\
+    python3 rag_security_tester.py --demo
+    python3 rag_security_tester.py --url https://app.test/api/chat --field message \\
         --header "Authorization: Bearer <tenant-a-token>" \\
         --header-b "Authorization: Bearer <tenant-b-token>" \\
         --tenant-param tenant_id --tenant-value-a acme --tenant-value-b globex \\
         --canary "INV-2024-Q3-ACME-OVERDUE-NOTICE" \\
         --query "Which customers have overdue invoices?"
-    python rag_security_tester.py --product milvus --version 2.4.10
+    python3 rag_security_tester.py --product milvus --version 2.4.10
 
 The endpoint is expected to accept JSON and return JSON or text, same
 shape as prompt_injection_tester.py / unbounded_consumption_tester.py.
@@ -137,8 +137,10 @@ def _post(url: str, body: dict, headers: dict, timeout: int):
     is the ONE function every live-HTTP check in this module calls, and
     the one a test harness monkeypatches (same pattern as
     unbounded_consumption_tester.py's own _post())."""
+    if requests is None:
+        return None, {}, None, None, "optional dependency 'requests' is missing; run `python3 -m pip install -r requirements.txt`"
     try:
-        r = requests.post(url, json=body, headers=headers, timeout=timeout)
+        r = requests.post(url, json=body, headers=headers, timeout=timeout, allow_redirects=False)
     except requests.exceptions.Timeout:
         return None, {}, None, None, "timeout"
     except requests.exceptions.RequestException as e:

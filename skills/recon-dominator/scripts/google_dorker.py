@@ -9,7 +9,7 @@ import argparse
 import json
 import urllib.parse
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 from _common import log, success
@@ -170,7 +170,7 @@ def main():
 
     domain = args.domain.strip().lower().rstrip(".")
     log(f"Generating Google dorks for: {domain}")
-    log(f"Timestamp: {datetime.utcnow().isoformat()}Z")
+    log(f"Timestamp: {datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')}")
 
     # Generate dorks
     dorks = generate_dorks(domain, args.categories)
@@ -191,7 +191,7 @@ def main():
     output = {
         "meta": {
             "domain": domain,
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
             "type": "google_dorking",
             "tool": "recon-dominator by orizon.one",
             "total_dorks": total_dorks,

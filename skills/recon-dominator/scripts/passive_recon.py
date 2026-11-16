@@ -8,15 +8,14 @@ Author: orizon.one
 import argparse
 import json
 import subprocess
-import sys
 import time
 import urllib.request
 import urllib.parse
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 
 
-from _common import error, http_get, log, success, warn
+from _common import http_get, log, success, warn
 def query_crtsh(domain, delay=2):
     """Query Certificate Transparency logs via crt.sh."""
     log(f"Querying crt.sh for {domain}...")
@@ -191,7 +190,7 @@ def main():
 
     domain = args.domain.strip().lower().rstrip(".")
     log(f"Starting passive reconnaissance on: {domain}")
-    log(f"Timestamp: {datetime.utcnow().isoformat()}Z")
+    log(f"Timestamp: {datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')}")
 
     all_results = {}
 
@@ -216,7 +215,7 @@ def main():
     output = {
         "meta": {
             "domain": domain,
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
             "type": "passive_recon",
             "tool": "recon-dominator by orizon.one",
             "sources_used": list(all_results.keys()),

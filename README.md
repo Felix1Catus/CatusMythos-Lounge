@@ -7,7 +7,7 @@
     <img src="https://img.shields.io/badge/python-3.8+-blue.svg" alt="Python 3.8+">
     <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License: MIT">
     <img src="https://img.shields.io/badge/Claude-Code-blueviolet.svg" alt="Claude Code">
-    <img src="https://img.shields.io/badge/skills-8-orange.svg" alt="8 Skills">
+    <img src="https://img.shields.io/badge/skills-10-orange.svg" alt="10 Skills">
     <img src="https://img.shields.io/badge/version-0.3.0-lightgrey.svg" alt="v0.3.0">
   </p>
 </p>
@@ -22,16 +22,16 @@
 ## What this is
 
 CatusMythos-Lounge drives a full assessment of a web target — domain in,
-report out — through eight purpose-built skills and an orchestrator agent.
+report out — through ten purpose-built skills and an orchestrator agent.
 It's stdlib-only (no `pip install` for the core pipeline), zero-config, and
 runs as a normal Claude Code plugin or skill set.
 
 - **A 6-stage pipeline**: recon → web/app exploitation → API testing →
   cloud pivoting → attack-path mapping → cross-finding correlation and
   reporting.
-- **Two supporting skills**: AI/LLM application security testing, and a
-  PoC/payload-generation helper for turning a confirmed finding into a
-  deliverable.
+- **Four specialist skills**: web-cache behavior auditing, HTTP/WebSocket
+  protocol review, AI/LLM application security testing, and PoC/payload
+  generation for turning a confirmed finding into a deliverable.
 - **Three ways to run it**: solo and sequential (default), a native
   in-process multi-agent mode for partitionable surfaces, or a full
   multi-seat "lounge" for true multi-model/multi-day engagements.
@@ -48,6 +48,8 @@ runs as a normal Claude Code plugin or skill set.
  recon-dominator        subdomain enum · port scan · tech fingerprint · OSINT · CVE match
    │
    ├──► webapp-exploit-hunter   SQLi · XSS · SSRF · SSTI · IDOR · auth bypass · upload · WAF bypass
+   ├──► web-cache-auditor       cache keys · unkeyed inputs · cache deception · URL normalization
+   ├──► web-protocol-auditor    HTTP desynchronization review · HTTP/2 transitions · WebSocket security
    ├──► api-breaker             REST/GraphQL/SOAP discovery · BOLA/BFLA · JWT · mass assignment
    └──► cloud-pivot-finder      cloud detection · bucket/takeover/CI-CD/serverless exposure
                 │
@@ -64,12 +66,14 @@ runs as a normal Claude Code plugin or skill set.
 |---|---|---|---|
 | 1 | `recon-dominator` | Attack-surface mapping | Subdomain enumeration, port scanning, tech fingerprinting (incl. WAF/CDN), Google dorking, Wayback analysis, OSINT correlation, NVD/OSV-backed CVE matching, NS lame-delegation ("Sitting Ducks") checks |
 | 2 | `webapp-exploit-hunter` | Web app exploitation | SQLi, XSS, SSRF, SSTI, IDOR, auth bypass, file-upload bypass, race conditions, WAF/rate-limit bypass (parameter pollution, header mutation, boundary differentials) |
-| 3 | `api-breaker` | API security testing | REST/GraphQL/SOAP discovery and schema reconstruction, BOLA/BFLA, JWT attacks (`kid` injection, `crit` bypass, algorithm confusion), mass assignment, business-logic flaws, rate-limit and legacy-version bypass |
-| 4 | `cloud-pivot-finder` | Cloud infrastructure pivoting | Cloud provider detection, S3/GCS/Azure bucket enumeration, subdomain takeover, serverless/container endpoint discovery, CI/CD and IaC exposure, SSRF-to-metadata pivot mapping |
-| 5 | `attack-path-architect` | Attack-path strategy | Asset classification, trust-relationship mapping, MITRE ATT&CK-mapped attack trees, exploit-chain discovery, engagement planning |
-| 6 | `vuln-chain-composer` | Correlation and reporting | Cross-domain finding correlation, multi-step exploit-chain composition, CVSS impact scoring, end-to-end PoC generation, bug-bounty-ready reports |
-| 7 | `16-ai-llm-security` | AI/LLM application security | Prompt injection and jailbreak testing, OWASP LLM Top 10 checks, MCP tool-poisoning and rug-pull detection, RAG security (cross-tenant leakage, embedding exposure), model supply-chain scanning |
-| 8 | `03-exploit-development` | PoC development | CVE-to-PoC workflow and payload generation (reverse/bind/web-shell) for a finding the pipeline already confirmed |
+| 3 | `web-cache-auditor` | Web cache and CDN testing | Cache signals, inert unkeyed-input canaries, opt-in staging replay checks, cache deception and URL-normalization methodology |
+| 4 | `web-protocol-auditor` | HTTP and WebSocket protocol review | Research-guided parser-discrepancy assessment, HTTP/2 downgrade review, request-smuggling evidence grading, WebSocket Origin/authz/message-boundary coverage |
+| 5 | `api-breaker` | API security testing | REST/GraphQL/SOAP discovery and schema reconstruction, BOLA/BFLA, JWT attacks (`kid` injection, `crit` bypass, algorithm confusion), mass assignment, business-logic flaws, rate-limit and legacy-version bypass |
+| 6 | `cloud-pivot-finder` | Cloud infrastructure pivoting | Cloud provider detection, S3/GCS/Azure bucket enumeration, subdomain takeover, serverless/container endpoint discovery, CI/CD and IaC exposure, SSRF-to-metadata pivot mapping |
+| 7 | `attack-path-architect` | Attack-path strategy | Asset classification, trust-relationship mapping, MITRE ATT&CK-mapped attack trees, exploit-chain discovery, engagement planning |
+| 8 | `vuln-chain-composer` | Correlation and reporting | Cross-domain finding correlation, multi-step exploit-chain composition, CVSS impact scoring, end-to-end PoC generation, bug-bounty-ready reports |
+| 9 | `16-ai-llm-security` | AI/LLM application security | Prompt injection and jailbreak testing, OWASP LLM Top 10 checks, MCP tool-poisoning and rug-pull detection, RAG security (cross-tenant leakage, embedding exposure), model supply-chain scanning |
+| 10 | `03-exploit-development` | PoC development | CVE-to-PoC workflow and payload generation (reverse/bind/web-shell) for a finding the pipeline already confirmed |
 
 ### Operations by stage
 
@@ -79,11 +83,13 @@ runs as a normal Claude Code plugin or skill set.
 | Recon | `port_scanner.py` / `tech_fingerprint.py` | Port scanning, stack/CDN/WAF fingerprinting |
 | Recon | `cve_lookup.py` | Version-matched CVE hypotheses (NVD + OSV) |
 | Recon | `google_dorker.py` / `osint_correlator.py` / `js_recon.py` / `wayback_analyzer.py` | Dorking, OSINT, JS-bundle mining, historical snapshots |
-| Web app | `sqli_tester.py` / `xss_tester.py` / `ssrf_tester.py` / `ssti_tester.py` | Injection-class vulnerability testing |
+| Web app | `sqli_tester.py` / `xss_tester.py` / `dom_xss_auditor.py` / `ssrf_tester.py` / `ssti_tester.py` | Injection checks plus heuristic client-side XSS source-to-sink review; findings need manual validation |
 | Web app | `idor_tester.py` / `auth_tester.py` / `race_tester.py` | Access-control, auth, and race-condition testing |
 | Web app | `lfi_tester.py` | LFI/path-traversal (incl. sibling-parameter-gated sanitization), XXE including the `php://filter`-as-SSRF variant, and PHP object-injection surface detection — from a real disclosed LFI→deserialization→XXE→SSRF→RCE chain |
 | Web app | `upload_tester.py` | File-upload bypass + **stack-aware PHP RCE**: fingerprints nginx/Apache/Caddy/FrankenPHP first, then runs the matching strategy — PATH_INFO path confusion (CVE-2019-11043/2026-27590/2026-24895 class), Apache `.htaccess` handler remap, or direct php-fpm/FastCGI TCP exposure (common in unhardened Docker) via a minimal stdlib FastCGI client |
 | Web app | `waf_bypass_tester.py` / `crawler.py` / `generate_poc.py` | WAF/rate-limit bypass, crawling, PoC generation |
+| Web cache | `cache_audit.py` | Cache headers, inert unkeyed-input canaries, and explicit replay validation for isolated staging caches |
+| Web protocols | `web-protocol-auditor/SKILL.md` | Manual HTTP parser/proxy review and WebSocket handshake, authorization, state, and message-boundary coverage; optional external analysis tools |
 | API | `api_discovery.py` / `schema_builder.py` | Endpoint discovery, REST/GraphQL schema reconstruction |
 | API | `auth_analyzer.py` / `authz_tester.py` | JWT attacks, BOLA/BFLA |
 | API | `mass_assignment.py` / `logic_tester.py` / `rate_limiter.py` | Mass assignment, business logic, rate-limit bypass |
@@ -145,6 +151,21 @@ cp -r skills/* ~/.claude/skills/
 - Optional, for faster recon: `subfinder`, `httpx`, `puredns`, `naabu`,
   `dig`, `whois`, `nmap`
 
+At session start, the plugin installs missing optional Python dependencies
+and user-scoped Go recon tools when Go is available. Missing system packages
+are reported with install commands; the bootstrap does not invoke a system
+package manager or request elevated privileges.
+
+HTTPS certificate verification is enabled by default. For an authorized
+target with a self-signed certificate, set `CATUS_INSECURE_TLS=1` in the
+process environment for that run; this disables certificate validation for
+the toolkit's HTTP probes and generated Python PoCs.
+
+HTTP clients follow redirects only when scheme, host, and port stay the same.
+For an authorized target that redirects across origins (including HTTP to
+HTTPS), provide the final in-scope URL directly; the toolkit will not forward
+session headers to a different origin.
+
 ## Usage
 
 Talk to Claude naturally:
@@ -156,6 +177,7 @@ Test this API for BOLA and mass assignment issues
 Map the cloud infrastructure behind app.target.com
 Chain all findings and generate a bug bounty report
 Test this chatbot feature for prompt injection
+Audit cache behavior on staging.example.com for unkeyed inputs
 Build a PoC for the file-upload RCE you just confirmed
 ```
 
@@ -165,12 +187,29 @@ Or invoke the orchestrator for a full engagement:
 Use the swarm-operator agent to run a full assessment of target.com
 ```
 
+## Local checks
+
+Run the focused stdlib regression tests and the cache auditor's offline
+self-check from the repository root:
+
+```bash
+python3 -m unittest discover -s tests
+python3 scripts/check_common_sync.py
+python3 scripts/check_skill_cli_docs.py
+python3 skills/web-cache-auditor/scripts/cache_audit.py --demo
+```
+
+Optional contributor check (requires Ruff): `python3 -m ruff check .`.
+
 ## Status
 
-v0.3.0 — all 8 skills have working, stdlib-only scripts; each pipeline
-stage has had a research-driven depth pass with real citations
-(`research_notes/`, `reports/`). Not yet done: a from-scratch test suite
-exercising the full pipeline end-to-end, and a non-Claude engine variant.
+v0.3.0 — the nine automation skills provide stdlib-first scripts; the
+research-guided `web-protocol-auditor` adds a manual HTTP/WebSocket workflow
+for high-risk protocol cases. Each pipeline stage has had a research-driven
+depth pass with source notes (`research_notes/`, `reports/`). The regression
+suite covers cache auditing, DOM XSS source-to-sink leads, candidate-reporting
+semantics, and scoped API probes; a full end-to-end suite and a non-Claude
+engine variant are still future work.
 
 ## Credits
 

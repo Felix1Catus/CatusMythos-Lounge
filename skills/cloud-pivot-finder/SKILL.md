@@ -19,7 +19,7 @@ CRITICAL: Only test cloud infrastructure you have explicit authorization to test
 ### Step 1: Cloud Provider Detection
 
 ```bash
-python scripts/cloud_detector.py --domain {target_domain}
+python3 scripts/cloud_detector.py --domain {target_domain}
 ```
 
 Identify cloud hosting:
@@ -34,7 +34,7 @@ Output: Map of domain -> cloud provider -> service type.
 ### Step 2: Storage Bucket Enumeration
 
 ```bash
-python scripts/bucket_enum.py --domain {target_domain} --provider {aws|gcp|azure|all}
+python3 scripts/bucket_enum.py --domain {target_domain} --provider {aws|gcp|azure|all}
 ```
 
 **Naming pattern brute-force:**
@@ -83,7 +83,7 @@ For each accessible bucket:
 ### Step 3: Subdomain Takeover Detection
 
 ```bash
-python scripts/takeover_scanner.py --subdomains {subdomain_list}
+python3 scripts/takeover_scanner.py --subdomains {subdomain_list}
 ```
 
 Check every subdomain's CNAME for dangling references. Fingerprints were
@@ -122,7 +122,7 @@ For each dangling CNAME:
 ### Step 4: Serverless and Container Discovery
 
 ```bash
-python scripts/serverless_finder.py --domain {target_domain}
+python3 scripts/serverless_finder.py --domain {target_domain}
 ```
 
 Discover:
@@ -141,7 +141,7 @@ Test each for:
 ### Step 5: CI/CD and IaC Exposure
 
 ```bash
-python scripts/cicd_finder.py --domain {target_domain}
+python3 scripts/cicd_finder.py --domain {target_domain}
 ```
 
 Search for:
@@ -155,7 +155,7 @@ Search for:
 ### Step 6: Cloud Metadata Pivot Paths
 
 ```bash
-python scripts/metadata_paths.py --recon-data {recon_json}
+python3 scripts/metadata_paths.py --recon-data {recon_json}
 ```
 
 For each web application on cloud infrastructure:
@@ -213,7 +213,7 @@ pod/container, which is outside this external-recon tool's position.
 ### Step 7: Report Generation
 
 ```bash
-python scripts/cloud_report.py --project {name}
+python3 scripts/cloud_report.py --project {name}
 ```
 
 Output:

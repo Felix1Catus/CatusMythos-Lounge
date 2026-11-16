@@ -8,11 +8,10 @@ Author: orizon.one
 import argparse
 import json
 import re
-from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 
 
-from _common import log, success, warn
+from _common import log, success
 # Technology -> known risk indicators
 TECH_RISK_SCORES = {
     "WordPress": 3, "Drupal": 3, "Joomla": 4, "phpMyAdmin": 5,
@@ -316,7 +315,7 @@ def main():
 
     output = {
         "meta": {
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
             "type": "asset_classification",
             "tool": "attack-path-architect by orizon.one",
             "total_assets": len(assets),

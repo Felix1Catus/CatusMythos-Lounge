@@ -12,8 +12,7 @@ import subprocess
 import urllib.request
 import urllib.parse
 import re
-from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 from _common import http_get, log, success, warn
@@ -207,7 +206,7 @@ def main():
 
     domain = args.domain.strip().lower().rstrip(".")
     log(f"Starting OSINT correlation on: {domain}")
-    log(f"Timestamp: {datetime.utcnow().isoformat()}Z")
+    log(f"Timestamp: {datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')}")
 
     # Collect all intelligence
     ip = resolve_to_ip(domain)
@@ -222,7 +221,7 @@ def main():
         "meta": {
             "domain": domain,
             "ip": ip,
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
             "type": "osint_correlation",
             "tool": "recon-dominator by orizon.one"
         },

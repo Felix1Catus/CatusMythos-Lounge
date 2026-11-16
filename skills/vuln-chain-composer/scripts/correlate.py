@@ -7,12 +7,11 @@ Author: orizon.one
 
 import argparse
 import json
-from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 from collections import defaultdict
 import re as _re
 
-from _common import log, success, warn
+from _common import log, success
 
 # A chain's whole point is "primitive A, when actually chained to primitive B,
 # becomes worse than either alone" -- but every template below used to escalate
@@ -682,7 +681,7 @@ def main():
 
     output = {
         "meta": {
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
             "type": "vulnerability_correlation",
             "tool": "vuln-chain-composer by orizon.one",
             "input_findings": len(findings),

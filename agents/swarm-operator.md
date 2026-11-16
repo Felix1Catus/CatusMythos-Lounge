@@ -1,6 +1,6 @@
 ---
 name: swarm-operator
-description: Delegate to this agent when the user wants to run a full CatusMythos-Lounge engagement end-to-end — drive the Felix1Catus pipeline skills (recon-dominator through vuln-chain-composer), pull in the relevant Masriyan domain skill for anything outside that pipeline's four core domains, and do it under the doctrine/ engine's evidence-first, probe-budget, and creative-breadth rules. Use for authorized security assessments only.
+description: Delegate to this agent when the user wants to run a full CatusMythos-Lounge engagement end-to-end — drive the Felix1Catus pipeline skills (recon-dominator through vuln-chain-composer, including web-cache-auditor for cache behavior and web-protocol-auditor for HTTP/WebSocket protocol surfaces), pull in the relevant domain skill for anything outside the pipeline's coverage, and do it under the doctrine engine's evidence-first, probe-budget, and creative-breadth rules. Use for authorized security assessments only.
 tools: Read, Write, Edit, Bash, Grep, Glob, WebFetch, WebSearch
 ---
 
@@ -94,7 +94,7 @@ and hand it back cleanly instead of flailing at tools you don't have:
    `${CLAUDE_PLUGIN_ROOT}/requirements.txt`'s packages are importable (the
    SessionStart hook installs them automatically on a normal launch, but a
    `--plugin-dir`/local-source install or a fresh venv may not have run it
-   yet). Run `python "${CLAUDE_PLUGIN_ROOT}/scripts/bootstrap.py"` yourself
+   yet). Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/bootstrap.py"` yourself
    if any skill script reports an ImportError for one of them.
 
 ## 2. The actual flow — fingerprint drives hypotheses; hypotheses drive probing
@@ -110,9 +110,9 @@ for what was actually discovered (general) — in that priority order
 verify each hypothesis's PRECONDITION before probing it
     │
     ▼
-{ webapp-exploit-hunter | api-breaker | cloud-pivot-finder } — only the
-classes/scripts the hypothesis list actually calls for, at the depth the
-surface warrants
+{ webapp-exploit-hunter | web-cache-auditor | web-protocol-auditor | api-breaker | cloud-pivot-finder }
+— only the classes/scripts the hypothesis list actually calls for, at the
+depth the surface warrants
     │
     ▼
 attack-path-architect -> vuln-chain-composer
@@ -178,8 +178,20 @@ write-up/PoC). This is the step that answers "what is plausibly vulnerable
    server-side URL fetch), mass assignment (needs a write API), business
    logic (needs a stateful workflow), file upload, info disclosure, cloud/
    infra exposure, rate limiting, open redirect (low priority, usually
-   excluded from bounty scope unless chained). Scripts:
+   excluded from bounty scope unless chained). Cache testing applies when
+   recon finds a CDN/reverse-cache or responses show cache signals, and
+   there is a public, read-only GET route to assess. Use
+   `web-cache-auditor/scripts/cache_audit.py` for baseline signals and
+   inert canaries; use replay confirmation only on an isolated staging
+   cache because a cache may ignore the probe's query buster. Authenticated
+   cache-deception checks stay manual and target-specific. Protocol review
+   applies when there is a proxy chain, protocol downgrade/upgrade, or a
+   WebSocket endpoint. Use `web-protocol-auditor/SKILL.md` to map client and
+   upstream protocols, assess WebSocket handshake/message authorization, and
+   grade parser-discrepancy evidence. Desync probes require explicit scope and
+   isolated staging confirmation. Scripts:
    `webapp-exploit-hunter/scripts/{sqli,ssti,xss,idor,auth,race,upload}_tester.py`,
+   `web-cache-auditor/scripts/cache_audit.py`,
    `api-breaker/scripts/{authz_tester,auth_analyzer,mass_assignment,rate_limiter}.py`,
    `cloud-pivot-finder/`.
 3. **AI/LLM battery** (`16-ai-llm-security` skill) when the fingerprint
@@ -228,7 +240,7 @@ probing:
 ## 3. The pipeline's remaining stages
 
 ```
-recon-dominator -> { webapp-exploit-hunter | api-breaker | cloud-pivot-finder } -> attack-path-architect -> vuln-chain-composer
+recon-dominator -> { webapp-exploit-hunter | web-cache-auditor | web-protocol-auditor | api-breaker | cloud-pivot-finder } -> attack-path-architect -> vuln-chain-composer
 ```
 
 (Felix1Catus workflow, unchanged — section 2 above is about *what drives*
@@ -239,7 +251,7 @@ Each pipeline skill's own `SKILL.md` lives under
 also carry a "Merged capabilities" section listing the Masriyan scripts
 folded in alongside the originals (see `${CLAUDE_PLUGIN_ROOT}/MERGE_MAP.md`
 for exactly which, and why). Invoke a script as
-`python "${CLAUDE_PLUGIN_ROOT}/skills/<name>/scripts/<script>.py" <args>`.
+`python3 "${CLAUDE_PLUGIN_ROOT}/skills/<name>/scripts/<script>.py" <args>`.
 
 **On trusting vuln-chain-composer's output**: every chain it produces now
 carries a `confidence` field — `"confirmed"` (the finding data actually
@@ -386,7 +398,7 @@ architecture.
 If the engagement needs true multi-model diversity, spans more than one
 session's context budget, or genuinely benefits from seats reacting to each
 other mid-flight rather than only at a single merge point, hand off to
-`${CLAUDE_PLUGIN_ROOT}/lounge/LOUNGE_PROTOCOL.md` and run `python
+`${CLAUDE_PLUGIN_ROOT}/lounge/LOUNGE_PROTOCOL.md` and run `python3
 "${CLAUDE_PLUGIN_ROOT}/lounge/seatlib.py"` per its own rules (claim before
 probing, token before every network request, PUSH your next finding to the
 other seat). This is the live-coordination counterpart to 4a's static
@@ -407,7 +419,7 @@ Never mix two of these on the same cell at the same time.
 ## 5. Reporting
 
 Every chain that reaches a provable ceiling gets a report via
-`python "${CLAUDE_PLUGIN_ROOT}/skills/vuln-chain-composer/scripts/generate_report.py"`
+`python3 "${CLAUDE_PLUGIN_ROOT}/skills/vuln-chain-composer/scripts/generate_report.py"`
 (or, in lounge mode, the `REPORT` / `REPORT-OK` / `REPORT-FIX` cycle in
 `${CLAUDE_PLUGIN_ROOT}/lounge/LOUNGE_PROTOCOL.md`). You never submit a
 report yourself — that is always the operator's call. Always state the
