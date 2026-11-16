@@ -90,6 +90,21 @@ class RequestDecisionTests(unittest.TestCase):
         key = bsa.form_request_key("POST", "http://h.test/submit", self.scope)
         self.assertEqual(bsa.request_decision("POST", "http://h.test/other", self.scope, key), (False, "method"))
 
+    def test_form_grant_bound_to_document_navigation(self):
+        # Regression: a racing same-path xhr/fetch POST must not consume the
+        # one-shot form grant; only the form's own document navigation does.
+        key = bsa.form_request_key("POST", "http://h.test/submit", self.scope)
+        self.assertEqual(
+            bsa.request_decision("POST", "http://h.test/submit", self.scope, key, "xhr"),
+            (False, "method"),
+        )
+        self.assertFalse(key["used"])
+        self.assertEqual(
+            bsa.request_decision("POST", "http://h.test/submit", self.scope, key, "document"),
+            (True, "form"),
+        )
+        self.assertTrue(key["used"])
+
 
 class FormRequestKeyTests(unittest.TestCase):
     def setUp(self):
@@ -118,12 +133,19 @@ class StorageStateTests(unittest.TestCase):
         self.assertEqual(out["cookies"][0]["value"], "v")  # value kept in-memory for the session
         self.assertEqual(out["origins"][0]["localStorage"][0]["value"], "secret")
 
-    def test_parent_domain_cookie_suffix_match_kept(self):
-        # Documented behavior: a parent-domain cookie is kept when a scoped host
-        # suffix-matches it (request routing still enforces exact origin).
+    def test_registrable_parent_domain_cookie_kept(self):
+        # A multi-label parent cookie is kept when a scoped host is its subdomain.
+        scope = {("https", "sub.app.test", 443)}
+        raw = {"cookies": [{"name": "s", "value": "v", "domain": "app.test"}], "origins": []}
+        out = bsa.sanitize_storage_state(raw, scope)
+        self.assertEqual(len(out["cookies"]), 1)
+
+    def test_single_label_parent_cookie_rejected(self):
+        # Regression: a bare single-label (TLD-like) cookie domain must not be
+        # applied across a whole suffix via suffix-match.
         raw = {"cookies": [{"name": "s", "value": "v", "domain": ".test"}], "origins": []}
         out = bsa.sanitize_storage_state(raw, self.scope)
-        self.assertEqual(len(out["cookies"]), 1)
+        self.assertEqual(out["cookies"], [])
 
     def test_out_of_scope_entries_dropped(self):
         raw = {
@@ -298,8 +320,11 @@ class BrowserIntegrationTests(unittest.TestCase):
         self.assertEqual(len(r["websockets"]), 1)
         self.assertTrue(r["websockets"][0]["url"].startswith("ws://127.0.0.1"))
         self.assertFalse(r["websockets"][0]["upstream_connected"])
-        # Off-origin request to fixture B was blocked and counted.
+        self.assertGreaterEqual(r["summary"]["websockets_seen"], 1)
+        # Off-origin request to fixture B was blocked and counted, and blocked
+        # requests do not consume the allowed-request budget.
         self.assertGreaterEqual(r["summary"]["requests_blocked_by_origin"], 1)
+        self.assertIn("requests_allowed", r["summary"])
 
     def test_active_query_dom_xss_detected(self):
         r = self._run(["--active"])

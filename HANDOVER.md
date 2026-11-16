@@ -97,19 +97,25 @@ testing.
   uses `Object.defineProperty(window, 'postMessage', …)` — the previous
   `Window.prototype.postMessage` reassignment silently no-ops in Chromium, so
   that finding never fired.
-- **Still open (not yet fixed):** form-POST one-shot grant is not bound to the
-  exact query/body/resource-type (a racing same-path POST could consume it);
-  cookie suffix-match still admits parent-domain cookies; the HTTP budget counts
-  blocked requests and ignores WebSockets; the 250 ms settle can miss async SPA
-  state; fragment/form probes use the svg variant only (worked here, but the img
+- **Hardened (2026-11-16, second browser pass):** (1) the form-POST one-shot
+  grant is now bound to a `document` navigation — a racing same-path xhr/fetch
+  POST can no longer consume it (verified: real POST form submit is a
+  `document` request); (2) the request budget now counts only requests actually
+  let through, so an off-origin-heavy page can't exhaust it with blocked
+  requests, and WebSockets are counted (`websockets_seen`) and the recorded
+  socket list is bounded; (3) cookie suffix-match now rejects bare single-label
+  (TLD-like) parent domains while still allowing a registrable multi-label
+  parent (not a full public-suffix check; routing still enforces exact origin).
+- **Still open:** the 250 ms settle can miss async SPA state; fragment/form
+  probes use the svg variant only (worked in the tested Chromium, but the img
   variant is a cheap cross-version robustness add since svg-onload-via-innerHTML
   is engine-dependent).
 
 ## Open items
-1. Harden the browser auditor's still-open items above (grant binding, budget
-   counting, optional img fragment/form variant). Re-examine the
-   `upload_tester.py` PATH_INFO probe whose broad exception catch was removed
-   (unexpected exceptions now propagate).
+1. Optional browser-auditor robustness: add the img-variant to fragment/form
+   probes (cross-engine), and consider a networkidle/longer settle for SPAs.
+   Re-examine the `upload_tester.py` PATH_INFO probe whose broad exception catch
+   was removed (unexpected exceptions now propagate).
 2. Build a full skill-by-skill inventory (intended use, CLIs, I/O, deps, tests,
    scope controls, overlaps, gaps). None exists yet.
 3. Revisit bootstrap + task preflight against "install required tools directly
