@@ -84,6 +84,15 @@ class ApiBreakerScopeTests(unittest.TestCase):
         self.assertEqual(privilege["claims"]["permissions"]["email"], "[REDACTED]")
         self.assertEqual(privilege["claims"]["permissions"]["jwk"], "[REDACTED]")
 
+    def test_jwt_claim_analysis_handles_invalid_expiry_values(self):
+        for expiry in (10**1000, float("inf"), float("nan"), True, "tomorrow"):
+            with self.subTest(expiry=repr(expiry)):
+                findings = auth_analyzer.analyze_jwt_claims({
+                    "header": {"alg": "RS256"},
+                    "payload": {"exp": expiry},
+                })
+                self.assertIn("jwt_invalid_expiry", {item["type"] for item in findings})
+
     def test_jwt_none_bypass_requires_invalid_token_rejection_to_confirm(self):
         decoded = {"header": {"alg": "HS256"}, "payload": {"sub": "alice"}}
 

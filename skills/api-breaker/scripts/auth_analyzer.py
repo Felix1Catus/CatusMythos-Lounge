@@ -813,20 +813,30 @@ def analyze_jwt_claims(decoded_jwt):
     if exp is None:
         vuln("JWT has no expiration claim!")
         findings.append({"type": "jwt_no_expiry", "severity": "high"})
-    elif isinstance(exp, (int, float)):
-        exp_dt = datetime.fromtimestamp(exp, timezone.utc)
-        now = datetime.now(timezone.utc)
-        if exp_dt < now:
-            warn(f"JWT is expired (exp: {exp_dt.isoformat()})")
+    elif isinstance(exp, (int, float)) and not isinstance(exp, bool):
+        try:
+            if isinstance(exp, float) and not math.isfinite(exp):
+                raise ValueError("expiration is not finite")
+            exp_dt = datetime.fromtimestamp(exp, timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            warn("JWT has an invalid or unrepresentable expiration claim")
+            findings.append({"type": "jwt_invalid_expiry", "severity": "info"})
         else:
-            diff = exp_dt - now
-            if diff.days > 30:
-                warn(f"JWT has very long expiry: {diff.days} days")
-                findings.append({
-                    "type": "jwt_long_expiry",
-                    "severity": "low",
-                    "expiry_days": diff.days,
-                })
+            now = datetime.now(timezone.utc)
+            if exp_dt < now:
+                warn(f"JWT is expired (exp: {exp_dt.isoformat()})")
+            else:
+                diff = exp_dt - now
+                if diff.days > 30:
+                    warn(f"JWT has very long expiry: {diff.days} days")
+                    findings.append({
+                        "type": "jwt_long_expiry",
+                        "severity": "low",
+                        "expiry_days": diff.days,
+                    })
+    else:
+        warn("JWT has a non-numeric expiration claim")
+        findings.append({"type": "jwt_invalid_expiry", "severity": "info"})
 
     # Check for sensitive data in payload
     sensitive_keys = ["password", "passwd", "secret", "credit_card", "ssn", "cc_number"]
