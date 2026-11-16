@@ -42,6 +42,10 @@ doesn't mistake uneven coverage for uniform coverage.
   regression tests, and the dated audit/handover updates.
 - `a95bab9c9334023a82dde223190e38ca1059f82f` — recorded the bootstrap commit
   in the living handover before this audit pass.
+- `ac332fcbd6be29e3aedda3b39c3b181ce15ceccf` — scoped API imports to the
+  trusted origin, wired same-origin JavaScript discovery, corrected
+  business-logic candidate confidence, and required an explicit cookie
+  plus canary ID for active GraphQL CSRF submissions.
 - Verification at the `61aae43` code state: **441 tests + 21 subtests** passed;
   Ruff, compileall, CLI docs (`10/94/58`), and shared-helper sync passed. The
   browser feature has a real local Chromium fixture run. The focused PATH_INFO
