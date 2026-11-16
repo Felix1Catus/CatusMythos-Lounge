@@ -48,3 +48,48 @@ The redirect policy deliberately blocks changes in scheme, hostname, or port, in
 Reviewed repository metadata, plugin manifests and hook wiring, bootstrap behavior, lounge launch/state handling, AI/LLM HTTP paths, model-artifact scanning, PoC generation, and cross-repository Python helper consistency. Searched Python and shell sources for process execution, dynamic evaluation, unsafe deserialization, TLS verification overrides, filesystem deletion, and network calls.
 
 Python 3.14.8 checks passed for the current worktree: Ruff, repository compileall, CLI documentation validation (10 skill docs / 91 command references / 57 distinct CLIs), shared-helper consistency, all 3 repository JSON files, all 9 offline demos, all 21 Bash syntax checks, and 47 unit tests. `python3` resolves in the target PowerShell environment. `git diff --check` passed (Git emitted only line-ending normalization warnings). PoC generators were exercised with hostile input values; generated Python compiled and generated shell commands parsed safely. DOM, redirect, cache, and crawler discovery behavior was tested only against loopback fixtures; no live targets were contacted. Passing offline checks do not establish absence of all bugs.
+
+---
+
+## Addendum — 2026-11-16
+
+The header revision `73162b0` above is the **base** that was audited; it remains
+as historical provenance. The current `main` head is
+`da46b1ddc15110feaf220bdd3cccf5d1e4b4e234`. This addendum records work done after
+the 2026-11-15 audit; the checks and counts in the sections above describe the
+`caed91e` state and were **not** all re-run for the commits below.
+
+### Browser runtime auditor (`6695fcf`)
+- Added `skills/webapp-exploit-hunter/scripts/browser_security_auditor.py`: an
+  isolated Playwright-backed auditor with passive observation, opt-in `--active`
+  query/fragment execution canaries, and explicit `--submit-forms` submissions.
+  Origin controls, request/page/submission budgets, blocked service workers,
+  WebSocket interception without upstream connect, storage-state origin
+  filtering, and redaction of many sensitive values.
+- Verified at add time: Python compile, Ruff, CLI `--help`, CLI-docs, JSON
+  parse, `git diff --check`. The CLI-docs check then reported **10 skill docs /
+  94 command references / 58 distinct CLIs** (vs 10 / 91 / 57 pre-browser).
+- **Not** covered by the 47-test suite, and **no real Playwright/Chromium run has
+  been performed yet.** Known-weak areas (request policy, form-POST grant
+  binding, WebSocket handling/redaction, storage-state cookie suffix-match,
+  budget counting, SPA settle timing) are enumerated in `HANDOVER.md`.
+
+### Deep LFI + ImageTragick integration (`da46b1d`)
+- 3-way merge of local payload-depth work onto the audited base:
+  `lfi_tester.py` (two-step JSON-reference following, generic read primitive,
+  `/proc/net/tcp` internal-port discovery, apache PID → `/proc/<pid>/environ`
+  secret chain, `--skip-lfi-chains` gate), `upload_tester.py` (ImageTragick
+  CVE-2016-3714/15/16/17/18 with OOB `--callback-url` confirmation and
+  `--allow-destructive-poc` canary-only gating), `import_findings.py`
+  (ImageTragick `*_attempted` → `rce_potential`/`precondition_dependent`),
+  `SKILL.md` (ImageTragick layer).
+- At the one overlap, kept the audit's `shlex`-quoted, no-`-k` `poc_curl`; fixed
+  a Python-3.12-only nested f-string to be `py38`-safe (the Ruff target).
+- Re-verified on `da46b1d`: **47 unit tests + 21 subtests pass; Ruff clean** on
+  the merged scripts. The browser auditor remains unexercised by a real browser.
+
+### Coverage caveat
+The audit did not deeply review every skill to the same depth. `HANDOVER.md`
+lists which skills got the deepest automated coverage and which remain
+lightly verified. Do not read this record as implying uniform review or a
+bug-free repository.
