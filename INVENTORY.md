@@ -8,8 +8,8 @@ Inventory structure originated at `f870a85`. Coverage status refreshed
 2026-11-16 against the verified `3aa2f62` bootstrap baseline, the API-breaker
 continuation from `a95bab9`, the BOLA URL fix at `9efbba5`, and the BOLA/BFLA
 evidence follow-up at `511a522`, JWT/auth hardening at `68dd243`, and the exp
-boundary fix at `0f58b5e`. Check
-`git log -1` for the exact current tip.
+boundary fix at `0f58b5e`. The rate-limit pass is recorded in the latest
+handover addendum; `git log -1` gives the exact current tip.
 
 ## Shape of the toolkit
 
@@ -38,11 +38,11 @@ checked by `tests/test_plugin_bootstrap_hook.py` and the same matrix.
 | Coverage | Skills |
 |---|---|
 | Broad script-level regression matrices | `recon-dominator` (59), `cloud-pivot-finder` (38), `attack-path-architect` (28), `16-ai-llm-security` (87), `03-exploit-development` (14), `vuln-chain-composer` (63), legacy `webapp-exploit-hunter` testers (60) |
-| Focused or partial coverage | `api-breaker` (65 focused scope/discovery/business-logic/GraphQL/BOLA/BFLA/auth-analyzer regressions); `webapp-exploit-hunter` browser/crawler/DOM and selected CLI paths; `web-cache-auditor` (8 tests for its script) |
+| Focused or partial coverage | `api-breaker` (69 focused scope/discovery/business-logic/GraphQL/BOLA/BFLA/auth-analyzer/rate-limit regressions); `webapp-exploit-hunter` browser/crawler/DOM and selected CLI paths; `web-cache-auditor` (8 tests for its script) |
 | Plugin infrastructure | `tests/test_bootstrap.py` (30): parsing, install command construction, retry/cache validation, browser setup, PATH readiness, and nonzero preflight gates |
 | No scripts (manual methodology) | `web-protocol-auditor` |
 
-The full suite most recently passed **539 tests plus 47 subtests**. It includes
+The full suite most recently passed **543 tests plus 47 subtests**. It includes
 local-fixture browser integration with Playwright/Chromium, bootstrap
 regressions, and the new API-breaker matrix. The strict bootstrap preflight also
 passed on the current Windows host. Coverage is uneven:
@@ -92,7 +92,7 @@ specific fixes, test themes, browser limitations, and the latest verification.
 - **Scope controls:** `--active`, `--submit-forms`, `--callback-url`,
   `--allow-destructive-poc`, `--skip-lfi-chains`; HTTPS-verified default.
 
-### api-breaker — `[65 FOCUSED REGRESSIONS; STILL PARTIAL]`
+### api-breaker — `[69 FOCUSED REGRESSIONS; STILL PARTIAL]`
 - **Use:** API security from domains — discover REST/GraphQL/SOAP, rebuild
   schemas, test BOLA/IDOR, BFLA, mass assignment, JWT, rate-limit bypass, logic.
 - **CLIs (8; `_common.py` and `response_safety.py` are support modules):** `api_discovery`, `schema_builder` (1814 ln),
@@ -105,7 +105,9 @@ specific fixes, test themes, browser limitations, and the latest verification.
   query-name/input bounds and evidence classifications, nested-field candidate
   handling, User A/User B cookie isolation, bounded authz delay, sanitized
   response previews across auth/authz/business-logic/mass-assignment outputs,
-  iterative ID extraction, and a local HTTP BOLA/BFLA workflow fixture. Active
+  iterative ID extraction, URL-keyed GraphQL/OpenAPI rate-limit imports,
+  clean GraphQL batch/alias response validation and candidate report mappings,
+  and a local HTTP BOLA/BFLA workflow fixture. Active
   GraphQL CSRF GET/form submits still require the explicit cookie/canary, and
   mutation writes remain opt-in.
   `tests/test_targeted_audit_fixes.py` covers hostile imports and write gating
@@ -113,9 +115,11 @@ specific fixes, test themes, browser limitations, and the latest verification.
   per-script matrix: JWT attack cases still need isolated HTTP integration and
   RS/PS relabel review; GraphQL has offline regressions but no real HTTP
   integration; BOLA/BFLA has local loopback integration but no live API
-  integration; rate-limit bypass/batching,
-  business-state read-back, and broad report input shapes remain lightly tested
-  or untested. Response redaction is pattern-based; application-specific
+  integration; rate-limit behavior has mocked regressions but no local HTTP
+  fixture or live authorized API integration. Race/path/batching responses
+  remain candidates until application-level behavior or persisted state is
+  verified. Business-state read-back and broad report input shapes remain
+  lightly tested or untested. Response redaction is pattern-based; application-specific
   secrets embedded in arbitrary JSON strings may still escape detection.
 - **Scope controls:** explicit trusted `--api-base` for imported endpoints in
   schema, auth, authz, mass assignment, rate-limit, and business-logic testing;

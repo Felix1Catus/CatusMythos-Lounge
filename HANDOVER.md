@@ -6,8 +6,10 @@ doesn't mistake uneven coverage for uniform coverage.
 
 ## Current state
 
-- Latest code pass: `5d6e6b36947adfb6144eb98004227297daf805d6`
-  (`Redact API breaker response evidence consistently`), following the authz
+- Latest code pass: `a75e337cd2cb1a025cec5d7abc35f401ce646c74`
+  (`Harden API rate-limit probe evidence`), following
+  the shared response-sanitizing pass `5d6e6b36947adfb6144eb98004227297daf805d6`
+  (`Redact API breaker response evidence consistently`) and the authz
   fixes in `90d4fadda5ca21bfa5575f261ed32199986bc18c` and
   `585ffa2b38aba78625e83a4eec2af2e1de3637b0`. Every API-breaker
   `response_preview` now uses the skill-local `response_safety.py`: JSON
@@ -17,12 +19,29 @@ doesn't mistake uneven coverage for uniform coverage.
   seconds. Object-ID extraction is iterative for deeply nested JSON. A real
   loopback HTTP fixture exercises the User A collection read, User B
   exact-object GET, regular-user admin GET, and GET-only default. API-breaker
-  matrix **65 tests**; full suite **539 tests + 47 subtests**. Focused authz
+  matrix **69 tests + 26 subtests**; full suite **543 tests + 47 subtests**. Focused authz
   tests passed **81 tests + 31 subtests**. Ruff, compileall, helper sync, CLI
   docs (**10 / 95 / 58**), and diff check passed. Integration contacted only a
   local fixture; no live external API was contacted. Redaction is pattern-based
   and cannot identify every application-specific secret embedded in arbitrary
   JSON strings.
+
+- Latest rate-limit pass
+  (`a75e337cd2cb1a025cec5d7abc35f401ce646c74`): imported OpenAPI endpoint
+  records and api-discovery's URL-keyed GraphQL result map are now included after strict
+  same-origin filtering. Count, worker, delay, and GraphQL baseline budgets are
+  validated. Race, IP-header, path-mutation, and GraphQL results that lack
+  application-level proof are INFO candidates, with explicit candidate-to-OWASP
+  report mappings. The active probes remain enabled. GraphQL sends bounded,
+  side-effect-free `__typename` payloads, requires clean response evidence for
+  a differential, and does not claim that safe resolver acceptance proves
+  impact on login/OTP or other sensitive actions. Four focused regressions
+  cover imported shapes, response validation, and report classification. The
+  API-breaker matrix is now 69 tests + 26 subtests; full suite is 543 tests + 47
+  subtests. Ruff, compileall, shared-helper sync, CLI docs (10 / 95 / 58), and
+  diff checks passed. Rate-limit behavior has not been integration-tested
+  against a local HTTP fixture or a live authorized API; no external target was
+  contacted during this pass.
 
 - Previous authz code pass: `585ffa2b38aba78625e83a4eec2af2e1de3637b0`
   (`Sanitize authz evidence and handle deep JSON`). See the shared redaction
@@ -655,7 +674,7 @@ browser `--active`, or `--submit-forms` behavior.
    uploads.
 2. **Inventory structure — coverage refreshed; structural map still needs
    review if skills, CLIs, dependencies, or plugin references move.** Inventory
-   now includes bootstrap behavior and the 65 focused API-breaker regressions.
+   now includes bootstrap behavior and the 69 focused API-breaker regressions.
 3. **Bootstrap + task preflight — implemented; deeper OS-specific install
    validation remains open.** Missing Python dependencies, Chromium, Go, Go
    recon tools, and allowlisted system tools are actively installed through
@@ -680,10 +699,13 @@ browser `--active`, or `--submit-forms` behavior.
    JWT has 47 focused offline regressions but still needs isolated HTTP
    integration and review of the RS/PS relabel hypothesis. Authz preview
    redaction is implemented; audit the remaining raw previews in
-   `auth_analyzer.py`, `logic_tester.py`, and `mass_assignment.py`. Next
-   prioritize rate-limit bypass/batching, business-state read-back, and report
-   input shapes. The API-breaker response preview emitters now use the shared
-   sanitizer; review its pattern limits against app-specific data formats.
+   `auth_analyzer.py`, `logic_tester.py`, and `mass_assignment.py`. Rate-limit
+   bypass and batching now have focused mocked regressions and candidate-aware
+   reporting, but still need a local HTTP integration fixture; response-shape
+   matches and `__typename` batches are not proof of business impact. Continue
+   with business-state read-back and broad report input shapes. The API-breaker
+   response preview emitters now use the shared sanitizer; review its pattern
+   limits against app-specific data formats.
    Also continue the
    remaining browser
    scope/state/redaction edge cases and live-protocol methodology. Ground changes

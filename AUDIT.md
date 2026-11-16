@@ -473,3 +473,39 @@ loopback fixture; no external targets were contacted.
 Redaction is pattern-based, not a guarantee that all proprietary values or
 unknown secrets embedded in arbitrary JSON strings are removed. The relevant
 code is commit `5d6e6b36947adfb6144eb98004227297daf805d6` on `main`.
+
+---
+
+## Follow-up addendum — rate-limit probe evidence and imported targets (2026-11-16)
+
+`rate_limiter.py` now includes same-origin-filtered OpenAPI endpoint records
+and GraphQL endpoints from both the URL-keyed `api_discovery.py` result map
+and `schema_builder.py`'s `graphql_schema.endpoint_url`. Direct request counts,
+concurrency, delays, and GraphQL baseline attempts are bounded. The report
+generator maps new candidate types to OWASP API categories and candidate-aware
+remediations.
+
+The scanner remains active for authorized in-scope testing. Sequential and
+concurrent bursts, forwarded-IP header mutations, path/method variants, and
+GraphQL batch/alias payloads still run when selected. Findings now stay INFO
+candidates where response counts, status/body-length matches, or accepted
+requests do not establish an application-level bypass or persisted business
+impact. GraphQL differential probes use clean, side-effect-free `__typename`
+responses, cap the baseline at 60 requests and batch/alias operations at 110,
+and do not claim those safe probes establish impact on login, OTP, or other
+sensitive resolvers.
+
+Added focused regressions for URL-keyed GraphQL and OpenAPI import handling,
+clean GraphQL batch/alias response validation, direct probe-budget bounds, and
+candidate report mappings. The API-breaker test file now has **69 tests + 26
+subtests**. Full verification passed **543 tests + 47 subtests**, Ruff,
+compileall, shared-helper sync, CLI docs (**10 skill docs / 95 command
+references / 58 CLIs**), and `git diff --check`. Target behavior was mocked;
+no external API was contacted. There is still no rate-limiter local HTTP
+integration fixture, and no live authorized API integration. A `429`
+differential, matching response shape, or successful `__typename` result remains
+candidate evidence rather than proof of business impact.
+
+Code, focused regressions, skill documentation, and research-note updates are
+commit `a75e337cd2cb1a025cec5d7abc35f401ce646c74`
+(`Harden API rate-limit probe evidence`) on `main`.
