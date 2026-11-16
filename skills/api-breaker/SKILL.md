@@ -176,6 +176,15 @@ metadata is not used to select a target. Endpoint URLs are restricted to the
 exact scheme, host, and effective port in `--api-base`; off-origin entries are
 skipped before credentials are sent.
 
+These are active requests to the authorized API, not passive observations.
+OpenAPI-style object path parameters are replaced with a bounded seed ID
+before the initial object read. A successful HTTP status alone is only a
+candidate: a BOLA GET is confirmed only when the response contains the exact
+object ID tested; successful mutations remain candidates until a controlled
+read-back verifies persisted impact. BFLA status and method-override responses
+are candidates until the returned data or action demonstrates privileged
+impact. Review candidate evidence before treating it as a confirmed finding.
+
 ### Step 5: Mass Assignment Testing
 
 ```bash

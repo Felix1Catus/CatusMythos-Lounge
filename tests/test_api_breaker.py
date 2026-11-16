@@ -66,6 +66,98 @@ class ApiBreakerScopeTests(unittest.TestCase):
         self.assertIn("https://api.example.test/api/users/42", calls)
         self.assertNotIn("https://api.example.test/api/users/42/42", calls)
 
+    def test_bola_substitutes_parameter_before_initial_request(self):
+        endpoint = {
+            "url": "https://api.example.test/api/users/{user_id}?active=true",
+            "path": "/api/users/{user_id}",
+        }
+        calls = []
+
+        def record_request(url, method="GET", headers=None, **kwargs):
+            calls.append(url)
+            if "/api/users/1?active=true" in url:
+                return 200, {}, '{"id": "1"}'
+            return 404, {}, ""
+
+        with patch.object(authz_tester, "http_request", side_effect=record_request):
+            authz_tester.test_bola(
+                "https://api.example.test", [endpoint], "user-a", token_b="user-b", delay=0
+            )
+
+        self.assertEqual(calls[0], "https://api.example.test/api/users/1?active=true")
+        self.assertFalse(any("{user_id}" in url for url in calls))
+
+    def test_bola_status_only_access_is_reported_as_candidate(self):
+        endpoint = {"url": "https://api.example.test/api/users/42", "path": "/api/users/42"}
+
+        def record_request(url, method="GET", headers=None, **kwargs):
+            if url == endpoint["url"] and headers and headers.get("Authorization") == "Bearer user-a":
+                return 200, {}, '{"id": "42"}'
+            if url == endpoint["url"]:
+                return 200, {}, '{"message": "ok"}'
+            return 404, {}, ""
+
+        with patch.object(authz_tester, "http_request", side_effect=record_request):
+            findings = authz_tester.test_bola(
+                "https://api.example.test", [endpoint], "user-a", token_b="user-b", delay=0
+            )
+
+        endpoint_findings = [item for item in findings if item["url"] == endpoint["url"]]
+        self.assertEqual(len(endpoint_findings), 2)
+        self.assertTrue(all(item["type"] == "bola_candidate" for item in endpoint_findings))
+        self.assertTrue(all(item["severity"] == "info" for item in endpoint_findings))
+        self.assertTrue(all(item["validated"] is False for item in endpoint_findings))
+
+    def test_bola_exact_object_read_remains_confirmed(self):
+        endpoint = {"url": "https://api.example.test/api/users/42", "path": "/api/users/42"}
+
+        def record_request(url, method="GET", headers=None, **kwargs):
+            return 200, {}, '{"id": "42"}'
+
+        with patch.object(authz_tester, "http_request", side_effect=record_request):
+            findings = authz_tester.test_bola(
+                "https://api.example.test", [endpoint], "user-a", token_b="user-b", delay=0
+            )
+
+        confirmed = [item for item in findings if item["url"] == endpoint["url"]]
+        self.assertEqual(len(confirmed), 2)
+        self.assertTrue(all(item["type"] == "bola" for item in confirmed))
+        self.assertTrue(all(item["validated"] is True for item in confirmed))
+
+    def test_bfla_success_status_is_unverified_candidate(self):
+        with patch.object(authz_tester, "http_request", return_value=(200, {}, '{"items": []}')):
+            findings = authz_tester.test_bfla(
+                "https://api.example.test", "user", delay=0
+            )
+
+        self.assertTrue(findings)
+        self.assertTrue(all(item["type"] == "bfla_candidate" for item in findings))
+        self.assertTrue(all(item["severity"] == "info" for item in findings))
+        self.assertTrue(all(item["validated"] is False for item in findings))
+        report = api_report.generate_finding_report(findings[0], 1)
+        self.assertEqual(report["owasp_mapping"]["id"], "API5:2023")
+        self.assertIn("Unverified probe candidate", report["impact"])
+
+    def test_bfla_write_probes_remain_active_but_candidates(self):
+        calls = []
+
+        def record_request(url, method="GET", headers=None, data=None, **kwargs):
+            calls.append((method, headers or {}))
+            return 200, {}, '{"ok": true}'
+
+        with patch.object(authz_tester, "http_request", side_effect=record_request):
+            findings = authz_tester.test_bfla(
+                "https://api.example.test", "user", delay=0, allow_mutation_write=True
+            )
+
+        self.assertIn("DELETE", {method for method, _ in calls})
+        self.assertTrue(any(
+            method == "POST" and "X-HTTP-Method-Override" in headers
+            for method, headers in calls
+        ))
+        self.assertTrue(findings)
+        self.assertTrue(all(item["type"].endswith("_candidate") for item in findings))
+
     def test_bola_recognizes_uuid_object_endpoint(self):
         object_id = "550e8400-e29b-41d4-a716-446655440000"
         endpoint_url = f"https://api.example.test/api/users/{object_id}"

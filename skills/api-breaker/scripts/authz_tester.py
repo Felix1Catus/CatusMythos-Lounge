@@ -121,6 +121,14 @@ def build_object_url(base_url, endpoint_url, object_id, is_id_endpoint=False):
     return same_origin_url(base_url, candidate)
 
 
+def build_initial_object_url(base_url, endpoint_url):
+    """Replace OpenAPI-style path parameters before the initial object read."""
+    parsed = urllib.parse.urlsplit(endpoint_url)
+    if re.search(r"\{[^{}]+\}", parsed.path):
+        return build_object_url(base_url, endpoint_url, TEST_IDS[0], is_id_endpoint=True)
+    return same_origin_url(base_url, endpoint_url)
+
+
 def test_bola(
     base_url, endpoints, token_a, token_b=None, extra_headers=None, delay=0,
     allow_mutation_write=False,
@@ -152,9 +160,13 @@ def test_bola(
         path = ep.get("path", "") if isinstance(ep, dict) else str(ep)
         path = path or urllib.parse.urlsplit(url).path
         is_id_endpoint = ep in id_endpoints
+        probe_url = build_initial_object_url(base_url, url)
+        if not probe_url:
+            warn(f"Skipping endpoint that cannot be kept on the API origin: {candidate}")
+            continue
 
         # Get resources as User A
-        status_a, _, body_a = http_request(url, headers=headers_a)
+        status_a, _, body_a = http_request(probe_url, headers=headers_a)
         if delay:
             time.sleep(delay)
 
@@ -163,7 +175,7 @@ def test_bola(
 
         # Extract IDs from response
         ids_found = extract_object_ids(body_a)
-        path_object_id = object_id_from_path(path) if is_id_endpoint else None
+        path_object_id = object_id_from_path(probe_url) if is_id_endpoint else None
         if path_object_id:
             ids_found = {path_object_id}
         if not ids_found:
@@ -186,16 +198,26 @@ def test_bola(
                         time.sleep(delay)
 
                     if status_b in (200, 201, 204):
-                        vuln(f"BOLA: {method} {id_url} accessible with different user token (status={status_b})")
+                        confirmed = (
+                            method == "GET" and status_b == 200
+                            and obj_id in extract_object_ids(body_b)
+                        )
+                        message = (
+                            f"BOLA: {method} {id_url} accessible with different user token"
+                            if confirmed else
+                            f"BOLA candidate: {method} {id_url} returned {status_b} with different user token; verify object access/read-back"
+                        )
+                        (vuln if confirmed else log)(message)
                         findings.append({
-                            "type": "bola",
-                            "severity": "high",
+                            "type": "bola" if confirmed else "bola_candidate",
+                            "severity": "high" if confirmed else "info",
                             "method": method,
                             "url": id_url,
                             "object_id": obj_id,
                             "access": "different_user",
                             "status": status_b,
                             "response_preview": body_b[:200],
+                            "validated": confirmed,
                         })
                         tested += 1
 
@@ -205,16 +227,26 @@ def test_bola(
                     time.sleep(delay)
 
                 if status_noauth in (200, 201, 204):
-                    vuln(f"BOLA: {method} {id_url} accessible without auth (status={status_noauth})")
+                    confirmed = (
+                        method == "GET" and status_noauth == 200
+                        and obj_id in extract_object_ids(body_noauth)
+                    )
+                    message = (
+                        f"BOLA: {method} {id_url} accessible without auth"
+                        if confirmed else
+                        f"BOLA candidate: {method} {id_url} returned {status_noauth} without auth; verify object access/read-back"
+                    )
+                    (vuln if confirmed else log)(message)
                     findings.append({
-                        "type": "bola",
-                        "severity": "critical",
+                        "type": "bola" if confirmed else "bola_candidate",
+                        "severity": "critical" if confirmed else "info",
                         "method": method,
                         "url": id_url,
                         "object_id": obj_id,
                         "access": "no_auth",
                         "status": status_noauth,
                         "response_preview": body_noauth[:200],
+                        "validated": confirmed,
                     })
                     tested += 1
 
@@ -234,28 +266,30 @@ def test_bola(
                 if delay:
                     time.sleep(delay)
                 if status == 200 and len(body) > 20:
-                    vuln(f"BOLA: GET {url} accessible with alternate token")
+                    log(f"BOLA candidate: GET {url} returned data with an alternate token; object ownership was not established")
                     findings.append({
-                        "type": "bola_idor",
-                        "severity": "high",
+                        "type": "bola_idor_candidate",
+                        "severity": "info",
                         "url": url,
                         "test_id": test_id,
                         "status": status,
                         "response_preview": body[:200],
+                        "validated": False,
                     })
 
             status, _, body = http_request(url)
             if delay:
                 time.sleep(delay)
             if status == 200 and len(body) > 20:
-                vuln(f"BOLA: GET {url} accessible without auth")
+                log(f"BOLA candidate: GET {url} returned data without auth; sensitivity and object ownership were not established")
                 findings.append({
-                    "type": "bola_idor",
-                    "severity": "critical",
+                    "type": "bola_idor_candidate",
+                    "severity": "info",
                     "url": url,
                     "test_id": test_id,
                     "status": status,
                     "response_preview": body[:200],
+                    "validated": False,
                 })
 
     return findings
@@ -287,16 +321,17 @@ def test_bfla(base_url, token, extra_headers=None, delay=0, allow_mutation_write
 
             if status in (200, 201, 204):
                 has_data = len(body) > 20
-                vuln(f"BFLA: {method} {admin_path} accessible with user token (status={status})")
+                log(f"BFLA candidate: {method} {admin_path} returned {status} with a user token; privileged impact was not verified")
                 findings.append({
-                    "type": "bfla",
-                    "severity": "high",
+                    "type": "bfla_candidate",
+                    "severity": "info",
                     "method": method,
                     "path": admin_path,
                     "url": url,
                     "status": status,
                     "has_data": has_data,
                     "response_preview": body[:200],
+                    "validated": False,
                 })
 
     if not allow_mutation_write:
@@ -324,14 +359,15 @@ def test_bfla(base_url, token, extra_headers=None, delay=0, allow_mutation_write
                     time.sleep(delay)
 
                 if status in (200, 201, 204):
-                    vuln(f"BFLA via method override: {override_header}: {target_method} on {admin_path}")
+                    log(f"BFLA candidate via method override: {override_header}: {target_method} on {admin_path}; privileged impact was not verified")
                     findings.append({
-                        "type": "bfla_method_override",
-                        "severity": "high",
+                        "type": "bfla_method_override_candidate",
+                        "severity": "info",
                         "override_header": override_header,
                         "target_method": target_method,
                         "path": admin_path,
                         "status": status,
+                        "validated": False,
                     })
 
     return findings
