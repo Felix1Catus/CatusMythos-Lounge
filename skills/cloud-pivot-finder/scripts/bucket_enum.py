@@ -141,9 +141,14 @@ def check_s3_bucket(name):
     # real region in a response header/body -- treating that as "doesn't
     # exist" (the bug this used to have) silently drops every
     # non-us-east-1 bucket, which is most of them.
-    region_hint = headers.get("x-amz-bucket-region") or (
-        re.search(r"<Region>([^<]+)</Region>", body).group(1) if "<Region>" in body else None
-    )
+    region_hint = headers.get("x-amz-bucket-region")
+    if not region_hint:
+        # Don't gate on `"<Region>" in body` and then blindly `.group(1)` --
+        # an empty `<Region></Region>` or an unterminated tag makes the
+        # substring present but the full match fail, which would crash on
+        # `None.group(1)`. Match first, read the group only if it matched.
+        region_match = re.search(r"<Region>([^<]+)</Region>", body)
+        region_hint = region_match.group(1) if region_match else None
     if status in (301, 400) and region_hint:
         url = f"https://{name}.s3.{region_hint}.amazonaws.com/"
         status, body, headers = http_get(url)

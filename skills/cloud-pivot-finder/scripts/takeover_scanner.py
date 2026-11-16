@@ -291,13 +291,40 @@ def http_probe(hostname, timeout=5):
     return 0, ""
 
 
-def scan_subdomain(subdomain):
-    """Scan a single subdomain for takeover vulnerability."""
+def _build_cname_chain(cname, resolver):
+    """Walk the CNAME chain from an initial target, guarding against loops
+    (a repeated target or a self-referential record). `resolver` is injected
+    so the walk is unit-testable without DNS."""
+    seen = set()
+    chain = []
+    current = cname
+    while current and current not in seen:
+        seen.add(current)
+        chain.append(current)
+        next_cname = resolver(current)
+        if next_cname == current:
+            break
+        current = next_cname
+    return chain
+
+
+def classify_takeover(subdomain, cname, chain, nxdomain_checker, body_fetcher):
+    """Classify a resolved CNAME chain against TAKEOVER_FINGERPRINTS.
+
+    All network I/O is injected so the fingerprint state machine -- the part
+    with real correctness risk (negative fingerprints rule a service OUT,
+    an ELB-style `nxdomain_vulnerable: False` stays inert, excluded S3 `-an`
+    names are skipped, edge-case platforms are flagged not confirmed) -- is
+    unit-testable:
+      nxdomain_checker(cname) -> bool
+      body_fetcher() -> (status, body)   [called at most once, memoized]
+    Returns the same finding dict shape `scan_subdomain` returns.
+    """
     finding = {
         "subdomain": subdomain,
         "vulnerable": False,
-        "cname": None,
-        "cname_chain": [],
+        "cname": cname,
+        "cname_chain": chain,
         "service": None,
         "evidence": None,
         "impact": None,
@@ -305,23 +332,6 @@ def scan_subdomain(subdomain):
         "edge_case": False,
         "not_vulnerable_checked": [],  # services whose negative fingerprint ruled them out
     }
-
-    # Resolve CNAME chain
-    cname = resolve_cname(subdomain)
-    seen = set()
-    chain = []
-
-    current = cname
-    while current and current not in seen:
-        seen.add(current)
-        chain.append(current)
-        next_cname = resolve_cname(current)
-        if next_cname == current:
-            break
-        current = next_cname
-
-    finding["cname"] = cname
-    finding["cname_chain"] = chain
 
     if not cname:
         return finding
@@ -355,7 +365,7 @@ def scan_subdomain(subdomain):
         # don't set it; AWS ELB explicitly sets it False since an NXDOMAIN
         # ELB target isn't independently claimable (see fingerprint note).
         if fp.get("nxdomain"):
-            if check_nxdomain(matched_cname):
+            if nxdomain_checker(matched_cname):
                 if fp.get("nxdomain_vulnerable", True):
                     finding["vulnerable"] = True
                     finding["service"] = service
@@ -372,7 +382,7 @@ def scan_subdomain(subdomain):
 
         # HTTP probe for error signatures (fetched once, reused across services)
         if probed_body is None:
-            probed_status, probed_body = http_probe(subdomain)
+            probed_status, probed_body = body_fetcher()
             probed_body = probed_body or ""
 
         if probed_body:
@@ -405,6 +415,17 @@ def scan_subdomain(subdomain):
                     return finding
 
     return finding
+
+
+def scan_subdomain(subdomain):
+    """Resolve a subdomain's CNAME chain and classify it for takeover. Thin
+    network wrapper around the pure `classify_takeover`; the HTTP probe is
+    passed as a lambda so it's only invoked if a fingerprint needs a body."""
+    cname = resolve_cname(subdomain)
+    chain = _build_cname_chain(cname, resolve_cname)
+    return classify_takeover(
+        subdomain, cname, chain, check_nxdomain, lambda: http_probe(subdomain)
+    )
 
 
 def load_subdomains(path):

@@ -29,8 +29,24 @@ crawler discovery, redirect scope, selected imported-API data handling, XSS
 finding-confidence, PoC-generation safety.
 
 **Shallowest / highest bug-risk — prioritize these:**
-- `cloud-pivot-finder`, `attack-path-architect` — mostly repo-wide lint/timestamp
-  and shared-helper coverage; little domain-specific end-to-end testing.
+- `cloud-pivot-finder` — DEEPENED 2026-11-16: all 7 scripts now have a 38-test
+  matrix (`tests/test_cloud_pivot_finder.py`). `takeover_scanner` was refactored
+  to expose a pure `classify_takeover` (network injected) so the fingerprint
+  state machine is testable, and tests lock the documented false-positive fixes
+  (CloudFront/GCS/Firebase/Fastly/Zendesk negative fingerprints rule a service
+  out; ELB `nxdomain_vulnerable: False` stays inert; S3 `-an` account-regional
+  names are excluded; edge-case platforms are flagged not confirmed). One real
+  bug fixed: `bucket_enum.check_s3_bucket` crashed with `AttributeError` when a
+  response body contained an empty/unterminated `<Region>` tag (substring
+  present but regex no-match → `None.group(1)`); now matches first. Also covered:
+  `generate_bucket_names`, the cross-cloud `_CRED_PATTERNS` regex, the
+  reference-only `check_bucket` claimable gate, `cloud_detector._extract_hosts_from_json`,
+  `serverless_finder.identify_serverless_type`/`check_error_signatures`,
+  `metadata_paths` SSRF-vector/recon-extraction/`build_pivot_path` (incl.
+  ECScape-note-only-for-AWS), `cicd_finder.load_hosts`/`probe_host_path`, and
+  `cloud_report`'s remediation prioritization + section summaries.
+- `attack-path-architect` — mostly repo-wide lint/timestamp and shared-helper
+  coverage; little domain-specific end-to-end testing.
 - `recon-dominator` — FULLY DEEPENED 2026-11-16: every script now has
   regression coverage (58-test matrix in `tests/test_recon_dominator.py`).
   `cve_lookup` version-range matching and `active_recon`'s Sitting-Ducks SOA
