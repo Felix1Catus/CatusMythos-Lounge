@@ -6,13 +6,24 @@ doesn't mistake uneven coverage for uniform coverage.
 
 ## Current state
 
-- Latest API-breaker follow-up: `9efbba5e7cbb7c6b816459f4dbca298fa40e6a79`
+- Latest API authorization follow-up: `511a522909c15d0687743683916217a1e892af40`
+  (`Improve API authorization test evidence`), pushed to `origin/main` on
+  2026-11-16. The active BOLA initial read substitutes a bounded seed for
+  OpenAPI path placeholders. Status-only BOLA/BFLA responses are unverified
+  candidates; exact-object BOLA GET responses remain confirmed findings.
+  Existing active GET probes and explicitly enabled write/method-override
+  probes still run.
+- Latest verified suite at that code state: **509 tests + 21 subtests**;
+  Ruff, compileall, shared-helper sync, CLI docs (**10 / 95 / 58**), and
+  `git diff --check` passed. All target-facing requests were mocked.
+
+- Previous API-breaker URL fix: `9efbba5e7cbb7c6b816459f4dbca298fa40e6a79`
   (`Fix BOLA object URL construction`),
   pushed to `origin/main` on 2026-11-16. It wires the existing ID-endpoint
   classifier into BOLA checks, preserves direct object URLs and query strings,
   substitutes placeholders, encodes IDs, recognizes UUID-style IDs, and
   rejects unusable response IDs. Four regression tests were added.
-- Latest verified suite at that code state: **504 tests + 21 subtests**;
+- Verification at the 9efbba5 code state: **504 tests + 21 subtests**;
   Ruff, compileall, shared-helper sync, CLI docs (**10 / 95 / 58**), and
   `git diff --check` passed. Ruff is available through `python3 -m ruff`;
   the standalone command is not on this PowerShell PATH. No live targets
@@ -63,6 +74,9 @@ doesn't mistake uneven coverage for uniform coverage.
 - `9efbba5e7cbb7c6b816459f4dbca298fa40e6a79` — fixed BOLA object URL
   construction, including direct numeric/UUID endpoints, collection query
   preservation, placeholder substitution, and unsafe ID filtering.
+- `511a522909c15d0687743683916217a1e892af40` — fixed literal OpenAPI path
+  placeholders in initial BOLA reads and changed status-only BOLA/BFLA
+  responses into unverified candidates while preserving active probes.
 - Verification at the `61aae43` code state: **441 tests + 21 subtests** passed;
   Ruff, compileall, CLI docs (`10/94/58`), and shared-helper sync passed. The
   browser feature has a real local Chromium fixture run. The focused PATH_INFO
@@ -112,6 +126,18 @@ doesn't mistake uneven coverage for uniform coverage.
   Windows/Python 3.14.8. Ruff was run as `python3 -m ruff` because its standalone
   executable is not on this PowerShell PATH. All target-facing regressions are
   mocked; no live target was contacted.
+- **Authorization evidence follow-up (2026-11-16, code commit
+  511a522909c15d0687743683916217a1e892af40):** OpenAPI-style object
+  placeholders are replaced with the first bounded seed ID before the User A
+  read, rather than being sent literally. BOLA status-only and static-ID hits
+  are candidates; a cross-user/anonymous BOLA GET is confirmed only when a
+  200 response contains the exact tested ID. BFLA and method-override 2xx
+  responses are candidates pending proof of privileged data/action. Existing
+  active GET behavior is unchanged; explicitly opted-in POST/PUT/PATCH/DELETE
+  and method-override probes still execute. Added five regressions.
+  The API-breaker test file now has **35 tests**; the full suite passed
+  **509 tests + 21 subtests**, Ruff, compileall, helper sync, CLI docs
+  (**10 / 95 / 58**), and git diff --check. All target requests were mocked.
 - The browser auditor has now had a **real Playwright/Chromium integration run**
   against a local fixture (passive, active query, active fragment via both
   `innerHTML` and `document.write`, and form submission all exercised). Two bugs
@@ -469,7 +495,7 @@ browser `--active`, or `--submit-forms` behavior.
    uploads.
 2. **Inventory structure — coverage refreshed; structural map still needs
    review if skills, CLIs, dependencies, or plugin references move.** Inventory
-   now includes bootstrap behavior and the 30 focused API-breaker regressions.
+   now includes bootstrap behavior and the 35 focused API-breaker regressions.
 3. **Bootstrap + task preflight — implemented; deeper OS-specific install
    validation remains open.** Missing Python dependencies, Chromium, Go, Go
    recon tools, and allowlisted system tools are actively installed through

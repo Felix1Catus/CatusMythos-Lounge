@@ -287,3 +287,30 @@ The host is Windows with Python 3.14.8; Ruff passed through
 `python3 -m ruff` because `ruff` is not on the shell PATH. Requests are mocked
 in these regressions; no live target was contacted. The code fix is commit
 `9efbba5e7cbb7c6b816459f4dbca298fa40e6a79` on `main`.
+
+---
+
+## Follow-up addendum — BOLA/BFLA path probing and evidence (2026-11-16)
+
+A further API-breaker review found that BOLA's initial read sent OpenAPI-style
+path placeholders literally, so parameterized endpoints commonly returned
+errors before cross-user checks could run. The initial read now substitutes
+a bounded seed ID while preserving the URL origin and query string.
+
+The authorization testers also treated any successful HTTP status on a
+candidate object/admin path as a confirmed BOLA/BFLA issue. Such responses
+can be ordinary public endpoints, empty acknowledgements, or unrelated
+content. BOLA status-only and static-ID responses now remain INFO candidates;
+a BOLA GET is confirmed only when the response identifies the exact tested
+object. BFLA and method-override responses remain candidates until privileged
+data or action is demonstrated. Explicitly selected active requests still run;
+write verbs and method-override probes retain the existing
+--allow-mutation-write gate.
+
+Five regression tests cover template substitution, status-only BOLA
+candidates, exact-object BOLA confirmation, BFLA candidate classification and
+report mapping, and continued active write/method-override probes. The
+API-breaker matrix now has **35 tests**. Full verification passed **509 tests
++ 21 subtests**, Ruff, compileall, shared-helper sync, CLI docs (**10 / 95 /
+58**), and git diff --check. All target requests were mocked. The code
+change is commit 511a522909c15d0687743683916217a1e892af40 on main.
