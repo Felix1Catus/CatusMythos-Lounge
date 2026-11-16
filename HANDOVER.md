@@ -81,8 +81,43 @@ finding-confidence, PoC-generation safety.
   `categorize_urls`/`identify_removed_content`, `google_dorker.generate_dorks`,
   and `generate_report`'s markdown assembly + backtick-fence injection guard.
 - `03-exploit-development` — only the model-artifact scanner was hardened.
-- `16-ai-llm-security` — HTTP/dependency/redirect paths reviewed, but
-  prompt-injection, MCP, RAG, and consumption tests were not adversarially tested.
+- `16-ai-llm-security` — DEEPENED 2026-11-16: all 5 tester scripts now have an
+  87-test matrix (`tests/test_ai_llm_security.py`). The scripts each ship a
+  `--demo` self-test but pytest never ran them, so their pure detection logic
+  had no standing regression coverage; this pass read all five adversarially and
+  locked the logic-bearing units. No crash bug was found (unlike the three
+  prior skills) — the scripts are well-built and demo-backed; coverage was the
+  gap, not correctness. Covered: prompt_injection_tester `judge` precedence
+  (canary > refusal > weak-leak > partial), list-indexing `dotted_get`,
+  deterministic `mutate_payload`, `run_best_of_n` stop-at-first-SUCCESS /
+  error-recorded-not-propagated / full-budget, SUCCESS-only `export_findings`
+  (indirect-channel HIGH vs direct MEDIUM); unbounded_consumption_tester every
+  `check_*` via a monkeypatched module-global `_post` (oversized accept/reject/
+  timeout, logprobs key-substring recursion, max_tokens accept/reject, rate-limit
+  header present/absent) + exposed-only `export_findings`; model_supply_chain
+  `scan_pickle_bytes` GLOBAL/REDUCE detection on a real `__reduce__` pickle (note:
+  `os.system` pickles as `nt.system` on Windows — both in DANGEROUS_MODULES),
+  `_verdict_from_findings` escalation, `.npy` routing (object-dtype `|O` delegates
+  to the pickle scanner, plain `<f8` skipped, non-npy flagged), GGUF Jinja-gadget
+  detection INCLUDING the benign-template guard (a present-but-benign chat_template
+  must report a finding yet NOT the substring "gadget pattern", or every GGUF with
+  any template would misclassify as DANGEROUS), the `_gguf_skip_value` oversized-
+  array ValueError guard, and DANGEROUS-only `export_findings`; mcp_security_tester
+  full-schema-poisoning `scan_tool_schema` (caps-directive + credential-path flagged,
+  lowercase "important:" benign, nested param description scanned), word-boundary
+  `detect_tool_shadowing` (override-language + other-tool-name vs bare benign mention),
+  `diff_against_baseline` changed/new/removed/unchanged, exact-alias
+  `check_cve_fingerprint` (version-matched / patched / unversioned-name-only /
+  `@scope/` normalization / unknown→[]), `check_token_passthrough` via a
+  monkeypatched `send_jsonrpc` (accepted→exposed, 401→safe, error→inconclusive),
+  and confirmed-only `export_findings`; rag_security_tester list-indexing
+  `dotted_get`, strict float-embedding shape (`[0.1]*300` matches, int arrays and
+  short arrays don't) + nested `_find_embedding_arrays`, hidden-unicode + citation-
+  drift checks, `_vtuple`/`_match_branch_patch`/`check_cve_fingerprint`
+  (milvus branch-patch + anythingllm exact-version), word-boundary
+  `_classify_confirmation` (cannot/yesterday don't false-match), two-tenant canary
+  leakage + param-swap-inconclusive, membership-inference member/decoy routing,
+  and positive-verdict-only `export_findings`.
 - `vuln-chain-composer` — import + generated-PoC safety improved; correlation,
   impact scoring, and arbitrary chain generation remain lightly verified. May
   still emit TODO placeholder steps for some chain shapes.
