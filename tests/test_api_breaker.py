@@ -384,6 +384,113 @@ class ApiBreakerScopeTests(unittest.TestCase):
         self.assertIn(("GET", "/admin", "Bearer regular-user"), requests)
         self.assertTrue(all(method == "GET" for method, _, _ in requests))
 
+    def test_rate_limit_header_bypass_candidate_runs_over_loopback_http(self):
+        counts = {}
+        requests = []
+        success_body = '{"ok":true,"message":"fixture accepted"}'
+        limited_body = '{"ok":false,"message":"fixture throttled"}'
+
+        class FixtureHandler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                forwarded_ip = self.headers.get("X-Forwarded-For")
+                bucket = forwarded_ip or "default"
+                counts[bucket] = counts.get(bucket, 0) + 1
+                status = 200 if counts[bucket] <= 2 else 429
+                body = success_body if status == 200 else limited_body
+                requests.append((bucket, status))
+                encoded = body.encode("utf-8")
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(encoded)))
+                self.end_headers()
+                self.wfile.write(encoded)
+
+            def log_message(self, _format, *_args):
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), FixtureHandler)
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        url = f"http://127.0.0.1:{server.server_port}/login"
+        try:
+            findings = rate_limiter.test_rate_limit_bypass(url)
+        finally:
+            server.shutdown()
+            server.server_close()
+            worker.join(timeout=2)
+
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0]["type"], "rate_limit_bypass_candidate")
+        self.assertFalse(findings[0]["validated"])
+        self.assertEqual(findings[0]["bypass_header"], "X-Forwarded-For")
+        self.assertEqual(requests[:3], [("default", 200), ("default", 200), ("default", 429)])
+        self.assertTrue(requests[3][0].startswith("10."))
+        self.assertEqual(requests[3][1], 200)
+        self.assertEqual(requests[4], ("default", 429))
+
+    def test_graphql_rate_limit_batching_runs_over_loopback_http(self):
+        requests = []
+        singles = 0
+
+        class FixtureHandler(BaseHTTPRequestHandler):
+            def _send(self, status, document):
+                body = json.dumps(document).encode("utf-8")
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_POST(self):
+                nonlocal singles
+                length = int(self.headers.get("Content-Length", "0"))
+                request_data = json.loads(self.rfile.read(length).decode("utf-8"))
+                if isinstance(request_data, list):
+                    requests.append(("array", len(request_data)))
+                    self._send(200, [
+                        {"data": {"__typename": "Query"}} for _ in request_data
+                    ])
+                    return
+
+                query = request_data["query"]
+                if "q0:" in query:
+                    alias_count = query.count("__typename")
+                    requests.append(("aliases", alias_count))
+                    self._send(200, {"data": {
+                        f"q{index}": "Query" for index in range(alias_count)
+                    }})
+                    return
+
+                singles += 1
+                requests.append(("single", singles))
+                if singles == 1:
+                    self._send(200, {"data": {"__typename": "Query"}})
+                else:
+                    self._send(429, {"errors": [{"message": "fixture throttled"}]})
+
+            def log_message(self, _format, *_args):
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), FixtureHandler)
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        url = f"http://127.0.0.1:{server.server_port}/graphql"
+        try:
+            findings = rate_limiter.test_graphql_batching(url, baseline_max=5)
+        finally:
+            server.shutdown()
+            server.server_close()
+            worker.join(timeout=2)
+
+        self.assertEqual(
+            [finding["type"] for finding in findings],
+            ["graphql_batch_rate_limit_bypass_candidate", "graphql_alias_rate_limit_bypass_candidate"],
+        )
+        self.assertTrue(all(finding["validated"] is False for finding in findings))
+        self.assertEqual(requests, [
+            ("single", 1), ("single", 2), ("array", 52), ("aliases", 52),
+        ])
+
     def test_authz_delay_parser_rejects_nonfinite_negative_and_excessive_values(self):
         self.assertEqual(authz_tester.parse_delay("0"), 0)
         self.assertEqual(authz_tester.parse_delay("60"), 60)
@@ -657,14 +764,29 @@ class ApiBreakerScopeTests(unittest.TestCase):
             )
         self.assertEqual(findings, [])
 
-    def test_coupon_acceptance_is_unverified_candidate_not_confirmed_vulnerability(self):
-        with patch.object(logic_tester, "http_request", return_value=(200, {}, '{"message": "success"}')):
+    def test_coupon_generic_success_and_request_echo_are_not_stack_evidence(self):
+        with patch.object(
+            logic_tester, "http_request",
+            return_value=(200, {}, '{"message":"success","coupons":["TEST1","TEST2"]}'),
+        ) as request:
             findings = logic_tester.test_coupon_stacking(
                 "https://api.example.test/orders", "POST", {}, delay=0
             )
-        self.assertTrue(findings)
+
+        self.assertEqual(findings, [])
+        self.assertEqual(request.call_count, 5)  # all active payload cases still ran
+
+    def test_coupon_explicit_multi_applied_collection_is_candidate_only(self):
+        body = '{"data":{"appliedCoupons":["TEST1","TEST2"]}}'
+        with patch.object(logic_tester, "http_request", return_value=(200, {}, body)):
+            findings = logic_tester.test_coupon_stacking(
+                "https://api.example.test/orders", "POST", {}, delay=0
+            )
+
+        self.assertEqual(len(findings), 5)
         self.assertTrue(all(f["type"] == "coupon_stacking_candidate" for f in findings))
         self.assertTrue(all(f["severity"] == "INFO" and not f["validated"] for f in findings))
+        self.assertTrue(all(f["applied_entry_count"] == 2 for f in findings))
 
     def test_negative_amount_success_is_unverified_candidate(self):
         with patch.object(logic_tester, "http_request", return_value=(200, {}, '{"transaction_id": "t-1"}')):

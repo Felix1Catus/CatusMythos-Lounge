@@ -393,8 +393,17 @@ def test_rate_limit_bypass(url, extra_headers=None, delay=0):
             "header-bypass comparison is inconclusive")
         return findings
 
+    tested_rotating_headers = set()
     for bypass in BYPASS_HEADERS:
         bypass_name = list(bypass.keys())[0]
+        # Each entry for a rotating header runs the same generated IP
+        # sequence; the configured literal is overwritten below. Avoid
+        # replaying that identical sequence and emitting duplicate evidence.
+        if bypass_name in IP_ROTATION_HEADERS:
+            if bypass_name in tested_rotating_headers:
+                continue
+            tested_rotating_headers.add(bypass_name)
+
         headers = dict(bypass)
         if extra_headers:
             headers.update(extra_headers)

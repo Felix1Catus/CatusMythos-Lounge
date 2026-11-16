@@ -20,6 +20,62 @@ from response_safety import safe_response_preview
 
 
 MUTATING_METHODS = {"POST", "PUT", "PATCH"}
+
+
+def _explicit_applied_coupon_collection(body):
+    """Find an explicit applied-coupon collection with at least two entries.
+
+    Generic 2xx responses, mentions of "success", and echoes of request keys
+    such as ``coupons`` are not evidence that multiple discounts were applied.
+    This returns only a low-confidence response signal; it does not prove a
+    changed total or persisted business state.
+    """
+    try:
+        document = json.loads(body)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return None
+
+    applied_keys = {
+        "appliedcoupon", "appliedcoupons", "applieddiscount",
+        "applieddiscounts", "applieddiscountcodes", "appliedcouponcount",
+        "applieddiscountcount", "discountsapplied", "couponcodesapplied",
+        "numberofappliedcoupons",
+    }
+    pending = [document]
+    while pending:
+        current = pending.pop()
+        if isinstance(current, dict):
+            for key, value in current.items():
+                normalized_key = "".join(ch for ch in str(key).casefold() if ch.isalnum())
+                if normalized_key in applied_keys:
+                    if isinstance(value, list):
+                        entry_count = sum(
+                            1 for item in value
+                            if (isinstance(item, str) and item.strip())
+                            or (isinstance(item, dict) and bool(item))
+                            or (isinstance(item, (int, float)) and not isinstance(item, bool))
+                        )
+                    elif isinstance(value, dict):
+                        entry_count = sum(
+                            1 for key, item in value.items()
+                            if str(key).strip() and item is not None and item is not False
+                        )
+                    elif isinstance(value, int) and not isinstance(value, bool):
+                        entry_count = value
+                    else:
+                        entry_count = 0
+                    if entry_count >= 2:
+                        return {
+                            "application_field": str(key),
+                            "applied_entry_count": entry_count,
+                        }
+                if isinstance(value, (dict, list)):
+                    pending.append(value)
+        elif isinstance(current, list):
+            pending.extend(item for item in current if isinstance(item, (dict, list)))
+    return None
+
+
 def classify_endpoints(endpoints):
     """Classify endpoints by likely business function."""
     classified = {
@@ -265,15 +321,20 @@ def test_coupon_stacking(url, method, auth_headers, delay=0):
             time.sleep(delay)
 
         if status in (200, 201):
-            lower_body = body.lower()
-            if any(kw in lower_body for kw in ["discount", "applied", "coupon", "success"]):
+            evidence = _explicit_applied_coupon_collection(body)
+            if evidence:
                 warn(f"Coupon stacking candidate: response suggests handling for {test['name']} on {url}")
                 findings.append({
                     "type": "coupon_stacking_candidate",
                     "severity": "INFO",
                     "confidence": "low",
                     "validated": False,
-                    "evidence": "A 2xx response referenced coupon/discount handling; stacked discounts and persisted totals are unverified.",
+                    "evidence": (
+                        "A 2xx JSON response returned at least two entries in an explicit "
+                        "applied-coupon/discount collection; the calculated total and "
+                        "persisted business state remain unverified."
+                    ),
+                    **evidence,
                     "test_name": test["name"],
                     "url": url,
                     "method": method,

@@ -295,10 +295,13 @@ off-origin endpoints. It actively sends price, quantity, privilege, coupon,
 negative-amount, and concurrent race payloads using POST/PUT/PATCH. Use only
 with explicit authorization and target-approved test accounts/data; the
 script does not add a second write opt-in, so these probes run when selected.
-Response echoes, keyword matches, successful negative-value requests, and
-multiple concurrent 2xx responses are reported as low-confidence candidates.
-Verify a persisted state change and compare it with a safe baseline before
-reporting impact. This follows the business-specific impact model in
+Response echoes, successful negative-value requests, and multiple concurrent
+2xx responses remain low-confidence candidates. Coupon-stacking candidates
+now require a JSON response with at least two entries in an explicit
+applied-coupon/discount collection; a generic success message or echo of the
+submitted `coupons` field is not stack evidence. Verify the calculated total
+and persisted state against a safe baseline before reporting impact. This
+follows the business-specific impact model in
 [OWASP API6](https://api-security.owasp.org/editions/2023/en/0xa6-unrestricted-access-to-sensitive-business-flows/).
 
 Context-aware tests:
