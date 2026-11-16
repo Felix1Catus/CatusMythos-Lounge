@@ -412,3 +412,38 @@ read-back, report-shape coverage, and JWT RS/PS relabel review).
 Code and regression changes are commit
 `81733eee577420a8b3efebfb3117b691393a2f85` on `main`; verification and this
 record are being carried forward as separate documentation commits.
+
+---
+
+## Follow-up addendum — BOLA sessions and authz evidence output (2026-11-16)
+
+The BOLA cross-user request builder copied the one optional `--cookie` header
+to both User A and User B while also sending distinct bearer tokens. This
+could authenticate User B's request as User A and invalidate the cross-user
+comparison. `--cookie` now belongs to User A; the new `--cookie-b` belongs to
+User B, and User A's cookie is omitted from User B when the second cookie is
+not supplied. Shared non-cookie headers still apply to both. The authz CLI
+also now rejects non-finite, negative, and over-60-second delays before any
+target request.
+
+Authorization findings previously included raw 200-character response
+snippets. The authz tool now redacts common credential, key, cookie, and PII
+fields from JSON, redacts inline email/JWT/bearer/key-value patterns, and
+omits non-JSON bodies while retaining their length. Object-ID extraction uses
+an iterative walk and handles deep JSON without Python recursion failure.
+
+A local `ThreadingHTTPServer` fixture exercises actual HTTP requests for the
+User A collection read, User B exact-object read, anonymous denial, regular
+user `/admin` GET candidate, and default GET-only behavior. Other regressions
+cover cookie isolation with and without `--cookie-b`, CLI delay rejection,
+preview redaction, and deep JSON. The API-breaker test file has **65 tests**;
+full verification passed **539 tests + 47 subtests**, Ruff, compileall,
+shared-helper sync, CLI docs (**10 skill docs / 95 command references / 58
+CLIs**), and `git diff --check`. Focused authz coverage passed **81 tests + 31
+subtests**. Integration contacted only the loopback fixture; no live external
+API was contacted.
+
+Code changes are commits `90d4fadda5ca21bfa5575f261ed32199986bc18c` and
+`585ffa2b38aba78625e83a4eec2af2e1de3637b0` on `main`. Similar raw preview
+fields in `auth_analyzer.py`, `logic_tester.py`, and `mass_assignment.py` are
+not yet reviewed and remain open.

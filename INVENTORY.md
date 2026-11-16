@@ -38,11 +38,11 @@ checked by `tests/test_plugin_bootstrap_hook.py` and the same matrix.
 | Coverage | Skills |
 |---|---|
 | Broad script-level regression matrices | `recon-dominator` (59), `cloud-pivot-finder` (38), `attack-path-architect` (28), `16-ai-llm-security` (87), `03-exploit-development` (14), `vuln-chain-composer` (63), legacy `webapp-exploit-hunter` testers (60) |
-| Focused or partial coverage | `api-breaker` (59 focused scope/discovery/business-logic/GraphQL/BOLA/BFLA/auth-analyzer regressions); `webapp-exploit-hunter` browser/crawler/DOM and selected CLI paths; `web-cache-auditor` (8 tests for its script) |
+| Focused or partial coverage | `api-breaker` (65 focused scope/discovery/business-logic/GraphQL/BOLA/BFLA/auth-analyzer regressions); `webapp-exploit-hunter` browser/crawler/DOM and selected CLI paths; `web-cache-auditor` (8 tests for its script) |
 | Plugin infrastructure | `tests/test_bootstrap.py` (30): parsing, install command construction, retry/cache validation, browser setup, PATH readiness, and nonzero preflight gates |
 | No scripts (manual methodology) | `web-protocol-auditor` |
 
-The full suite most recently passed **533 tests plus 38 subtests**. It includes
+The full suite most recently passed **539 tests plus 47 subtests**. It includes
 local-fixture browser integration with Playwright/Chromium, bootstrap
 regressions, and the new API-breaker matrix. The strict bootstrap preflight also
 passed on the current Windows host. Coverage is uneven:
@@ -92,7 +92,7 @@ specific fixes, test themes, browser limitations, and the latest verification.
 - **Scope controls:** `--active`, `--submit-forms`, `--callback-url`,
   `--allow-destructive-poc`, `--skip-lfi-chains`; HTTPS-verified default.
 
-### api-breaker — `[59 FOCUSED REGRESSIONS; STILL PARTIAL]`
+### api-breaker — `[65 FOCUSED REGRESSIONS; STILL PARTIAL]`
 - **Use:** API security from domains — discover REST/GraphQL/SOAP, rebuild
   schemas, test BOLA/IDOR, BFLA, mass assignment, JWT, rate-limit bypass, logic.
 - **CLIs (8 + `_common`):** `api_discovery`, `schema_builder` (1814 ln),
@@ -103,15 +103,19 @@ specific fixes, test themes, browser limitations, and the latest verification.
   `logic_tester`, bounded rate-test counts, active-probe preservation, duplicate
   single-endpoint submissions, candidate-confidence/report mapping, GraphQL
   query-name/input bounds and evidence classifications, nested-field candidate
-  handling, plus the explicit-cookie/canary requirements for active GraphQL
-  CSRF GET/form submits and opt-in active mutation writes.
+  handling, User A/User B cookie isolation, bounded authz delay, safe authz
+  response previews, iterative ID extraction, and a local HTTP BOLA/BFLA
+  workflow fixture. Active GraphQL CSRF GET/form submits still require the
+  explicit cookie/canary, and mutation writes remain opt-in.
   `tests/test_targeted_audit_fixes.py` covers hostile imports and write gating
   in `auth_analyzer`, `authz_tester`, and `mass_assignment`. This is not a full
   per-script matrix: JWT attack cases still need isolated HTTP integration and
   RS/PS relabel review; GraphQL has offline regressions but no real HTTP
-  integration; BOLA/BFLA integration, rate-limit bypass/batching,
+  integration; BOLA/BFLA has local loopback integration but no live API
+  integration; rate-limit bypass/batching,
   business-state read-back, and broad report input shapes remain lightly tested
-  or untested.
+  or untested. Raw response previews in `auth_analyzer`, `logic_tester`, and
+  `mass_assignment` still need sensitivity review/redaction.
 - **Scope controls:** explicit trusted `--api-base` for imported endpoints in
   schema, auth, authz, mass assignment, rate-limit, and business-logic testing;
   off-origin imported endpoints are skipped. `--allow-mutation-write` gates

@@ -6,7 +6,21 @@ doesn't mistake uneven coverage for uniform coverage.
 
 ## Current state
 
-- Latest code pass: `81733eee577420a8b3efebfb3117b691393a2f85`
+- Latest code pass: `585ffa2b38aba78625e83a4eec2af2e1de3637b0`
+  (`Sanitize authz evidence and handle deep JSON`), following
+  `90d4fadda5ca21bfa5575f261ed32199986bc18c` (`Isolate BOLA user sessions and
+  verify authz flows`), both on `main`. The authz CLI now keeps User A's
+  `--cookie` separate from User B's `--cookie-b`, bounds `--delay` to finite
+  0–60 seconds, redacts common credentials/PII from JSON response previews, and
+  omits non-JSON bodies. Object-ID extraction is iterative and handles deeply
+  nested JSON. A real loopback HTTP fixture exercises User A collection read,
+  User B exact-object GET, regular-user admin GET, and GET-only default.
+  API-breaker matrix **65 tests**; full suite **539 tests + 47 subtests**.
+  Focused authz tests passed **81 tests + 31 subtests**. Ruff, compileall,
+  helper sync, CLI docs (**10 / 95 / 58**), and diff check passed. Integration
+  contacted only a local fixture; no live external API was contacted.
+
+- Previous GraphQL code pass: `81733eee577420a8b3efebfb3117b691393a2f85`
   (`Harden GraphQL probe evidence and inputs`), on `main`. GraphQL depth,
   fragment-cycle, introspection-naming, and nested-field authorization
   responses that lack impact/ownership proof are now explicitly unverified
@@ -20,6 +34,10 @@ doesn't mistake uneven coverage for uniform coverage.
   CLI docs (**10 / 95 / 58**), and `git diff --check` passed. All API requests
   in the new tests are mocked; no live targets were contacted. Real GraphQL
   HTTP integration remains unverified.
+
+- Verification at the GraphQL code state: **533 tests + 38 subtests**;
+  the GraphQL regressions were all offline/mocked. See the dated GraphQL
+  addendum below; the new local authz HTTP fixture is a separate follow-up.
 
 - Previous JWT expiry fix: `0f58b5e8a4fa6a2531bd459215f37e85c544fc7b`
   (`Handle malformed JWT expiry values`), pushed to `origin/main` on
@@ -121,6 +139,12 @@ doesn't mistake uneven coverage for uniform coverage.
   candidate-input handling; downgraded unverified depth/authz/fragment
   acceptance signals to candidates without disabling their active probes;
   added 12 regressions.
+- `90d4fadda5ca21bfa5575f261ed32199986bc18c` — stopped sharing User A's
+  session cookie with User B in BOLA probes, added separate `--cookie-b`,
+  bounded authz CLI delay, and added a local HTTP BOLA/BFLA integration test.
+- `585ffa2b38aba78625e83a4eec2af2e1de3637b0` — redacted common sensitive
+  JSON fields and inline secrets from authz response previews, omitted
+  non-JSON bodies, and made object-ID extraction iterative for deep JSON.
 - Verification at the `61aae43` code state: **441 tests + 21 subtests** passed;
   Ruff, compileall, CLI docs (`10/94/58`), and shared-helper sync passed. The
   browser feature has a real local Chromium fixture run. The focused PATH_INFO
@@ -220,6 +244,37 @@ doesn't mistake uneven coverage for uniform coverage.
   full suite: **533 tests + 38 subtests**. Ruff, compileall, helper sync, CLI
   docs (**10 / 95 / 58**), and diff check passed. All new target-facing tests
   were mocked. No live target or real GraphQL HTTP integration was used.
+- **BOLA/BFLA local-integration and session-isolation follow-up (2026-11-16,
+  code commit `90d4fadda5ca21bfa5575f261ed32199986bc18c`):** found that the
+  single `--cookie` was copied into both User A and User B headers while
+  testing with separate bearer tokens. User B could therefore be authenticated
+  as User A and produce misleading cross-user evidence. Added `--cookie-b`;
+  User B receives only that cookie when supplied, and never inherits User A's
+  cookie. Shared non-cookie headers still apply to both users. Bounded
+  `authz_tester.py --delay` to finite 0–60 seconds. A real loopback HTTP fixture
+  now exercises the collection read as User A, exact-object GET as User B,
+  denied anonymous read, regular-user `/admin` GET candidate, and verifies that
+  default authorization testing sends only GETs. The selected mutating probes
+  remain active under the existing explicit `--allow-mutation-write` gate.
+  API-breaker matrix: **63 tests**; full suite: **537 tests + 47 subtests**.
+  Focused authz tests passed **79 tests + 31 subtests**; Ruff, compileall,
+  helper sync, CLI docs (**10 / 95 / 58**), and diff check passed. Network
+  integration used only the loopback fixture. No live API was contacted.
+- **Authz evidence-output follow-up (2026-11-16, code commit
+  `585ffa2b38aba78625e83a4eec2af2e1de3637b0`):** authorization findings
+  previously stored raw 200-character response bodies, which could place
+  credential or personal-data values in JSON reports. JSON previews now redact
+  common password/token/key/cookie/contact fields plus inline email/JWT/bearer
+  and key-value secrets; non-JSON/HTML response bodies are replaced with an
+  omission marker and length. Object IDs remain available for correlation.
+  `extract_object_ids()` now walks nested arrays/objects iteratively and safely
+  handles non-text and deeply nested JSON. Added regressions for nested secret
+  redaction, non-JSON omission, deep IDs, and invalid bodies. API-breaker matrix:
+  **65 tests**; full suite: **539 tests + 47 subtests**. Focused authz tests:
+  **81 tests + 31 subtests**. Ruff, compileall, helper sync, CLI docs
+  (**10 / 95 / 58**), and diff check passed. No live external target was
+  contacted. Similar raw `response_preview` fields in `auth_analyzer.py`,
+  `logic_tester.py`, and `mass_assignment.py` remain to be audited.
 - The browser auditor has now had a **real Playwright/Chromium integration run**
   against a local fixture (passive, active query, active fragment via both
   `innerHTML` and `document.write`, and form submission all exercised). Two bugs
@@ -577,7 +632,7 @@ browser `--active`, or `--submit-forms` behavior.
    uploads.
 2. **Inventory structure — coverage refreshed; structural map still needs
    review if skills, CLIs, dependencies, or plugin references move.** Inventory
-   now includes bootstrap behavior and the 59 focused API-breaker regressions.
+   now includes bootstrap behavior and the 65 focused API-breaker regressions.
 3. **Bootstrap + task preflight — implemented; deeper OS-specific install
    validation remains open.** Missing Python dependencies, Chromium, Go, Go
    recon tools, and allowlisted system tools are actively installed through
@@ -596,10 +651,16 @@ browser `--active`, or `--submit-forms` behavior.
    only partially audited. GraphQL depth/authz/CSRF response-confidence and
    input-bound work now has an offline regression pass, but still needs
    isolated HTTP integration and review of target-specific ownership/read-back
-   behavior. JWT has 47 focused offline regressions but still needs isolated
-   HTTP integration and review of the RS/PS relabel hypothesis. Next prioritize
-   BOLA/BFLA integration, rate-limit bypass/batching, business-state read-back,
-   and report input shapes. Also continue the remaining browser
+   behavior. BOLA/BFLA request wiring now has a local HTTP fixture pass and
+   separate User A/User B cookie handling, but no live API test; continue
+   reviewing ownership evidence and state-changing write/read-back behavior.
+   JWT has 47 focused offline regressions but still needs isolated HTTP
+   integration and review of the RS/PS relabel hypothesis. Authz preview
+   redaction is implemented; audit the remaining raw previews in
+   `auth_analyzer.py`, `logic_tester.py`, and `mass_assignment.py`. Next
+   prioritize rate-limit bypass/batching, business-state read-back, and report
+   input shapes. Also continue the
+   remaining browser
    scope/state/redaction edge cases and live-protocol methodology. Ground changes
    in primary-source research, bounded active probes, explicit evidence/confidence
    rules, and regression coverage. The matrices above do not prove complete
