@@ -118,9 +118,46 @@ finding-confidence, PoC-generation safety.
   `_classify_confirmation` (cannot/yesterday don't false-match), two-tenant canary
   leakage + param-swap-inconclusive, membership-inference member/decoy routing,
   and positive-verdict-only `export_findings`.
-- `vuln-chain-composer` — import + generated-PoC safety improved; correlation,
-  impact scoring, and arbitrary chain generation remain lightly verified. May
-  still emit TODO placeholder steps for some chain shapes.
+- `vuln-chain-composer` — DEEPENED 2026-11-16: all 7 scripts now have a 63-test
+  matrix (`tests/test_vuln_chain_composer.py`). One real, significant bug found
+  and fixed: `import_findings.normalize_finding` derived `category` as
+  `vuln_type.split("_")[0]`, so the pipeline's own multi-word types normalized to
+  "reflected"/"error"/"subdomain"/"open"/"public"/"attack" — none of which equal
+  the "xss"/"sqli"/"takeover"/"redirect"/"bucket"/"attack_path" keys that
+  `correlate.py`'s named `CHAIN_TEMPLATES` and `build_chains.py`'s
+  `EXPLOIT_TECHNIQUES` both match on. Result: 6 of the ~12 named chain templates
+  (and every multi-word type's specific exploit technique) silently never fired —
+  verified end-to-end that two `reflected_xss` findings on sibling subdomains
+  produced ZERO chains. Fixed with a canonical `_derive_category` keyword map
+  (most-specific first: two-token `attack_path` before single keywords; `ssrf`
+  before `xxe` so `xxe_ssrf` lands on its SSRF-primitive category), falling back
+  to the original split[0] for unmapped types; single-word categories (ssrf/idor/
+  blockedcve/info) are unchanged, and the `id` field (which uses `type`) is
+  untouched, so existing importer tests still pass. The TODO lines in
+  `generate_chain_poc` are inside the *generated* PoC scaffold (intentional
+  operator-fills-in design), not a bug. Covered: `_derive_category` (every broken
+  multi-word case + single-word unchanged + xxe_ssrf precedence + fallback),
+  `normalize_finding` (severity upper-casing, domain extraction, chainable_as for
+  sqli/xss, the unvalidated-xss-candidate → empty-chainable gate, ssrf-allowlist/
+  cvehypothesis/idor `requires` tagging, cross-cutting WAF-blob requirement),
+  `load_findings_from_file` (basic list, subdomain_takeover_scan shape, malformed-
+  entry skipping, filename type inference); correlate's evidence helpers
+  (`get_parent_domain`, `_significant_tokens`, `_credential_evidence_present` real-
+  credential-vs-username, `_cloud_metadata_evidence_present`,
+  `_auth_system_evidence_present`, `_agent_enables_precondition` reachable+overlap,
+  `_redirect_unlocks_ssrf` named-host, `_org_membership`/`_waf_bypass`/
+  `_scope_violation`), `find_chains` (the XSS template now firing post-fix, and the
+  confirmed/unconfirmed gate: an unconfirmed Info-Disclosure category match stays
+  at the primary severity, NOT amplified — the documented CVSS-10.0-on-a-username-
+  disclosure false positive), `discover_generic_chains` (capability overlap +
+  exclude_pairs dedup); calculate_impact CVSS v3.1 against known vectors (9.8/10.0/
+  0.0/6.1), `build_vector`, and the confidence-gated amplification (confirmed →
+  rule override CRITICAL, unconfirmed → heuristic, IDOR → PR:L); build_chains
+  `get_technique` (known/default/fallback) and `build_detailed_chain` (phase
+  ordering, feasibility bounds, user-interaction detection); generate_chain_poc
+  shell-safe `generate_curl_command` + `generate_python_poc` AST-compilability
+  even with hostile chain metadata; and generate_report `get_remediation`/
+  `get_vrt`/ascii diagram/HackerOne + Bugcrowd (P1/VRT) formatters.
 - `web-protocol-auditor` — manual methodology skill, no automated protocol tests.
 - Legacy web active testers (LFI/upload/auth/race/SQLi/SSRF/SSTI) — targeted
   fixes only, no full per-script test matrix.

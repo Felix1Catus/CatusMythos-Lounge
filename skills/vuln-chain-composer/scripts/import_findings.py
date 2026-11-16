@@ -99,6 +99,35 @@ OWASP_MAP = {
 }
 
 
+# Canonical top-level categories that correlate.py's named chain TEMPLATES and
+# build_chains.py's EXPLOIT_TECHNIQUES table both key on. The naive
+# `vuln_type.split("_")[0]` derivation used for `category` below produced
+# "reflected"/"error"/"subdomain"/"open"/"public"/"attack" for the pipeline's
+# own multi-word types (reflected_xss, error_based_sqli, subdomain_takeover,
+# open_redirect, public_bucket, attack_path_*), none of which equal the
+# "xss"/"sqli"/"takeover"/"redirect"/"bucket"/"attack_path" keys those two
+# downstream modules match on -- so 6 of the ~12 named chain templates (and
+# every multi-word type's specific exploit technique) silently never fired.
+# Verified: two reflected_xss findings on sibling subdomains produced ZERO
+# chains before this. Checked most-specific-first (the two-token "attack_path"
+# before single keywords; "ssrf" before "xxe" so the xxe_ssrf SSRF-primitive
+# variant lands on "ssrf", matching its chainable_as treatment in correlate.py)
+# so a type can't mis-tag. Falls back to the original split[0] token for any
+# type that matches no canonical category.
+_CATEGORY_KEYWORDS = [
+    "attack_path", "sqli", "ssti", "ssrf", "xss", "idor",
+    "takeover", "bucket", "redirect", "upload", "lfi", "xxe", "jwt", "info",
+]
+
+
+def _derive_category(vuln_type):
+    low = (vuln_type or "").lower()
+    for keyword in _CATEGORY_KEYWORDS:
+        if keyword in low:
+            return keyword
+    return vuln_type.split("_")[0] if "_" in vuln_type else vuln_type
+
+
 def normalize_finding(finding, source_tool):
     """Normalize a finding to common format."""
     vuln_type = finding.get("type", "unknown")
@@ -137,7 +166,7 @@ def normalize_finding(finding, source_tool):
     normalized = {
         "id": f"{vuln_type}_{domain}_{param}".replace(".", "_").replace("/", "_")[:100],
         "type": vuln_type,
-        "category": vuln_type.split("_")[0] if "_" in vuln_type else vuln_type,
+        "category": _derive_category(vuln_type),
         "severity": severity,
         "confidence": finding.get("confidence", ""),
         "owasp": owasp,
