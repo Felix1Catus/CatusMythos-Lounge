@@ -7,6 +7,7 @@ Author: orizon.one
 
 import argparse
 import json
+import math
 import re
 import time
 import urllib.request
@@ -38,6 +39,16 @@ OBJECT_ID_RESOURCES = {
     "users", "accounts", "orders", "items", "products", "posts", "messages",
     "documents", "files", "tickets",
 }
+
+
+def parse_delay(value):
+    try:
+        delay = float(value)
+    except (TypeError, ValueError) as exc:
+        raise argparse.ArgumentTypeError("delay must be a number") from exc
+    if not math.isfinite(delay) or not 0 <= delay <= 60:
+        raise argparse.ArgumentTypeError("delay must be finite and between 0 and 60 seconds")
+    return delay
 
 
 def extract_object_ids(body):
@@ -131,7 +142,7 @@ def build_initial_object_url(base_url, endpoint_url):
 
 def test_bola(
     base_url, endpoints, token_a, token_b=None, extra_headers=None, delay=0,
-    allow_mutation_write=False,
+    allow_mutation_write=False, cookie_b=None,
 ):
     """Test for Broken Object Level Authorization (BOLA/IDOR)."""
     log("Testing for BOLA (Broken Object Level Authorization)...")
@@ -145,7 +156,10 @@ def test_bola(
     if token_b:
         headers_b = {"Authorization": token_b if " " in token_b else f"Bearer {token_b}"}
         if extra_headers:
-            headers_b.update(extra_headers)
+            headers_b.update({key: value for key, value in extra_headers.items()
+                              if key.lower() != "cookie"})
+        if cookie_b:
+            headers_b["Cookie"] = cookie_b
 
     # Phase 1: Get objects owned by user A
     tested = 0
@@ -379,9 +393,11 @@ def main():
     parser.add_argument("--output", "-o", help="Output JSON file")
     parser.add_argument("--token", required=True, help="User A auth token")
     parser.add_argument("--token-b", help="User B auth token (for BOLA cross-user testing)")
-    parser.add_argument("--cookie", help="Session cookie")
+    parser.add_argument("--cookie", help="User A session cookie")
+    parser.add_argument("--cookie-b", help="User B session cookie (never reuses User A's cookie)")
     parser.add_argument("--api-base", required=True, help="Trusted API base URL for endpoint scoping")
-    parser.add_argument("--delay", type=float, default=0, help="Delay between requests (seconds)")
+    parser.add_argument("--delay", type=parse_delay, default=0,
+                        help="Delay between requests (0-60 seconds)")
     parser.add_argument(
         "--allow-mutation-write",
         action="store_true",
@@ -423,6 +439,7 @@ def main():
     bola_findings = test_bola(
         base_url, endpoints, args.token, args.token_b, extra_headers, args.delay,
         allow_mutation_write=args.allow_mutation_write,
+        cookie_b=args.cookie_b,
     )
     all_findings.extend(bola_findings)
 

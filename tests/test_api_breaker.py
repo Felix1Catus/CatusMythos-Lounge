@@ -5,8 +5,10 @@ import importlib.util
 import json
 import sys
 import tempfile
+import threading
 import unittest
 from contextlib import ExitStack
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
@@ -317,6 +319,138 @@ class ApiBreakerScopeTests(unittest.TestCase):
         ))
         self.assertTrue(findings)
         self.assertTrue(all(item["type"].endswith("_candidate") for item in findings))
+
+    def test_authz_bola_and_bfla_gets_run_against_loopback_fixture(self):
+        requests = []
+
+        class FixtureHandler(BaseHTTPRequestHandler):
+            def _send(self, status, document):
+                body = json.dumps(document).encode("utf-8")
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_GET(self):
+                authorization = self.headers.get("Authorization")
+                requests.append((self.command, self.path, authorization))
+                if self.path == "/v1/users" and authorization == "Bearer user-a":
+                    self._send(200, {"users": [{"id": "object-7"}]})
+                elif self.path == "/v1/users/object-7" and authorization == "Bearer user-b":
+                    self._send(200, {"id": "object-7", "owner": "user-a"})
+                elif self.path == "/v1/users/object-7" and authorization is None:
+                    self._send(403, {"error": "authentication required"})
+                elif self.path == "/admin" and authorization == "Bearer regular-user":
+                    self._send(200, {"section": "admin dashboard fixture"})
+                else:
+                    self._send(404, {"error": "not found"})
+
+            def log_message(self, _format, *_args):
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), FixtureHandler)
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        base_url = f"http://127.0.0.1:{server.server_port}"
+        try:
+            bola_findings = authz_tester.test_bola(
+                base_url,
+                [{"url": f"{base_url}/v1/users", "path": "/v1/users"}],
+                "user-a",
+                token_b="user-b",
+            )
+            bfla_findings = authz_tester.test_bfla(base_url, "regular-user")
+        finally:
+            server.shutdown()
+            server.server_close()
+            worker.join(timeout=2)
+
+        self.assertTrue(any(
+            finding["type"] == "bola" and finding["access"] == "different_user"
+            and finding["object_id"] == "object-7"
+            for finding in bola_findings
+        ))
+        self.assertTrue(any(
+            finding["type"] == "bfla_candidate" and finding["path"] == "/admin"
+            for finding in bfla_findings
+        ))
+        self.assertIn(("GET", "/v1/users/object-7", "Bearer user-b"), requests)
+        self.assertIn(("GET", "/admin", "Bearer regular-user"), requests)
+        self.assertTrue(all(method == "GET" for method, _, _ in requests))
+
+    def test_authz_delay_parser_rejects_nonfinite_negative_and_excessive_values(self):
+        self.assertEqual(authz_tester.parse_delay("0"), 0)
+        self.assertEqual(authz_tester.parse_delay("60"), 60)
+        for value in ("nan", "inf", "-0.1", "60.1", "oops"):
+            with self.subTest(value=value), self.assertRaises(argparse.ArgumentTypeError):
+                authz_tester.parse_delay(value)
+
+    def test_bola_never_reuses_user_a_cookie_for_user_b(self):
+        endpoint = {"url": "https://api.example.test/v1/users", "path": "/v1/users"}
+
+        for cookie_b, expected_cookie_b in (("session=user-b", "session=user-b"), (None, None)):
+            requests = []
+
+            def record_request(url, method="GET", headers=None, **_kwargs):
+                requests.append((url, headers or {}))
+                return 200, {}, '{"users":[{"id":"42"}],"id":"42"}'
+
+            with patch.object(authz_tester, "http_request", side_effect=record_request):
+                authz_tester.test_bola(
+                    "https://api.example.test", [endpoint], "user-a", token_b="user-b",
+                    extra_headers={"Cookie": "session=user-a", "X-Tenant": "acme"},
+                    delay=0, cookie_b=cookie_b,
+                )
+
+            user_a_headers = next(
+                headers for url, headers in requests
+                if url == endpoint["url"] and headers.get("Authorization") == "Bearer user-a"
+            )
+            user_b_headers = next(
+                headers for url, headers in requests
+                if url.endswith("/v1/users/42")
+                and headers.get("Authorization") == "Bearer user-b"
+            )
+            self.assertEqual(user_a_headers.get("Cookie"), "session=user-a")
+            self.assertEqual(user_b_headers.get("Cookie"), expected_cookie_b)
+            self.assertEqual(user_b_headers.get("X-Tenant"), "acme")
+            self.assertTrue(all(
+                not headers.get("Cookie") for _, headers in requests
+                if "Authorization" not in headers
+            ))
+
+    def test_authz_cli_routes_distinct_cookies_and_rejects_invalid_delay(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "authz.json"
+            argv = [
+                "authz_tester.py", "--api-base", "https://api.example.test",
+                "--token", "token-a", "--token-b", "token-b",
+                "--cookie", "session=a", "--cookie-b", "session=b",
+                "--output", str(output_path),
+            ]
+            with ExitStack() as stack:
+                stack.enter_context(patch.object(sys, "argv", argv))
+                bola_probe = stack.enter_context(patch.object(
+                    authz_tester, "test_bola", return_value=[]
+                ))
+                stack.enter_context(patch.object(authz_tester, "test_bfla", return_value=[]))
+                authz_tester.main()
+
+        self.assertEqual(bola_probe.call_args.kwargs["cookie_b"], "session=b")
+        self.assertEqual(bola_probe.call_args.args[4], {"Cookie": "session=a"})
+
+        for invalid_delay in ("nan", "inf", "-1", "61"):
+            with self.subTest(invalid_delay=invalid_delay), patch.object(
+                sys,
+                "argv",
+                ["authz_tester.py", "--api-base", "https://api.example.test",
+                 "--token", "token-a", "--delay", invalid_delay],
+            ), patch.object(authz_tester, "http_request") as request:
+                with self.assertRaises(SystemExit) as error:
+                    authz_tester.main()
+            self.assertEqual(error.exception.code, 2)
+            request.assert_not_called()
 
     def test_bola_recognizes_uuid_object_endpoint(self):
         object_id = "550e8400-e29b-41d4-a716-446655440000"

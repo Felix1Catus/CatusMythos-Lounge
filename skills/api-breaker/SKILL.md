@@ -171,7 +171,7 @@ injection sleep is limited to 1-10 seconds.
 ### Step 4: Authorization Testing (BOLA/BFLA)
 
 ```bash
-python3 scripts/authz_tester.py --input {schema_file} --api-base {api_url} --token {user_token}
+python3 scripts/authz_tester.py --input {schema_file} --api-base {api_url} --token {user_a_token} --token-b {user_b_token}
 ```
 
 **BOLA (Broken Object-Level Authorization):**
@@ -192,6 +192,11 @@ Supply `--api-base` explicitly as the trusted target origin. Imported file
 metadata is not used to select a target. Endpoint URLs are restricted to the
 exact scheme, host, and effective port in `--api-base`; off-origin entries are
 skipped before credentials are sent.
+
+For cross-user BOLA checks, `--cookie` belongs to User A and `--cookie-b`
+belongs to User B. If `--cookie-b` is omitted, User B's requests do not inherit
+User A's cookie; other shared custom headers still apply to both. The
+inter-request `--delay` is bounded to a finite 0–60 seconds.
 
 These are active requests to the authorized API, not passive observations.
 OpenAPI-style object path parameters are replaced with a bounded seed ID
