@@ -36,6 +36,9 @@ doesn't mistake uneven coverage for uniform coverage.
     SPA settle behavior for the browser auditor.
 - `3aa2f62` — refreshed this handover/inventory and added two PATH_INFO
   regressions for status `0` and propagation of unexpected request exceptions.
+- `db2c900c1238fa12980056d4c9ad4555001f4043` — installed and verified
+  required tooling in bootstrap; added managed strict/narrow preflight,
+  regression tests, and the dated audit/handover updates.
 - Verification at the `61aae43` code state: **441 tests + 21 subtests** passed;
   Ruff, compileall, CLI docs (`10/94/58`), and shared-helper sync passed. The
   browser feature has a real local Chromium fixture run. The focused PATH_INFO
