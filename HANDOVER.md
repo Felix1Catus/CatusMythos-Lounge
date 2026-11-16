@@ -80,7 +80,18 @@ finding-confidence, PoC-generation safety.
   HTTP-Server/X-Powered-By + OS hints) and `detect_waf`, wayback
   `categorize_urls`/`identify_removed_content`, `google_dorker.generate_dorks`,
   and `generate_report`'s markdown assembly + backtick-fence injection guard.
-- `03-exploit-development` — only the model-artifact scanner was hardened.
+- `03-exploit-development` — DEEPENED 2026-11-16: the skill is a single script
+  (`scripts/payload_generator.py`; the earlier "only the model-artifact scanner
+  was hardened" note was stale — that scanner lives in 16-ai-llm-security, not
+  here). Added a 14-test matrix (`tests/test_exploit_development.py`). No new bug
+  found — the two documented syntax fixes (the Perl reverse shell's extra
+  closing brace; the PowerShell `{{`/`}}` literal-brace handling) were already in
+  place and are now locked by regression tests (brace-balance assertions + the
+  base64 `-enc` UTF-16LE round-trip). Also covers the advertised==implemented
+  payload-type invariant, per-language filtering, lhost/lport interpolation,
+  PowerShell-only-on-windows gating, the windows/linux cmd_exec split, and the
+  static web-shell/XSS/SQLi payload sets. The `--demo` self-test is now exercised
+  by pytest (`_run_demo` returns 0).
 - `16-ai-llm-security` — DEEPENED 2026-11-16: all 5 tester scripts now have an
   87-test matrix (`tests/test_ai_llm_security.py`). The scripts each ship a
   `--demo` self-test but pytest never ran them, so their pure detection logic
