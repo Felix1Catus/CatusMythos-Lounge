@@ -31,12 +31,26 @@ finding-confidence, PoC-generation safety.
 **Shallowest / highest bug-risk — prioritize these:**
 - `cloud-pivot-finder`, `attack-path-architect` — mostly repo-wide lint/timestamp
   and shared-helper coverage; little domain-specific end-to-end testing.
-- `recon-dominator` — DEEPENED 2026-11-16: `cve_lookup` version-range matching
-  and `active_recon`'s Sitting-Ducks SOA delegation verdict now have a 27-test
-  matrix, and two real `cve_lookup` bugs were fixed (prose "before/prior to/< X"
-  treated as inclusive -> false positive on the fixed version; trailing-period
-  version strings). Still lightly covered: OSINT, port-scan, js_recon,
-  google_dorker, wayback, generate_report.
+- `recon-dominator` — FULLY DEEPENED 2026-11-16: every script now has
+  regression coverage (58-test matrix in `tests/test_recon_dominator.py`).
+  `cve_lookup` version-range matching and `active_recon`'s Sitting-Ducks SOA
+  delegation verdict were covered first, with two real `cve_lookup` bugs fixed
+  (prose "before/prior to/< X" treated as inclusive -> false positive on the
+  fixed version; trailing-period version strings). Second pass added coverage
+  for the cve_lookup-feeding parsers and fixed two more bugs:
+  - `js_recon.find_sourcemap_url` fallback produced `app.js?v=1.map` for
+    cache-busted script URLs (always 404s, silently skips source-map
+    recovery) -- now strips query/fragment before appending `.map`.
+  - `tech_fingerprint.extract_versioned_components` crashed on a `None` body
+    -- now guarded.
+  Covered units: `extract_versioned_components` (WP ?ver= plugin/theme/core
+  logic incl. the 2-agreeing-matches core rule), js_recon pure functions
+  (`maybe_url`, `extract_endpoints`, `extract_api_calls`, `normalize_template`,
+  `find_sourcemap_url`, `get_next_build_id`, `find_referenced_chunks`,
+  `extract_script_urls`), `port_scanner.parse_service_version` (SSH/FTP/SMTP/
+  HTTP-Server/X-Powered-By + OS hints) and `detect_waf`, wayback
+  `categorize_urls`/`identify_removed_content`, `google_dorker.generate_dorks`,
+  and `generate_report`'s markdown assembly + backtick-fence injection guard.
 - `03-exploit-development` — only the model-artifact scanner was hardened.
 - `16-ai-llm-security` — HTTP/dependency/redirect paths reviewed, but
   prompt-injection, MCP, RAG, and consumption tests were not adversarially tested.

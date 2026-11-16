@@ -166,7 +166,14 @@ def find_sourcemap_url(js_text, js_url):
     m = SOURCEMAP_COMMENT_RE.search(js_text)
     if m:
         return urllib.parse.urljoin(js_url, m.group(1))
-    return js_url + ".map"  # standard fallback convention
+    # Standard fallback convention: `app.js` -> `app.js.map`. Strip any
+    # query/fragment first, otherwise a cache-busted `app.js?v=1` becomes
+    # `app.js?v=1.map` -- a URL that always 404s, silently skipping the
+    # source-map recovery that the whole fallback exists to attempt.
+    split = urllib.parse.urlsplit(js_url)
+    return urllib.parse.urlunsplit(
+        split._replace(path=split.path + ".map", query="", fragment="")
+    )
 
 
 def recover_sourcemap(map_url, timeout=15):

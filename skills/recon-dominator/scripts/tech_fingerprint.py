@@ -171,6 +171,7 @@ def extract_versioned_components(body):
     query strings. One entry per unique (name, version) pair -- a plugin's
     own assets are usually all pinned to the same version, so this
     naturally de-dupes without losing anything."""
+    body = body or ""
     seen = set()
     components = []
 
