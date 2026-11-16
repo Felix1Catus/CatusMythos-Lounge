@@ -34,6 +34,10 @@ HTTP_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"]
 
 # Common IDOR test IDs
 TEST_IDS = ["1", "2", "0", "100", "999", "1000", "admin"]
+OBJECT_ID_RESOURCES = {
+    "users", "accounts", "orders", "items", "products", "posts", "messages",
+    "documents", "files", "tickets",
+}
 
 
 def extract_object_ids(body):
@@ -49,7 +53,10 @@ def extract_object_ids(body):
             for key, val in obj.items():
                 if key.lower() in ("id", "uid", "user_id", "userid", "account_id",
                                     "accountid", "order_id", "orderid", "object_id"):
-                    ids.add(str(val))
+                    if val is not None and not isinstance(val, (bool, dict, list)):
+                        object_id = str(val)
+                        if object_id and len(object_id) <= 200 and not any(ord(c) < 32 for c in object_id):
+                            ids.add(object_id)
                 walk(val)
         elif isinstance(obj, list):
             for item in obj:
@@ -77,10 +84,41 @@ def find_id_endpoints(base_url, endpoints):
         if re.search(r'/\d+(?:/|$)', path) or re.search(r'/\{[^}]+\}', path):
             id_endpoints.append(ep)
         # Match common resource/id patterns
-        elif re.search(r'/(?:users|accounts|orders|items|products|posts|messages|documents|files|tickets)/\w+', path):
+        elif re.search(
+            r'/(?:users|accounts|orders|items|products|posts|messages|documents|files|tickets)/[^/?#]+(?:/|$)',
+            path,
+        ):
             id_endpoints.append(ep)
 
     return id_endpoints
+
+
+def object_id_from_path(path):
+    """Extract a concrete ID following a known collection segment."""
+    parts = [segment for segment in urllib.parse.urlsplit(path).path.split("/") if segment]
+    for index, segment in enumerate(parts[:-1]):
+        if segment.lower() in OBJECT_ID_RESOURCES:
+            candidate = urllib.parse.unquote(parts[index + 1])
+            if candidate and not (candidate.startswith("{") and candidate.endswith("}")):
+                return candidate
+    if parts and parts[-1].isdigit():
+        return parts[-1]
+    return None
+
+
+def build_object_url(base_url, endpoint_url, object_id, is_id_endpoint=False):
+    """Build an object URL without duplicating existing IDs or losing queries."""
+    parsed = urllib.parse.urlsplit(endpoint_url)
+    encoded_id = urllib.parse.quote(str(object_id), safe="")
+    path = parsed.path or "/"
+
+    if re.search(r"\{[^{}]+\}", path):
+        path = re.sub(r"\{[^{}]+\}", lambda _match: encoded_id, path)
+    elif not is_id_endpoint:
+        path = path.rstrip("/") + "/" + encoded_id
+
+    candidate = urllib.parse.urlunsplit(parsed._replace(path=path, fragment=""))
+    return same_origin_url(base_url, candidate)
 
 
 def test_bola(
@@ -104,6 +142,7 @@ def test_bola(
     # Phase 1: Get objects owned by user A
     tested = 0
     methods_to_test = HTTP_METHODS if allow_mutation_write else ["GET"]
+    id_endpoints = find_id_endpoints(base_url, endpoints)
     for ep in endpoints:
         candidate = (ep.get("url") or ep.get("path", "")) if isinstance(ep, dict) else ep
         url = same_origin_url(base_url, candidate)
@@ -112,6 +151,7 @@ def test_bola(
             continue
         path = ep.get("path", "") if isinstance(ep, dict) else str(ep)
         path = path or urllib.parse.urlsplit(url).path
+        is_id_endpoint = ep in id_endpoints
 
         # Get resources as User A
         status_a, _, body_a = http_request(url, headers=headers_a)
@@ -123,15 +163,20 @@ def test_bola(
 
         # Extract IDs from response
         ids_found = extract_object_ids(body_a)
+        path_object_id = object_id_from_path(path) if is_id_endpoint else None
+        if path_object_id:
+            ids_found = {path_object_id}
         if not ids_found:
             continue
 
         log(f"Found {len(ids_found)} object IDs at {path}")
 
         # Phase 2: Try accessing those IDs from User B (or no auth)
-        for obj_id in list(ids_found)[:5]:
-            # Build URL with ID
-            id_url = url.rstrip("/") + f"/{obj_id}"
+        for obj_id in sorted(ids_found)[:5]:
+            id_url = build_object_url(base_url, url, obj_id, is_id_endpoint=is_id_endpoint)
+            if not id_url:
+                warn(f"Skipping object ID that cannot be kept on the API origin: {obj_id!r}")
+                continue
 
             for method in methods_to_test:
                 # Test with User B token

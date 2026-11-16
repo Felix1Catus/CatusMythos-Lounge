@@ -31,9 +31,77 @@ rate_limiter = load_api_script("api_breaker_rate_regressions", "rate_limiter.py"
 schema_builder = load_api_script("api_breaker_schema_regressions", "schema_builder.py")
 api_discovery = load_api_script("api_breaker_discovery_regressions", "api_discovery.py")
 api_report = load_api_script("api_breaker_report_regressions", "api_report.py")
+authz_tester = load_api_script("api_breaker_authz_regressions", "authz_tester.py")
 
 
 class ApiBreakerScopeTests(unittest.TestCase):
+    def test_bola_object_urls_replace_templates_and_preserve_query(self):
+        base = "https://api.example.test"
+        self.assertEqual(
+            authz_tester.build_object_url(
+                base, "https://api.example.test/api/users?active=true", "a/b ?"
+            ),
+            "https://api.example.test/api/users/a%2Fb%20%3F?active=true",
+        )
+        self.assertEqual(
+            authz_tester.build_object_url(
+                base, "https://api.example.test/api/users/{user_id}?active=true", "42"
+            ),
+            "https://api.example.test/api/users/42?active=true",
+        )
+
+    def test_bola_does_not_append_second_id_to_object_endpoint(self):
+        endpoint = {"url": "https://api.example.test/api/users/42", "path": "/api/users/42"}
+        calls = []
+
+        def record_request(url, method="GET", headers=None, **kwargs):
+            calls.append(url)
+            return 200, {}, '{"id": 42}'
+
+        with patch.object(authz_tester, "http_request", side_effect=record_request):
+            authz_tester.test_bola(
+                "https://api.example.test", [endpoint], "user-a", token_b="user-b", delay=0
+            )
+
+        self.assertIn("https://api.example.test/api/users/42", calls)
+        self.assertNotIn("https://api.example.test/api/users/42/42", calls)
+
+    def test_bola_recognizes_uuid_object_endpoint(self):
+        object_id = "550e8400-e29b-41d4-a716-446655440000"
+        endpoint_url = f"https://api.example.test/api/users/{object_id}"
+        endpoint = {"url": endpoint_url, "path": f"/api/users/{object_id}"}
+        calls = []
+
+        def record_request(url, method="GET", headers=None, **kwargs):
+            calls.append(url)
+            return 200, {}, '{"id": "550e8400-e29b-41d4-a716-446655440000"}'
+
+        with patch.object(authz_tester, "http_request", side_effect=record_request):
+            authz_tester.test_bola(
+                "https://api.example.test", [endpoint], "user-a", token_b="user-b", delay=0
+            )
+
+        self.assertIn(endpoint_url, calls)
+        self.assertNotIn(f"{endpoint_url}/{object_id}", calls)
+
+    def test_bola_collection_id_keeps_existing_query_parameters(self):
+        endpoint = {"url": "https://api.example.test/api/users?mine=true", "path": "/api/users"}
+        calls = []
+
+        def record_request(url, method="GET", headers=None, **kwargs):
+            calls.append(url)
+            if url == endpoint["url"]:
+                return 200, {}, '{"users": [{"id": 42}]}'
+            return 403, {}, ""
+
+        with patch.object(authz_tester, "http_request", side_effect=record_request):
+            authz_tester.test_bola(
+                "https://api.example.test", [endpoint], "user-a", token_b="user-b", delay=0
+            )
+
+        self.assertIn("https://api.example.test/api/users/42?mine=true", calls)
+        self.assertFalse(any("mine=true/42" in url for url in calls))
+
     def test_javascript_discovery_fetches_only_same_origin_script_urls(self):
         html = (
             '<script src="/static/app.js"></script>'
