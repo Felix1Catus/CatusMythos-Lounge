@@ -489,6 +489,27 @@ class TestUploadStackDetect(unittest.TestCase):
         self.assertEqual(info["stack_guess"], "apache")
         self.assertFalse(info["path_info_permissive"])
 
+    def test_transport_failure_is_not_permissive(self):
+        def fake(url, method="GET", data=None, headers=None, timeout=10):
+            if "__orizon_probe__" in url:
+                return 0, {}, "connection failed", 0.1
+            return 200, {"Server": "nginx"}, "x", 0.1
+
+        with patched(upload, "http_request", fake):
+            info = upload.detect_php_handler_stack("https://t.test/", {})
+        self.assertEqual(info["stack_guess"], "nginx+fpm")
+        self.assertFalse(info["path_info_permissive"])
+
+    def test_unexpected_request_error_is_not_silently_swallowed(self):
+        def fake(url, method="GET", data=None, headers=None, timeout=10):
+            if "__orizon_probe__" in url:
+                raise RuntimeError("unexpected request-layer error")
+            return 200, {"Server": "nginx"}, "x", 0.1
+
+        with patched(upload, "http_request", fake):
+            with self.assertRaisesRegex(RuntimeError, "unexpected request-layer error"):
+                upload.detect_php_handler_stack("https://t.test/", {})
+
 
 # ---------------------------------------------------------------------------
 # xss_tester

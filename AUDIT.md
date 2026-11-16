@@ -93,3 +93,33 @@ The audit did not deeply review every skill to the same depth. `HANDOVER.md`
 lists which skills got the deepest automated coverage and which remain
 lightly verified. Do not read this record as implying uniform review or a
 bug-free repository.
+
+---
+
+## Follow-up addendum — 2026-11-16
+
+The `da46b1d` head and pre-browser verification above are historical snapshots.
+The subsequent `main` history includes browser-auditor hardening and local
+Chromium integration, a structural skill inventory, regression matrices across
+the previously shallow skills, and fixes to recon, cloud, attack-path, chain,
+and race-PoC behavior. The verified code head before this documentation/test
+follow-up was `61aae43f2d1051f75e125132a654d780c3b22bf3` (`origin/main` matched
+it at pickup). See `HANDOVER.md` for the full commit lineage and per-skill
+findings; see `INVENTORY.md` for the refreshed coverage map.
+
+At that code head, the complete suite passed **441 tests + 21 subtests** and
+the browser auditor was exercised with Playwright/Chromium against a local
+fixture (passive observations, off-origin/WebSocket controls, active query and
+fragment DOM execution, and form submission). Two additional upload PATH_INFO
+regressions were added in the follow-up: status `0` is non-permissive and
+unexpected request-layer exceptions are not silently swallowed. The refreshed
+complete suite then passed **443 tests + 21 subtests**. Ruff, compileall, CLI
+documentation validation (**10 skill docs / 95 command references / 58 CLIs**),
+shared-helper synchronization, and `git diff --check` passed in the same
+Windows environment with Python 3.14.8, pytest 9.1.1, Ruff 0.17.5, and Playwright
+1.65.1 with Chromium installed. No live targets were contacted.
+
+These checks improve coverage but do not establish that the repository is
+bug-free or that every skill has exhaustive end-to-end coverage. The remaining
+gaps and browser policy limitations are maintained in `HANDOVER.md` and
+`INVENTORY.md`.

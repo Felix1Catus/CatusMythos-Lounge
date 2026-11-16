@@ -6,20 +6,71 @@ doesn't mistake uneven coverage for uniform coverage.
 
 ## Current state
 
-- `main` head: `da46b1ddc15110feaf220bdd3cccf5d1e4b4e234` (pushed to `origin/main`).
-- Lineage since the audit baseline `73162b0`:
-  - `caed91e` — audit/hardening batch (see `AUDIT.md`).
-  - `6695fcf` — isolated browser runtime security auditor.
-  - `da46b1d` — integrated the local deep-payload LFI + ImageTragick work onto
-    the audited base (3-way merge of a local branch; see commit body).
-- Verification: 105 unit tests + 21 subtests pass; Ruff clean; compileall ok;
-  CLI-docs 10/94/58; shared helpers in sync.
+- Verified starting head for this continuation: `61aae43f2d1051f75e125132a654d780c3b22bf3`
+  on local `main`, with `origin/main` matching and a clean tree before the
+  focused PATH_INFO review. This handover/test update is being committed as a
+  descendant; use `git log -1` for the exact post-update tip.
+- Full lineage since the audit baseline `73162b06b8458155cdf4113b810da3be6d8e6039`
+  (chronological; all were present on `origin/main` at pickup):
+  - `caed91e` — broad audit and hardening batch (details in `AUDIT.md`).
+  - `6695fcf` — added isolated Playwright browser runtime auditor.
+  - `da46b1d` — integrated deep LFI + ImageTragick work onto the audited base.
+  - `0f2ce3c` — added this handover and the dated audit addendum.
+  - `fb1a102`, `f870a85` — fixed browser WebSocket URL redaction and
+    `postMessage` observation; hardened form-POST authorization, request
+    budgets, and cookie-domain filtering.
+  - `d9f7513` — added `INVENTORY.md`; fixed the stale hooks path in
+    `requirements.txt`.
+  - `0008e0e`, `2445562` — deepened recon coverage and fixed CVE version-range,
+    cache-busted source-map, and `None`-body handling bugs.
+  - `90116f8` — cloud-pivot-finder matrix and S3 region-hint crash fix.
+  - `085df31` — attack-path-architect matrix and tech-merge `NameError` fix.
+  - `87c1403` — AI/LLM test matrix across five testers.
+  - `802be7b` — fixed chain category derivation that silently suppressed
+    multi-word vulnerability chains; added vuln-chain matrix.
+  - `92354a7` — exploit-development payload-generator matrix.
+  - `d68009c` — legacy web tester matrix and race-PoC thread-count fix; this
+    continuation adds two PATH_INFO regressions, bringing that matrix to 60.
+  - `61aae43` — fragment img fallback, form-probe fallback, and configurable
+    SPA settle behavior for the browser auditor.
+- Verification at the `61aae43` code state: **441 tests + 21 subtests** passed;
+  Ruff, compileall, CLI docs (`10/94/58`), and shared-helper sync passed. The
+  browser feature has a real local Chromium fixture run. This continuation
+  added two PATH_INFO regressions and reran the complete suite: **443 passed +
+  21 subtests**. Ruff and compileall are clean; CLI docs now report
+  **10 skill docs / 95 command references / 58 CLIs**; shared helpers are in
+  sync. Chromium and the test/lint stack were installed and verified in this
+  Windows environment. These are local-fixture/offline checks, not live-target
+  testing.
 - The browser auditor has now had a **real Playwright/Chromium integration run**
   against a local fixture (passive, active query, active fragment via both
   `innerHTML` and `document.write`, and form submission all exercised). Two bugs
   were found and fixed (see below). `tests/test_browser_security_auditor.py`
   adds pure-function coverage plus a Chromium-gated live test that skips cleanly
   when the browser is absent.
+
+## Established per-skill workflow
+
+For each skill deepening pass:
+1. Inventory its scripts, skill guide, current tests, dependencies, and scope
+   controls; compare documented CLI usage with the actual commands.
+2. Read the implementation closely and identify concrete bug risks and
+   testable pure units. Separate a real bug from missing coverage or a
+   documented heuristic.
+3. Fix confirmed bugs. Where network code is entangled, introduce a narrow
+   injectable seam so regression tests can mock requests without weakening the
+   real active-testing behavior.
+4. Add a per-skill regression matrix, including boundaries and negative cases.
+   Keep tests offline or on loopback fixtures unless browser integration is
+   specifically required and locally isolated.
+5. Install and verify the required tools before running dependent checks. Run
+   the full pytest suite, Ruff, compileall, and relevant CLI/helper/manifest
+   checks. Do not describe skipped or partial validation as complete.
+6. Update `HANDOVER.md`, `INVENTORY.md`, and dated `AUDIT.md` addenda with what
+   was inspected, what changed, verification, and remaining uncertainty.
+7. Commit one logical chunk with the configured author identity, push to
+   `origin main`, verify the remote SHA and final tree, and report the full
+   commit SHA. Never rewrite pushed history.
 
 ## Depth of review so far (self-reported by the audit author, not yet
 independently re-verified line by line)
@@ -28,7 +79,8 @@ independently re-verified line by line)
 crawler discovery, redirect scope, selected imported-API data handling, XSS
 finding-confidence, PoC-generation safety.
 
-**Shallowest / highest bug-risk — prioritize these:**
+**Areas deepened since the prior handover (coverage is regression depth, not a
+claim that every behavior is exhaustively validated):**
 - `cloud-pivot-finder` — DEEPENED 2026-11-16: all 7 scripts now have a 38-test
   matrix (`tests/test_cloud_pivot_finder.py`). `takeover_scanner` was refactored
   to expose a pure `classify_takeover` (network injected) so the fingerprint
@@ -214,27 +266,33 @@ finding-confidence, PoC-generation safety.
 
 ## Browser auditor (`webapp-exploit-hunter/scripts/browser_security_auditor.py`)
 Known-weak / unverified areas to review and add regression tests for:
-- **Request policy:** allows all same-origin GET/HEAD, blocks off-origin, allows
-  one in-scope POST (by method/origin/path) while a form submit is pending.
-  An in-scope GET can still mutate state (incl. a GET form action); the
-  skip-list only filters crawled links.
+- **Request policy:** allows all same-origin GET/HEAD, blocks off-origin, and
+  permits an in-scope POST only for a pending form's document navigation. An
+  in-scope GET can still mutate state (including a GET form action); the
+  state-changing path skip-list only filters crawled links. The PATH_INFO
+  fingerprint below is also a coarse status heuristic, not a vulnerability
+  finding.
 - **Form POST authorization:** the pending-submit grant is not bound to the exact
-  query string, form identity, resource type, or body. A same-origin POST to the
-  same path during the window could consume the grant before the form's own
-  request. Snapshot/reload can reorder controls, so stored indices need
-  revalidation.
-- **WebSockets:** `route_web_socket` closes sockets rather than forwarding; not
-  counted against the HTTP budget; `redact_url()` only accepts HTTP(S) so
-  `ws://`/`wss://` report URLs become `[invalid-url]`.
-- **Storage state:** localStorage origins filtered by exact canonical origin, but
-  cookie domains allowed on suffix-match (permits parent-domain cookies), and
-  cookie `url` fields pass through without their own origin check.
+  query string, form identity, or body. Document-navigation binding prevents a
+  racing fetch/XHR from consuming it, but the grant remains broader than one
+  exact action URL. Snapshot/reload can reorder controls, so stored indices
+  still merit revalidation.
+- **WebSockets:** connections are intercepted and closed without upstream
+  connection or frame forwarding, and are counted separately from HTTP
+  requests. `ws://`/`wss://` URLs are now redacted/reported correctly. The
+  behavior is integration-tested in Chromium but should be checked against
+  other supported Playwright versions.
+- **Storage state:** localStorage origins are filtered by exact canonical origin,
+  but cookie domains allow multi-label parent-domain suffix matches. Single-label
+  parent domains are rejected, but this is not a public-suffix-list check;
+  cookie `url` fields pass through without their own origin validation.
 - **Redaction:** query/fragment stripped and bodies/values omitted, but URL
   paths, page titles, cookie names, and storage key names are retained and could
   themselves carry sensitive data.
-- **Budgets:** HTTP cap counts blocked requests too; WebSockets uncounted;
-  `max-pages` counts crawled docs, not probe/form pages (active mode can spawn up
-  to 10 extra pages per crawled page); form-submission count counts attempts,
+- **Budgets:** the HTTP cap counts requests allowed through; WebSockets are
+  counted separately and the stored socket list is bounded. `max-pages` counts
+  crawled documents, not temporary probe/form pages (active mode can create up
+  to 10 extra pages per crawled page). Form-submission count records attempts,
   not confirmed network writes.
 - **SPA timing:** RESOLVED 2026-11-16 — see "third browser pass" below
   (networkidle best-effort wait + `--settle-ms`).
@@ -262,7 +320,7 @@ testing.
   active query DOM-XSS (svg+img); active fragment DOM-XSS (svg fired via both
   `innerHTML` and `document.write` in the tested Chromium); form submission with
   marker execution; `/logout`-style links skipped.
-- **Fixed in `b-fix` commit:** (1) `redact_url` now reports `ws://`/`wss://`
+- **Fixed in `fb1a102` commit:** (1) `redact_url` now reports `ws://`/`wss://`
   socket URLs instead of `[invalid-url]`; (2) the wildcard-postMessage hook now
   uses `Object.defineProperty(window, 'postMessage', …)` — the previous
   `Window.prototype.postMessage` reassignment silently no-ops in Chromium, so
@@ -293,12 +351,22 @@ testing.
   async-rendered SPA DOM/forms. SKILL.md documents the variants and the flag.
 
 ## Open items
-1. DONE 2026-11-16 (img-variant fragment/form probes + `--settle-ms`/networkidle
-   settle — see the third browser pass above). Still worth a look: re-examine
-   the `upload_tester.py` PATH_INFO probe whose broad exception catch was
-   removed (unexpected exceptions now propagate).
-2. Build a full skill-by-skill inventory (intended use, CLIs, I/O, deps, tests,
-   scope controls, overlaps, gaps). None exists yet.
+1. **PATH_INFO review — completed 2026-11-16.** The shared
+   `http_request_timed` helper catches ordinary request/network exceptions and
+   returns status `0`; the detector explicitly classifies `0` and `404` as
+   non-permissive. The broad catch that was removed would have hidden
+   unexpected programming errors, so it should stay removed. Added regressions
+   for status `0` and unexpected exception propagation; no code bug was found.
+   Residual caveat: any other status (including 401/403/5xx) is a permissive
+   *heuristic* that only enables deeper tests; it is not itself reported as
+   RCE. Revisit the status policy if fixtures show excessive unnecessary
+   uploads.
+2. **Inventory — started, needs refresh.** `INVENTORY.md` exists from
+   `d9f7513`, but its test-coverage table and priority list still say several
+   skills have zero tests. Update it to reflect the matrices listed above and
+   keep its structural CLI/dependency/overlap map. **Coverage status was
+   refreshed in this continuation;** still verify the structural map against
+   the full current plugin if the directory or CLI surface changes.
 3. Revisit bootstrap + task preflight against "install required tools directly
    when feasible; don't run dependent checks with an incomplete stack." Current
    bootstrap installs Python deps + user-scoped Go tools, but only *reports*
@@ -306,8 +374,12 @@ testing.
    Chromium. Preserve Windows fixes: `python3`, LF line endings, `hooks/hooks.json`.
 4. Consolidate the five copied `_common.py` helpers? A sync check exists instead
    of consolidation. Map imports/CLI examples/plugin refs/tests before moving.
-5. Deepen the shallow skills above with primary-source research → test steps,
-   edge-case matrices, evidence/confidence rules, regression coverage.
+5. Continue skill deepening where meaningful gaps remain, especially
+   `api-breaker` paths not covered by the current partial tests, the remaining
+   browser scope/state/redaction edge cases, and live-protocol methodology.
+   Ground changes in primary-source research, bounded active probes, explicit
+   evidence/confidence rules, and regression coverage. The matrices above do
+   not prove complete coverage or absence of bugs.
 
 ## Standing constraints (don't re-introduce)
 - HTTPS verified by default; `CATUS_INSECURE_TLS=1` is the only opt-out.

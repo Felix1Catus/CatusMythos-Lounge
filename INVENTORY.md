@@ -4,7 +4,9 @@ Structural inventory of every skill: intended use, CLIs and their purpose,
 dependencies, test coverage, scope controls, integrations, overlaps, and the
 clearest coverage gaps. This is a map for prioritizing deeper per-skill review;
 it is not itself a line-by-line doc-vs-code audit (that happens per skill).
-Generated 2026-11-16 at `main` head `f870a85`.
+Inventory structure originated at `f870a85`. Coverage status refreshed
+2026-11-16 against code at `61aae43`, plus the two PATH_INFO tests added in the
+focused handover update (check `git log -1` for the current tip).
 
 ## Shape of the toolkit
 
@@ -29,27 +31,30 @@ orchestration), `standalone-advanced/hooks/`, `research_notes/`, `tests/`.
 
 | Coverage | Skills |
 |---|---|
-| Has tests (full or partial) | `webapp-exploit-hunter` (partial), `api-breaker` (partial), `vuln-chain-composer` (partial), `web-cache-auditor` (full for its one script) |
-| **Zero script tests** | `03-exploit-development`, `16-ai-llm-security`, `attack-path-architect`, `cloud-pivot-finder`, `recon-dominator` |
+| Broad script-level regression matrices | `recon-dominator` (58), `cloud-pivot-finder` (38), `attack-path-architect` (28), `16-ai-llm-security` (87), `03-exploit-development` (14), `vuln-chain-composer` (63), legacy `webapp-exploit-hunter` testers (60) |
+| Focused or partial coverage | `webapp-exploit-hunter` browser/crawler/DOM and selected CLI paths; `api-breaker`; `web-cache-auditor` (8 tests for its script) |
 | No scripts (manual methodology) | `web-protocol-auditor` |
 
-Tested scripts: `browser_security_auditor`, `dom_xss_auditor`, `crawler`,
-`cache_audit`, `_common` (redirect scope), `auth_tester`, `auth_analyzer`,
-`authz_tester`, `mass_assignment`, `sqli_tester`, `import_findings`,
-`generate_poc`, `xss_tester`, plus repo infra (`bootstrap`,
-`check_common_sync`, `check_skill_cli_docs`). **~15 of ~60 scripts.**
+The full suite most recently passed **443 tests plus 21 subtests**. It includes
+local-fixture browser integration with Playwright/Chromium. Coverage is uneven:
+these matrices emphasize logic and edge cases, and do not constitute end-to-end
+validation of every CLI or prove the absence of bugs. See `HANDOVER.md` for
+specific fixes, test themes, browser limitations, and the latest verification.
 
 ## Per-skill inventory
 
-### recon-dominator — `[ZERO TESTS]`
+### recon-dominator — `[58-TEST MATRIX; all scripts covered]`
 - **Use:** full-scope recon from a domain/list — subdomains, ports, tech
   fingerprint, OSINT, Google dorking, Wayback, JS/source-map recon.
 - **CLIs (10):** `passive_recon`, `active_recon`, `port_scanner`,
   `tech_fingerprint`, `osint_correlator`, `google_dorker`, `wayback_analyzer`,
   `cve_lookup`, `js_recon`, `generate_report`. Shares `_common.py` (109 ln).
 - **Deps:** stdlib; may shell out to user-scoped Go recon tools when present.
-- **Coverage:** none. Crawler/redirect tests live in `webapp-exploit-hunter`,
-  not here. **Gap:** no end-to-end exercise of recon/OSINT/CVE/port-scan/report.
+- **Coverage:** `tests/test_recon_dominator.py` covers all scripts' key parsers,
+  classifiers, source-map handling, CVE matching, WAF/service parsing, dork
+  generation, and report rendering. Includes fixes for prose version ranges,
+  trailing-period versions, cache-busted source-map URLs, and a `None` body.
+  The matrix is mostly unit-level; full live recon workflows remain unverified.
 - **Overlaps:** `cve_lookup` vs `vuln-chain` impact; `js_recon` endpoint
   discovery vs `webapp` crawler.
 
@@ -62,10 +67,14 @@ Tested scripts: `browser_security_auditor`, `dom_xss_auditor`, `crawler`,
   `upload_tester` (largest, 1201 ln), `race_tester`, `waf_bypass_tester`,
   `browser_security_auditor`, `generate_poc`, `vuln_report`. `_common.py` (162).
 - **Deps:** stdlib + playwright (browser auditor only).
-- **Coverage:** `browser_security_auditor` (full), `dom_xss_auditor` (full),
-  `crawler` (discovery), `_common` (redirect), `auth_tester`/`sqli_tester`/
-  `generate_poc`/`xss_tester` (partial, targeted-fix tests). **Untested:**
-  `idor`, `lfi`, `ssrf`, `ssti`, `race`, `upload`, `waf_bypass`, `vuln_report`.
+- **Coverage:** `tests/test_webapp_legacy_testers.py` adds a 60-test offline
+  matrix for LFI, upload, race, SSRF, SSTI, IDOR, XSS, and WAF-bypass logic;
+  network calls are mocked. Browser auditor has pure-function and local
+  Playwright/Chromium integration coverage; DOM reviewer, crawler, redirect
+  helper, and selected auth/SQLi/PoC/report paths have targeted coverage.
+  **Still partial:** auth_tester/sqli_tester network workflows, generate_poc,
+  vuln_report, browser state/redaction boundaries, and full multi-step upload
+  paths are not exhaustively exercised.
 - **Scope controls:** `--active`, `--submit-forms`, `--callback-url`,
   `--allow-destructive-poc`, `--skip-lfi-chains`; HTTPS-verified default.
 
@@ -82,35 +91,41 @@ Tested scripts: `browser_security_auditor`, `dom_xss_auditor`, `crawler`,
   methods), explicit trusted `--api-base` for imported endpoints, cross-origin
   imported endpoints skipped.
 
-### cloud-pivot-finder — `[ZERO TESTS]`
+### cloud-pivot-finder — `[38-TEST MATRIX; all 7 scripts covered]`
 - **Use:** map cloud infra from domains; external->internal pivot paths —
   provider detection, S3/GCS/Azure enum, subdomain takeover, serverless, CI/CD
   and IaC leaks, metadata pivot paths.
 - **CLIs (7 + `_common`):** `cloud_detector`, `bucket_enum`, `takeover_scanner`,
   `serverless_finder`, `cicd_finder`, `metadata_paths`, `cloud_report`.
-- **Coverage:** none (repo-wide lint/timestamp/helper only). **Gap:** no
-  domain-specific end-to-end tests. `bucket_enum` has a write-access test that
-  only touches a canary it created (ethic reused by `upload_tester`).
+- **Coverage:** `tests/test_cloud_pivot_finder.py` covers all seven scripts'
+  key classification, parsing, scope, and report logic. It fixes the empty
+  `<Region>` extraction crash and tests takeover false-positive exclusions,
+  including S3 account-regional names and edge-case platform confidence.
+  Full live cloud discovery is not covered.
 
-### attack-path-architect — `[ZERO TESTS]`
+### attack-path-architect — `[28-TEST MATRIX; all 5 scripts covered]`
 - **Use:** attack trees/kill chains from recon or domain input; MITRE ATT&CK
   mapping, chaining opportunities, trust relationships, prioritization.
 - **CLIs (5 + `_common`):** `classify_assets`, `map_trust`,
   `generate_attack_tree`, `mitre_mapper`, `engagement_planner`.
-- **Coverage:** none. **Gap:** no end-to-end tree/kill-chain validation.
+- **Coverage:** `tests/test_attack_path_architect.py` covers all five scripts'
+  key lookup, scoring, tree/path generation, exposure, trust-graph, and planning
+  behavior. It fixes a `NameError` in tech-fingerprint merging. Full end-to-end
+  engagement orchestration remains unverified.
 - **Overlaps:** prioritization/chaining logic overlaps `vuln-chain-composer`.
 
-### vuln-chain-composer — `[PARTIAL TESTS]`
+### vuln-chain-composer — `[63-TEST MATRIX; all 7 scripts covered]`
 - **Use:** correlate findings across domains into multi-step chains, compute
   chained impact, generate end-to-end PoCs + bug-bounty reports.
 - **CLIs (6 + `_common` 52 ln):** `import_findings` (771 ln), `correlate`,
   `build_chains`, `calculate_impact`, `generate_chain_poc`, `generate_report`.
-- **Coverage:** `import_findings` partial (confidence/chainability, malformed
-  input, candidate handling). **Untested:** `correlate`, `build_chains`,
-  `calculate_impact`, `generate_chain_poc`. May emit TODO placeholder steps for
-  some chain shapes.
+- **Coverage:** `tests/test_vuln_chain_composer.py` covers all seven scripts'
+  key normalization, evidence, chaining, CVSS, PoC, and report logic. It fixes
+  category derivation that suppressed multi-word finding chains. Some generated
+  chain PoCs intentionally contain operator-filled TODO scaffolds; arbitrary
+  chains are not guaranteed to become fully executable reproductions.
 
-### 16-ai-llm-security — `[ZERO TESTS]`
+### 16-ai-llm-security — `[87-TEST MATRIX; all 5 tester scripts covered]`
 - **Use:** LLM/AI app security — prompt injection, jailbreak, OWASP LLM Top 10,
   RAG/vector-store, MCP/agent tool-use, model supply chain, unbounded
   consumption.
@@ -119,15 +134,19 @@ Tested scripts: `browser_security_auditor`, `dom_xss_auditor`, `crawler`,
   `unbounded_consumption_tester`.
 - **Deps:** `requests` (HTTP to target API); `model_supply_chain` stdlib
   (bounded model/archive scanning, 64 MiB caps, streamed pickle opcodes).
-- **Coverage:** HTTP/dependency/redirect paths reviewed, but **no adversarial
-  tests** of prompt-injection, MCP, RAG, or consumption logic.
+- **Coverage:** `tests/test_ai_llm_security.py` adds regression coverage across
+  all five testers, including prompt verdicts, model-artifact parsing, MCP
+  schema/CVE/token checks, RAG leakage and membership checks, and consumption
+  limits. Tests use monkeypatched network seams; no live LLM providers were
+  contacted.
 
-### 03-exploit-development — `[ZERO TESTS]`
+### 03-exploit-development — `[14-TEST MATRIX; its single script covered]`
 - **Use:** PoC development + payload generation for a confirmed finding (CVE
   write-up -> working PoC; reverse/bind/web-shell delivery).
 - **CLI (1):** `payload_generator` (351 ln). Stdlib-only.
-- **Coverage:** none (generated-PoC safety hardening lives in `webapp`/`chain`
-  generators, not here).
+- **Coverage:** `tests/test_exploit_development.py` covers payload-type
+  consistency, platform/language filtering, interpolation, demo execution, and
+  generated syntax details including Perl braces and PowerShell encoding.
 
 ### web-cache-auditor — `[FULL TESTS for its script]`
 - **Use:** CDN/cache behavior — cache-key inputs, unkeyed header reflection,
@@ -175,10 +194,18 @@ protocol skills). Cosmetic, but a cleanup pass would make provenance consistent.
 (as `plugin.json` correctly declares). The stale comment was corrected.
 
 ## Prioritized gaps (for the deepening phase)
-1. **`recon-dominator`** — 10 CLIs, zero tests; foundational to the pipeline.
-2. **`cloud-pivot-finder`** — 7 CLIs, zero tests; high-impact pivots.
-3. **`16-ai-llm-security`** — large, untested adversarial logic (RAG/MCP).
-4. **`attack-path-architect`** — untested; overlaps `vuln-chain` correlation.
-5. **Untested `webapp` active testers** — `idor`, `ssrf`, `ssti`, `race`,
-   `upload`, `waf_bypass` have no per-script test matrix.
-6. **`vuln-chain-composer`** correlation/impact/chain-generation paths.
+1. **`api-breaker`** — several CLIs (`api_discovery`, `schema_builder`,
+   `rate_limiter`, `logic_tester`, `api_report`) still lack broad per-script
+   regression matrices; write-probe and imported-scope behavior needs continued
+   active, authorized validation.
+2. **`webapp-exploit-hunter`** — most legacy tester logic now has offline
+   coverage, but auth/SQLi network paths, generated reports, and chained upload
+   flows need deeper integration fixtures. Continue browser state/redaction and
+   form-authorization edge coverage.
+3. **`vuln-chain-composer`** — broad matrix added; continue testing unseen input
+   shapes and pipeline-level integration, especially arbitrary chain outputs.
+4. **Live workflow integration** — current matrices are mainly unit-level or
+   loopback fixtures. Exercise full authorized recon→test→import→chain→report
+   flows using local fixtures before claiming end-to-end coverage.
+5. **`web-protocol-auditor`** — manual methodology only; update against current
+   primary sources and validate its steps in an isolated lab where feasible.
