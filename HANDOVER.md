@@ -6,6 +6,18 @@ doesn't mistake uneven coverage for uniform coverage.
 
 ## Current state
 
+- Latest API-breaker follow-up: `9efbba5e7cbb7c6b816459f4dbca298fa40e6a79`
+  (`Fix BOLA object URL construction`),
+  pushed to `origin/main` on 2026-11-16. It wires the existing ID-endpoint
+  classifier into BOLA checks, preserves direct object URLs and query strings,
+  substitutes placeholders, encodes IDs, recognizes UUID-style IDs, and
+  rejects unusable response IDs. Four regression tests were added.
+- Latest verified suite at that code state: **504 tests + 21 subtests**;
+  Ruff, compileall, shared-helper sync, CLI docs (**10 / 95 / 58**), and
+  `git diff --check` passed. Ruff is available through `python3 -m ruff`;
+  the standalone command is not on this PowerShell PATH. No live targets
+  were contacted.
+
 - The bootstrap/preflight pass started from clean `main` at
   `3aa2f62090bce3f9e966cdd4361b58067d981d2b`. The API-breaker continuation
   started from clean `main`/`origin/main` at
@@ -46,6 +58,11 @@ doesn't mistake uneven coverage for uniform coverage.
   trusted origin, wired same-origin JavaScript discovery, corrected
   business-logic candidate confidence, and required an explicit cookie
   plus canary ID for active GraphQL CSRF submissions.
+- `461d52d6951460a46107c79e65adb23573088ab6` — recorded the API-breaker
+  continuation and its 26-test / 500-test verification checkpoint.
+- `9efbba5e7cbb7c6b816459f4dbca298fa40e6a79` — fixed BOLA object URL
+  construction, including direct numeric/UUID endpoints, collection query
+  preservation, placeholder substitution, and unsafe ID filtering.
 - Verification at the `61aae43` code state: **441 tests + 21 subtests** passed;
   Ruff, compileall, CLI docs (`10/94/58`), and shared-helper sync passed. The
   browser feature has a real local Chromium fixture run. The focused PATH_INFO
@@ -83,6 +100,18 @@ doesn't mistake uneven coverage for uniform coverage.
   Full suite: **500 tests + 21 subtests passed**; Ruff, compileall, helper sync,
   CLI docs (**10 / 95 / 58**), and `git diff --check` passed. New target-facing
   tests use mocks; no live API targets were contacted.
+- **BOLA URL follow-up (2026-11-16, code commit
+  `9efbba5e7cbb7c6b816459f4dbca298fa40e6a79`):** corrected the
+  object URL used during active BOLA checks. Direct object endpoints (including
+  UUID IDs) stay intact, collection endpoints receive one encoded ID in the
+  path, query parameters survive, and placeholder paths are substituted.
+  Extracted response IDs reject null, boolean, container, oversized, and
+  control-character values. The focused API-breaker matrix is now **30 tests**.
+  The complete suite passed **504 tests + 21 subtests**; Ruff, compileall,
+  helper sync, CLI docs (**10 / 95 / 58**), and `git diff --check` passed on
+  Windows/Python 3.14.8. Ruff was run as `python3 -m ruff` because its standalone
+  executable is not on this PowerShell PATH. All target-facing regressions are
+  mocked; no live target was contacted.
 - The browser auditor has now had a **real Playwright/Chromium integration run**
   against a local fixture (passive, active query, active fragment via both
   `innerHTML` and `document.write`, and form submission all exercised). Two bugs
@@ -440,7 +469,7 @@ browser `--active`, or `--submit-forms` behavior.
    uploads.
 2. **Inventory structure — coverage refreshed; structural map still needs
    review if skills, CLIs, dependencies, or plugin references move.** Inventory
-   now includes bootstrap behavior and the 26 focused API-breaker regressions.
+   now includes bootstrap behavior and the 30 focused API-breaker regressions.
 3. **Bootstrap + task preflight — implemented; deeper OS-specific install
    validation remains open.** Missing Python dependencies, Chromium, Go, Go
    recon tools, and allowlisted system tools are actively installed through
@@ -465,9 +494,25 @@ browser `--active`, or `--submit-forms` behavior.
    coverage or absence of bugs.
 
 ## Standing constraints (don't re-introduce)
+- Preserve the active-testing doctrine: for explicitly authorized, in-scope
+  assessments, run the selected bounded payload probes and form submissions
+  documented by the skill. Do not silently turn active testing into passive
+  observation. Keep explicit gates for destructive or state-changing actions
+  where they are documented, and do not add a new gate that disables the
+  requested probe by default.
+- Bootstrap must install and verify required managed tools when they are
+  missing. Do not let a task proceed when its required stack remains
+  unavailable: use strict or narrow preflight and stop dependent work on
+  failure. Installation behavior is covered by mocks where this host already
+  has the tools; the clean-host package-manager paths remain an open validation
+  item.
 - HTTPS verified by default; `CATUS_INSECURE_TLS=1` is the only opt-out.
 - Cross-origin redirects (incl. HTTP→HTTPS) are blocked by design — pass the
   final authorized origin when canonicalization crosses origins.
 - Claude permission prompts preserved by default; `--dangerously-skip-permissions`
   stays an explicit operator choice.
 - Author identity for commits: `FelixCatus <18648889+Felix1Catus@users.noreply.github.com>`.
+
+Windows details to preserve: use `python3` for the interpreter command in
+PowerShell; keep `hooks/hooks.json` LF-only; and reference the actual
+`hooks/hooks.json` path in plugin metadata and bootstrap checks.

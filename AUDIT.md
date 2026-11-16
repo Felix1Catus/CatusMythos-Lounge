@@ -263,3 +263,27 @@ Business-logic evidence rules follow the business-specific harm model in
 [OWASP API6:2023](https://api-security.owasp.org/editions/2023/en/0xa6-unrestricted-access-to-sensitive-business-flows/).
 For object-level authorization methodology see
 [OWASP API1:2023](https://api-security.owasp.org/editions/2023/en/0xa1-broken-object-level-authorization/).
+
+---
+
+## Follow-up addendum — BOLA object URL construction (2026-11-16)
+
+After the API-breaker scope/evidence pass, review found that
+`authz_tester.py` defined `find_id_endpoints()` but did not use it. BOLA checks
+therefore appended discovered IDs to all endpoint URLs, producing malformed
+paths such as `/users/42/42` for direct object endpoints; appending after a
+query string also corrupted the URL. The follow-up now distinguishes
+collection and object endpoints, substitutes path placeholders, preserves
+queries, percent-encodes IDs, and keeps the final URL on the configured API
+origin. It recognizes UUID-style IDs and rejects unusable values extracted
+from response JSON.
+
+Four regression tests cover placeholder/collection URL construction,
+query preservation, and direct numeric and UUID object endpoints. The
+API-breaker test file now has **30 tests**. Full verification passed:
+**504 tests + 21 subtests**, Ruff, compileall, shared-helper sync, CLI docs
+(**10 skill docs / 95 command references / 58 CLIs**), and `git diff --check`.
+The host is Windows with Python 3.14.8; Ruff passed through
+`python3 -m ruff` because `ruff` is not on the shell PATH. Requests are mocked
+in these regressions; no live target was contacted. The code fix is commit
+`9efbba5e7cbb7c6b816459f4dbca298fa40e6a79` on `main`.

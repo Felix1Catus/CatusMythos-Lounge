@@ -5,8 +5,9 @@ dependencies, test coverage, scope controls, integrations, overlaps, and the
 clearest coverage gaps. This is a map for prioritizing deeper per-skill review;
 it is not itself a line-by-line doc-vs-code audit (that happens per skill).
 Inventory structure originated at `f870a85`. Coverage status refreshed
-2026-11-16 against the verified `3aa2f62` bootstrap baseline and the API-breaker
-continuation from `a95bab9`. Check `git log -1` for the exact current tip.
+2026-11-16 against the verified `3aa2f62` bootstrap baseline, the API-breaker
+continuation from `a95bab9`, and the BOLA URL fix at `9efbba5`. Check
+`git log -1` for the exact current tip.
 
 ## Shape of the toolkit
 
@@ -35,11 +36,11 @@ checked by `tests/test_plugin_bootstrap_hook.py` and the same matrix.
 | Coverage | Skills |
 |---|---|
 | Broad script-level regression matrices | `recon-dominator` (59), `cloud-pivot-finder` (38), `attack-path-architect` (28), `16-ai-llm-security` (87), `03-exploit-development` (14), `vuln-chain-composer` (63), legacy `webapp-exploit-hunter` testers (60) |
-| Focused or partial coverage | `api-breaker` (26 focused scope/discovery/business-logic/GraphQL-CSRF regressions); `webapp-exploit-hunter` browser/crawler/DOM and selected CLI paths; `web-cache-auditor` (8 tests for its script) |
+| Focused or partial coverage | `api-breaker` (30 focused scope/discovery/business-logic/GraphQL-CSRF/BOLA URL regressions); `webapp-exploit-hunter` browser/crawler/DOM and selected CLI paths; `web-cache-auditor` (8 tests for its script) |
 | Plugin infrastructure | `tests/test_bootstrap.py` (30): parsing, install command construction, retry/cache validation, browser setup, PATH readiness, and nonzero preflight gates |
 | No scripts (manual methodology) | `web-protocol-auditor` |
 
-The full suite most recently passed **500 tests plus 21 subtests**. It includes
+The full suite most recently passed **504 tests plus 21 subtests**. It includes
 local-fixture browser integration with Playwright/Chromium, bootstrap
 regressions, and the new API-breaker matrix. The strict bootstrap preflight also
 passed on the current Windows host. Coverage is uneven:
