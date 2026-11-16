@@ -7,16 +7,14 @@ Author: orizon.one
 
 import argparse
 import json
-import re
 import time
-import urllib.request
 import urllib.parse
 import concurrent.futures
 from datetime import datetime, timezone
 import math
 
 
-from _common import http_request, log, same_origin_url, success, vuln, warn
+from _common import http_request, log, same_origin_url, success, warn
 # IP spoofing headers for rate limit bypass
 #
 # NOT implemented, by design (research_notes/API breaker depth
@@ -69,6 +67,65 @@ RATE_LIMIT_HEADERS = [
 ]
 
 MAX_RATE_LIMIT_REQUESTS = 1000
+MAX_RATE_LIMIT_WORKERS = 50
+MAX_GRAPHQL_BATCH_BASELINE = 60
+MAX_GRAPHQL_BATCH_OPERATIONS = MAX_GRAPHQL_BATCH_BASELINE + 50
+
+
+def _graphql_payload(body):
+    """Return a GraphQL JSON response envelope, or None for unrelated bodies."""
+    try:
+        parsed = json.loads(body)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    if "data" not in parsed and "errors" not in parsed:
+        return None
+    return parsed
+
+
+def _graphql_typename_succeeded(body):
+    parsed = _graphql_payload(body)
+    if not parsed or parsed.get("errors"):
+        return False
+    data = parsed.get("data")
+    return isinstance(data, dict) and isinstance(data.get("__typename"), str) and bool(data["__typename"])
+
+
+def _graphql_batch_succeeded(body, expected_count):
+    try:
+        parsed = json.loads(body)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return False
+    if not isinstance(parsed, list) or len(parsed) != expected_count:
+        return False
+    return all(_graphql_typename_succeeded(json.dumps(item)) for item in parsed)
+
+
+def _graphql_aliases_succeeded(body, expected_count):
+    parsed = _graphql_payload(body)
+    if not parsed or parsed.get("errors"):
+        return False
+    data = parsed.get("data")
+    if not isinstance(data, dict) or len(data) != expected_count:
+        return False
+    return all(
+        isinstance(data.get(f"q{index}"), str) and bool(data[f"q{index}"])
+        for index in range(expected_count)
+    )
+
+
+def _validate_delay(delay):
+    if isinstance(delay, bool) or not isinstance(delay, (int, float)) \
+            or not math.isfinite(delay) or delay < 0 or delay > 60:
+        raise ValueError("delay must be finite and between 0 and 60 seconds")
+
+
+def _validate_burst_count(burst_count):
+    if isinstance(burst_count, bool) or not isinstance(burst_count, int) \
+            or not 1 <= burst_count <= MAX_RATE_LIMIT_REQUESTS:
+        raise ValueError(f"burst_count must be between 1 and {MAX_RATE_LIMIT_REQUESTS}")
 
 
 def extract_rate_limit_info(headers):
@@ -88,43 +145,67 @@ def scope_rate_limit_targets(base_url, input_data):
     if not isinstance(input_data, dict):
         return endpoints, graphql_endpoints
 
-    discovered = input_data.get("discovered_apis", [])
-    if isinstance(discovered, list):
-        for api in discovered:
-            if not isinstance(api, dict):
+    def add_records(records, graphql_default=False):
+        if not isinstance(records, list):
+            return
+        for record in records:
+            if isinstance(record, dict):
+                candidate = record.get("url") or record.get("path", "")
+                record_type = str(record.get("api_type") or record.get("type") or "").lower()
+                is_graphql = record_type == "graphql" or graphql_default
+            elif isinstance(record, str):
+                candidate = record
+                is_graphql = graphql_default
+            else:
                 continue
-            candidate = api.get("url") or api.get("path", "")
             url = same_origin_url(base_url, candidate)
             if not url:
                 if candidate:
                     warn(f"Skipping endpoint outside the API base origin: {candidate}")
                 continue
             endpoints.append(url)
-            if api.get("api_type") == "graphql":
+            if is_graphql:
                 graphql_endpoints.append(url)
 
-    schema_endpoints = input_data.get("endpoints", [])
-    if isinstance(schema_endpoints, list):
-        for ep in schema_endpoints:
-            if not isinstance(ep, dict):
-                continue
-            candidate = ep.get("url") or ep.get("path", "")
-            url = same_origin_url(base_url, candidate)
-            if not url:
-                if candidate:
-                    warn(f"Skipping endpoint outside the API base origin: {candidate}")
-                continue
+    add_records(input_data.get("discovered_apis", []))
+    add_records(input_data.get("endpoints", []))
+    add_records(input_data.get("openapi_endpoints", []))
+
+    # api_discovery.py serializes GraphQL results as a mapping keyed by the
+    # endpoint URL, while some hand-authored inputs use a list of records.
+    # Accept both forms and run every candidate through same_origin_url.
+    graphql_data = input_data.get("graphql", [])
+    if isinstance(graphql_data, dict):
+        if graphql_data.get("endpoint_url") or graphql_data.get("url"):
+            add_records([graphql_data], graphql_default=True)
+        else:
+            add_records(list(graphql_data.keys()), graphql_default=True)
+    else:
+        add_records(graphql_data, graphql_default=True)
+
+    graphql_schema = input_data.get("graphql_schema")
+    if isinstance(graphql_schema, dict):
+        candidate = graphql_schema.get("endpoint_url") or graphql_schema.get("url")
+        url = same_origin_url(base_url, candidate)
+        if url:
             endpoints.append(url)
+            graphql_endpoints.append(url)
+        elif candidate:
+            warn(f"Skipping GraphQL endpoint outside the API base origin: {candidate}")
 
     return list(dict.fromkeys(endpoints)), list(dict.fromkeys(graphql_endpoints))
 
 
 def send_rapid_requests(url, count, extra_headers=None, delay=0):
     """Send rapid requests and track responses."""
+    if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= MAX_RATE_LIMIT_REQUESTS:
+        raise ValueError(f"count must be between 1 and {MAX_RATE_LIMIT_REQUESTS}")
+    _validate_delay(delay)
     results = {
         "total_sent": 0,
         "status_codes": {},
         "rate_limited_at": None,
+        "rate_limit_observed": False,
         "rate_limit_headers": {},
         "response_times": [],
     }
@@ -143,6 +224,7 @@ def send_rapid_requests(url, count, extra_headers=None, delay=0):
             results["rate_limit_headers"] = rl_info
 
         if status == 429:
+            results["rate_limit_observed"] = True
             if results["rate_limited_at"] is None:
                 results["rate_limited_at"] = i + 1
             if delay:
@@ -157,10 +239,15 @@ def send_rapid_requests(url, count, extra_headers=None, delay=0):
 
 def send_concurrent_requests(url, count, workers=20, extra_headers=None):
     """Send concurrent requests using thread pool."""
+    if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= MAX_RATE_LIMIT_REQUESTS:
+        raise ValueError(f"count must be between 1 and {MAX_RATE_LIMIT_REQUESTS}")
+    if isinstance(workers, bool) or not isinstance(workers, int) or not 1 <= workers <= MAX_RATE_LIMIT_WORKERS:
+        raise ValueError(f"workers must be between 1 and {MAX_RATE_LIMIT_WORKERS}")
     results = {
         "total_sent": 0,
         "status_codes": {},
         "rate_limited_at": None,
+        "rate_limit_observed": False,
         "rate_limit_headers": {},
     }
 
@@ -169,7 +256,7 @@ def send_concurrent_requests(url, count, workers=20, extra_headers=None):
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
         futures = [executor.submit(make_request, i) for i in range(count)]
-        for idx, future in enumerate(concurrent.futures.as_completed(futures)):
+        for future in concurrent.futures.as_completed(futures):
             status, headers, body = future.result()
             results["total_sent"] += 1
             results["status_codes"][str(status)] = results["status_codes"].get(str(status), 0) + 1
@@ -178,8 +265,8 @@ def send_concurrent_requests(url, count, workers=20, extra_headers=None):
             if rl_info:
                 results["rate_limit_headers"] = rl_info
 
-            if status == 429 and results["rate_limited_at"] is None:
-                results["rate_limited_at"] = idx + 1
+            if status == 429:
+                results["rate_limit_observed"] = True
 
     return results
 
@@ -239,10 +326,10 @@ def test_race_condition(url, extra_headers=None, count=20, workers=20, is_financ
     burst will miss narrower race windows a single-packet attack could
     still catch, but is the ceiling available here.
 
-    `is_financial_target` escalates severity to "critical" when the URL
-    matched the auto-targeting keyword heuristic above (the Stripe/
-    Dropbox/Instacart/Reverb financial-impact class), vs. "high" for a
-    generic confirmed race.
+    `is_financial_target` records whether the URL matched the financial-
+    impact keyword heuristic above. It does not escalate severity: a
+    response-count difference is only a candidate, and persistence and
+    business impact need controlled read-back.
     """
     log(f"Running race-condition baseline-vs-burst comparator on {url}...")
     findings = []
@@ -267,12 +354,12 @@ def test_race_condition(url, extra_headers=None, count=20, workers=20, is_financ
     }
 
     if burst_successes > baseline_successes:
-        severity = "critical" if is_financial_target else "high"
-        vuln(f"Race condition bypass on {url}: {burst_successes} successes in burst "
-             f"vs {baseline_successes} in sequential baseline")
+        log(f"Race-condition candidate on {url}: {burst_successes} successes in burst "
+            f"vs {baseline_successes} in sequential baseline; verify state with read-back")
         findings.append({
-            "type": "rate_limit_race_condition",
-            "severity": severity,
+            "type": "rate_limit_race_condition_candidate",
+            "severity": "info",
+            "validated": False,
             "url": url,
             "requests_per_phase": count,
             "baseline_successes": baseline_successes,
@@ -281,11 +368,10 @@ def test_race_condition(url, extra_headers=None, count=20, workers=20, is_financ
             "financial_impact_candidate": is_financial_target,
             "description": (
                 "A concurrent thread-pool burst produced more successful "
-                "responses than an identical sequential baseline allowed -- "
-                "a non-atomic check-then-act race condition (James Kettle, "
-                "'Smashing the State Machine', PortSwigger 2023; same root "
-                "cause as the Stripe fee-discount race, HackerOne blog, "
-                "$600k exposure / $5k bounty). Thread-pool burst only "
+                "HTTP responses than an identical sequential baseline. This "
+                "is a race-condition candidate only; response counts do not "
+                "establish that a single-use action or persisted state was "
+                "duplicated. Verify with a controlled read-back. Thread-pool burst only "
                 "(portable approximation, not a true HTTP/2 single-packet "
                 "attack) -- see rate_limit_versioning.md for why a narrower "
                 "race window could still exist undetected by this test."
@@ -297,8 +383,15 @@ def test_race_condition(url, extra_headers=None, count=20, workers=20, is_financ
 
 def test_rate_limit_bypass(url, extra_headers=None, delay=0):
     """Test rate limit bypass using IP spoofing headers."""
+    _validate_delay(delay)
     log("Testing rate limit bypass via IP spoofing headers...")
     findings = []
+
+    rate_limited_at, reference_shape = reconfirm_rate_limit(url, extra_headers, burst_count=35)
+    if rate_limited_at is None or reference_shape is None:
+        log("  Baseline rate limit did not reproduce with a prior success response; "
+            "header-bypass comparison is inconclusive")
+        return findings
 
     for bypass in BYPASS_HEADERS:
         bypass_name = list(bypass.keys())[0]
@@ -308,43 +401,50 @@ def test_rate_limit_bypass(url, extra_headers=None, delay=0):
             headers.update(bypass)  # Ensure bypass header takes precedence
 
         # Send a burst of requests with the bypass header
-        got_429 = False
-        success_after_limit = 0
-
         for i in range(30):
             # Rotate the IP for X-Forwarded-For style headers
             if bypass_name in IP_ROTATION_HEADERS:
                 headers[bypass_name] = f"10.{i % 256}.{(i * 7) % 256}.{(i * 13) % 256}"
 
-            status, _, _ = http_request(url, headers=headers)
+            status, _, body = http_request(url, headers=headers)
             if delay:
                 time.sleep(delay)
 
-            if status == 429:
-                got_429 = True
-            elif got_429 and status in (200, 201):
-                success_after_limit += 1
+            if status not in (200, 201) or not _shapes_match(
+                reference_shape, _response_shape(status, body)
+            ):
+                continue
 
-        if got_429 and success_after_limit > 0:
-            vuln(f"Rate limit bypass via {bypass_name} header rotation")
+            # A successful spoofed request only indicates a possible bypass
+            # if the immediately-following control request is still throttled.
+            control_status, _, _ = http_request(url, headers=extra_headers)
+            if delay:
+                time.sleep(delay)
+            if control_status != 429:
+                continue
+
+            log(f"Rate-limit header-bypass candidate via {bypass_name}; a normal-header "
+                "control remained throttled after a matching success response")
             finding = {
-                "type": "rate_limit_bypass",
-                "severity": "medium",
+                "type": "rate_limit_bypass_candidate",
+                "severity": "info",
+                "validated": False,
                 "bypass_header": bypass_name,
-                "success_after_limit": success_after_limit,
+                "success_after_limit": 1,
+                "rate_limited_at": rate_limited_at,
+                "reference_success_shape": reference_shape,
+                "spoofed_success_shape": _response_shape(status, body),
+                "control_status": control_status,
             }
             if bypass_name in IP_ROTATION_HEADERS:
                 finding["note"] = (
-                    "Architectural pattern matches CVE-2025-59152 (Litestar "
-                    "RateLimitMiddleware.cache_key_from_request() trusting a "
-                    "client-supplied X-Forwarded-For unconditionally as the "
-                    "rate-limit cache key -- rotating the header value gives "
-                    "every request its own bucket; fixed in Litestar 2.18.0)."
+                    "The behavior is consistent with trusting a client-supplied "
+                    "forwarded-IP value as the rate-limit key (a known class in "
+                    "CVE-2025-59152/Litestar), but this probe does not identify "
+                    "the target's implementation or establish broader impact."
                 )
             findings.append(finding)
-        elif not got_429:
-            # Never rate limited even with bypass headers - might indicate no rate limiting
-            pass
+            break
 
     return findings
 
@@ -377,6 +477,7 @@ def reconfirm_rate_limit(url, extra_headers=None, burst_count=35):
     candidates against. Returns (rate_limited_at_or_None, reference_shape
     _or_None).
     """
+    _validate_burst_count(burst_count)
     reference_shape = None
     for i in range(burst_count):
         status, _, body = http_request(url, headers=extra_headers)
@@ -458,6 +559,7 @@ def test_path_mutation_bypass(url, extra_headers=None, burst_count=35):
     Cheap: only 6-10 extra mutation variants per already-confirmed-limited
     endpoint, each bursted up to burst_count times.
     """
+    _validate_burst_count(burst_count)
     log(f"Testing path/method/casing mutation bypass on {url}...")
     findings = []
 
@@ -487,10 +589,12 @@ def test_path_mutation_bypass(url, extra_headers=None, burst_count=35):
                 break
 
         if not mutation_hit_429 and matched_shape:
-            vuln(f"Rate limit bypass via path mutation ({description}): {mutated_url}")
+            log(f"Rate-limit path-mutation candidate ({description}): {mutated_url}; "
+                "response status/body-length shape matched the pre-limit control")
             findings.append({
-                "type": "rate_limit_path_mutation",
-                "severity": "high",
+                "type": "rate_limit_path_mutation_candidate",
+                "severity": "info",
+                "validated": False,
                 "url": url,
                 "mutated_url": mutated_url,
                 "mutation": description,
@@ -499,7 +603,10 @@ def test_path_mutation_bypass(url, extra_headers=None, burst_count=35):
                 "reference_success_shape": reference_shape,
                 "matched_success_shape": matched_shape,
                 "note": (
-                    "Architectural pattern matches CVE-2023-38507 (Strapi "
+                    "Response status and body length match the pre-limit sample, "
+                    "but application-level operation success was not established. "
+                    "Review before confirming. The path variant is consistent with "
+                    "the class described in CVE-2023-38507 (Strapi "
                     "admin-login rate limiter compared the raw request path "
                     "as a plain string, so case variation and a trailing "
                     "slash each bypassed it -- fixed in 4.12.1) and "
@@ -531,36 +638,31 @@ def test_path_mutation_bypass(url, extra_headers=None, burst_count=35):
 # rather than attempted half-done here.
 
 
-_SENSITIVE_OPERATION_RE = re.compile(
-    r"login|signin|sign_in|otp|verify|password|reset|mfa|2fa|changepassword", re.IGNORECASE
-)
-
-
 def test_graphql_batching(url, extra_headers=None, delay=0, baseline_max=60):
     """Test GraphQL query batching/aliasing as a rate-limit bypass.
 
     Upgraded per rate_limit_versioning.md's "Direct extension of the
     script's existing test_graphql_batching()" inference: first
     establishes a baseline by sending the UNBATCHED single operation
-    repeatedly until a 429 appears (or confirmed absent after
-    baseline_max attempts) -- count K. Then sends the batched/aliased
-    form with K+50 copies of the identical operation in ONE request. A
-    200 with all K+50 executed, when the unbatched form 429'd at K, is
-    the actual gateway-blindness differential (the edge/network rate
-    limiter counts HTTP requests, not GraphQL operations -- Checkmarx
-    "Didn't Notice Your Rate Limiting: GraphQL Batching Attack";
-    HackTricks rate-limit-bypass). Falls back to the original
-    unconditional-acceptance check when no baseline 429 is ever observed
-    (nothing to differentially confirm against, so it's reported as the
-    weaker "accepted" signal instead).
+    repeatedly until a clean single-operation response is followed by a
+    429 (or no 429 appears within baseline_max). Only the first sequence
+    establishes a differential. If no valid rate-limit baseline exists,
+    batching acceptance is reported as an INFO candidate, not a bypass.
+    The probe uses only side-effect-free __typename operations; it cannot
+    establish impact on login, OTP, or other sensitive resolvers.
 
     Checkmarx dedup caveat (noted, not automatable here): some GraphQL
     servers deduplicate IDENTICAL aliased/batched subqueries server-side
-    before execution, so the request SHAPE being accepted (N operations
-    in one HTTP response) is proof the EDGE/network rate limiter was
-    blind to the attempt -- it is not independent proof the backend
-    executed the operation N times.
+    before execution, so a clean response to the request indicates that
+    this particular request shape was accepted after a single-operation
+    429. It does not identify which layer applied limits or prove the
+    backend executed the operation N times.
     """
+    if isinstance(baseline_max, bool) or not isinstance(baseline_max, int) \
+            or not 1 <= baseline_max <= MAX_GRAPHQL_BATCH_BASELINE:
+        raise ValueError(f"baseline_max must be between 1 and {MAX_GRAPHQL_BATCH_BASELINE}")
+    _validate_delay(delay)
+
     log("Testing GraphQL batching...")
     findings = []
 
@@ -573,13 +675,17 @@ def test_graphql_batching(url, extra_headers=None, delay=0, baseline_max=60):
     # Phase 1: baseline -- unbatched single operation, repeated until 429
     # or until baseline_max is exhausted.
     baseline_hit = None
+    baseline_success = False
     for i in range(baseline_max):
-        status, _, _ = http_request(url, "POST", headers, single_query)
+        status, _, body = http_request(url, "POST", headers, single_query)
         if delay:
             time.sleep(delay)
         if status == 429:
-            baseline_hit = i + 1
+            if baseline_success:
+                baseline_hit = i + 1
             break
+        if status == 200 and _graphql_typename_succeeded(body):
+            baseline_success = True
 
     dedup_caveat = (
         "Caveat (Checkmarx): some servers dedupe identical aliased/batched "
@@ -589,7 +695,7 @@ def test_graphql_batching(url, extra_headers=None, delay=0, baseline_max=60):
     )
 
     if baseline_hit is not None:
-        k_plus = baseline_hit + 50
+        k_plus = min(baseline_hit + 50, MAX_GRAPHQL_BATCH_OPERATIONS)
 
         # Array batching: K+50 copies of the identical operation
         batch_query = json.dumps([{"query": "{ __typename }"}] * k_plus)
@@ -597,28 +703,25 @@ def test_graphql_batching(url, extra_headers=None, delay=0, baseline_max=60):
         if delay:
             time.sleep(delay)
 
-        if status == 200:
-            try:
-                data = json.loads(body)
-                if isinstance(data, list) and len(data) >= k_plus:
-                    vuln(f"GraphQL array-batch gateway-blindness bypass: {len(data)} executed "
-                         f"in one request, vs unbatched 429 at request #{baseline_hit}")
-                    findings.append({
-                        "type": "graphql_batch_rate_limit_bypass",
-                        "severity": "medium",
-                        "url": url,
-                        "unbatched_rate_limited_at": baseline_hit,
-                        "batch_size_sent": k_plus,
-                        "batch_responses_received": len(data),
-                        "description": (
-                            "The unbatched single operation 429'd at request "
-                            f"#{baseline_hit}, but an array-batched request containing "
-                            f"{k_plus} copies of the identical operation in ONE HTTP call "
-                            f"returned 200 with all {len(data)} executed. " + dedup_caveat
-                        ),
-                    })
-            except (json.JSONDecodeError, ValueError):
-                pass
+        if status == 200 and _graphql_batch_succeeded(body, k_plus):
+            log(f"GraphQL array batching candidate: {k_plus} clean __typename results returned "
+                f"after unbatched 429 at request #{baseline_hit}")
+            findings.append({
+                "type": "graphql_batch_rate_limit_bypass_candidate",
+                "severity": "info",
+                "validated": False,
+                "url": url,
+                "unbatched_rate_limited_at": baseline_hit,
+                "batch_size_sent": k_plus,
+                "batch_responses_received": k_plus,
+                "description": (
+                    f"A clean unbatched __typename response preceded HTTP 429 at request "
+                    f"#{baseline_hit}; one request containing {k_plus} side-effect-free "
+                    "operations returned a clean result for every operation. This is an "
+                    "HTTP-request-vs-operation-limit candidate, not evidence of impact on "
+                    "sensitive operations. " + dedup_caveat
+                ),
+            })
 
         # Alias batching: K+50 aliases of the identical operation
         aliases = " ".join([f"q{i}: __typename" for i in range(k_plus)])
@@ -627,85 +730,72 @@ def test_graphql_batching(url, extra_headers=None, delay=0, baseline_max=60):
         if delay:
             time.sleep(delay)
 
-        if status == 200 and f"q{k_plus - 1}" in body:
-            vuln(f"GraphQL alias-batch gateway-blindness bypass: {k_plus} aliases executed "
-                 f"in one request, vs unbatched 429 at request #{baseline_hit}")
+        if status == 200 and _graphql_aliases_succeeded(body, k_plus):
+            log(f"GraphQL alias multiplication candidate: {k_plus} clean __typename results "
+                f"returned after unbatched 429 at request #{baseline_hit}")
             findings.append({
-                "type": "graphql_alias_rate_limit_bypass",
-                "severity": "medium",
+                "type": "graphql_alias_rate_limit_bypass_candidate",
+                "severity": "info",
+                "validated": False,
                 "url": url,
                 "unbatched_rate_limited_at": baseline_hit,
                 "aliases_sent": k_plus,
                 "description": (
-                    "The unbatched single operation 429'd at request "
-                    f"#{baseline_hit}, but an alias-multiplied request with {k_plus} "
-                    "aliases of the identical operation in ONE HTTP call returned 200 "
-                    "with all of them executed. " + dedup_caveat
+                    f"A clean unbatched __typename response preceded HTTP 429 at request "
+                    f"#{baseline_hit}; one request with {k_plus} side-effect-free aliases "
+                    "returned a clean result for each alias. This is an HTTP-request-vs-"
+                    "operation-limit candidate, not evidence of impact on sensitive "
+                    "operations. " + dedup_caveat
                 ),
             })
     else:
-        # No baseline 429 within baseline_max attempts -- nothing confirmed
-        # to differentially bypass, so fall back to the original weaker
-        # "is batching merely accepted at all" check.
-        log(f"  No 429 observed on the unbatched operation within {baseline_max} attempts -- "
-            "falling back to unconditional batching-acceptance check")
+        if not baseline_success:
+            log("  No clean single-operation GraphQL response preceded a 429 -- "
+                "batching comparison is inconclusive")
+            return findings
+
+        # No baseline 429 within the bounded attempt budget. Continue the
+        # active batching probes, but acceptance alone is only a candidate.
+        log(f"  No 429 observed after a clean unbatched response within {baseline_max} attempts -- "
+            "checking batching acceptance as an unverified candidate")
 
         batch_query = json.dumps([{"query": "{ __typename }"}] * 100)
         status, _, body = http_request(url, "POST", headers, batch_query)
         if delay:
             time.sleep(delay)
-        if status == 200:
-            try:
-                data = json.loads(body)
-                if isinstance(data, list) and len(data) > 1:
-                    vuln(f"GraphQL batching accepted: {len(data)} responses in single request")
-                    findings.append({
-                        "type": "graphql_batching",
-                        "severity": "medium",
-                        "url": url,
-                        "queries_sent": 100,
-                        "responses_received": len(data),
-                        "description": (
-                            "GraphQL allows query batching which can bypass per-request "
-                            "rate limits (no 429 baseline was observed on the unbatched "
-                            "form within the attempt budget, so this is acceptance "
-                            "evidence only, not a confirmed differential bypass)."
-                        ),
-                    })
-            except (json.JSONDecodeError, ValueError):
-                pass
+        if status == 200 and _graphql_batch_succeeded(body, 100):
+            findings.append({
+                "type": "graphql_batching_candidate",
+                "severity": "info",
+                "validated": False,
+                "url": url,
+                "queries_sent": 100,
+                "responses_received": 100,
+                "description": (
+                    "The endpoint accepted 100 side-effect-free __typename operations in one "
+                    "request, but no 429 baseline was observed. This documents batching "
+                    "acceptance only and does not establish rate-limit bypass or sensitive impact."
+                ),
+            })
 
         aliases = " ".join([f"q{i}: __typename" for i in range(100)])
         alias_query = json.dumps({"query": f"{{ {aliases} }}"})
         status, _, body = http_request(url, "POST", headers, alias_query)
         if delay:
             time.sleep(delay)
-        if status == 200 and "q99" in body:
-            vuln("GraphQL alias-based batching accepted (100 aliases)")
+        if status == 200 and _graphql_aliases_succeeded(body, 100):
             findings.append({
-                "type": "graphql_alias_batching",
-                "severity": "medium",
+                "type": "graphql_alias_batching_candidate",
+                "severity": "info",
+                "validated": False,
                 "url": url,
                 "aliases_sent": 100,
                 "description": (
-                    "GraphQL allows alias-based query multiplication (no 429 baseline "
-                    "was observed on the unbatched form within the attempt budget, so "
-                    "this is acceptance evidence only, not a confirmed differential "
-                    "bypass)."
+                    "The endpoint accepted 100 side-effect-free __typename aliases in one "
+                    "request, but no 429 baseline was observed. This documents alias "
+                    "acceptance only and does not establish rate-limit bypass or sensitive impact."
                 ),
             })
-
-    # Severity escalation: the research flags severity high specifically
-    # when the targeted operation suggests login/OTP/password-reset --
-    # directly exploitable as unlimited-rate credential/OTP brute force.
-    # The GraphQL operation name itself isn't available to this function
-    # (the probe query is always the safe, side-effect-free __typename),
-    # so the endpoint URL is the practical, available proxy signal.
-    if _SENSITIVE_OPERATION_RE.search(url):
-        for f in findings:
-            if f["type"] in ("graphql_batch_rate_limit_bypass", "graphql_alias_rate_limit_bypass"):
-                f["severity"] = "high"
-                f["sensitive_operation_target"] = True
 
     return findings
 
@@ -726,7 +816,9 @@ def main():
 
     if not 1 <= args.count <= MAX_RATE_LIMIT_REQUESTS:
         parser.error(f"--count must be between 1 and {MAX_RATE_LIMIT_REQUESTS}")
-    if not math.isfinite(args.delay) or args.delay < 0 or args.delay > 60:
+    try:
+        _validate_delay(args.delay)
+    except ValueError:
         parser.error("--delay must be between 0 and 60 seconds")
 
     base_url = same_origin_url(args.api_base, args.api_base)
@@ -755,6 +847,12 @@ def main():
         if not url:
             parser.error("--endpoint must remain on the trusted --api-base origin")
         endpoints.insert(0, url)
+        # An explicitly supplied GraphQL route may be nonstandard and will
+        # not be found by the common-path fallback below.
+        if "graphql" in urllib.parse.urlsplit(url).path.lower():
+            graphql_endpoints.append(url)
+
+    graphql_endpoints = list(dict.fromkeys(graphql_endpoints))
 
     if not endpoints and base_url:
         endpoints = [base_url]
@@ -778,27 +876,45 @@ def main():
         results["url"] = url
         endpoint_results.append(results)
 
-        if results["rate_limited_at"]:
-            success(f"  Rate limited at request #{results['rate_limited_at']}")
+        if results.get("rate_limit_observed") or results.get("rate_limited_at"):
+            if results.get("rate_limited_at") is not None:
+                success(f"  Rate limited at request #{results['rate_limited_at']}")
+            else:
+                success("  Rate-limit response observed during concurrent burst "
+                        "(request threshold is not ordered in a concurrent run)")
             if results.get("rate_limit_headers"):
                 log(f"  Rate limit headers: {results['rate_limit_headers']}")
         else:
             count_429 = results["status_codes"].get("429", 0)
-            if count_429 == 0:
-                vuln(f"No rate limiting detected on {url} after {args.count} requests")
+            successful = sum(
+                count for code, count in results["status_codes"].items()
+                if code.isdigit() and 200 <= int(code) < 300
+            )
+            if count_429 == 0 and successful:
+                log(f"No 429 observed across {successful} successful responses; "
+                    "rate-limit absence remains a candidate")
                 all_findings.append({
-                    "type": "no_rate_limit",
-                    "severity": "medium",
+                    "type": "no_rate_limit_candidate",
+                    "severity": "info",
+                    "validated": False,
                     "url": url,
                     "requests_sent": args.count,
                     "status_distribution": results["status_codes"],
-                    "description": f"No 429 response after {args.count} rapid requests",
+                    "description": (
+                        f"No HTTP 429 was observed across {successful} successful responses "
+                        f"from {args.count} requests. This bounded run does not establish "
+                        "that the endpoint lacks other rate controls or quotas."
+                    ),
                 })
+            elif count_429 == 0:
+                log("No successful application responses or HTTP 429 observed; "
+                    "rate-limit behavior is inconclusive")
 
         log(f"  Status distribution: {results['status_codes']}")
 
     # Test bypass techniques on rate-limited endpoints
-    rate_limited_urls = [r["url"] for r in endpoint_results if r.get("rate_limited_at")]
+    rate_limited_urls = [r["url"] for r in endpoint_results
+                         if r.get("rate_limit_observed") or r.get("rate_limited_at")]
     for url in rate_limited_urls[:5]:
         bypass_findings = test_rate_limit_bypass(url, extra_headers, args.delay)
         all_findings.extend(bypass_findings)
@@ -829,16 +945,23 @@ def main():
     # Also test common GraphQL paths
     if not graphql_endpoints:
         for path in ["/graphql", "/api/graphql", "/v1/graphql"]:
-            gql_url = urllib.parse.urljoin(base_url, path)
-            status, _, _ = http_request(gql_url, "POST",
-                                         {"Content-Type": "application/json"},
-                                         json.dumps({"query": "{__typename}"}))
-            if status in (200, 400):
+            gql_url = same_origin_url(base_url, path)
+            if not gql_url:
+                continue
+            probe_headers = {"Content-Type": "application/json"}
+            probe_headers.update(extra_headers)
+            status, _, probe_body = http_request(gql_url, "POST", probe_headers,
+                                                 json.dumps({"query": "{__typename}"}))
+            # A GraphQL response envelope (including a validation error) is
+            # endpoint evidence; arbitrary HTTP 400 bodies are not.
+            if status in (200, 400) and _graphql_payload(probe_body) is not None:
                 gql_findings = test_graphql_batching(gql_url, extra_headers, args.delay)
                 all_findings.extend(gql_findings)
 
     # Summary stats
-    rate_limited_count = sum(1 for r in endpoint_results if r.get("rate_limited_at"))
+    rate_limited_count = sum(
+        1 for r in endpoint_results if r.get("rate_limit_observed") or r.get("rate_limited_at")
+    )
     no_limit_count = len(endpoint_results) - rate_limited_count
 
     output = {
@@ -875,8 +998,8 @@ def main():
     print(f"  Total findings      : {len(all_findings)}")
     print(f"  Bypass techniques   : {len([f for f in all_findings if 'bypass' in f.get('type', '')])}")
     print(f"  GraphQL batching    : {len([f for f in all_findings if 'graphql' in f.get('type', '')])}")
-    print(f"  Race conditions     : {len([f for f in all_findings if f.get('type') == 'rate_limit_race_condition'])}")
-    print(f"  Path mutations      : {len([f for f in all_findings if f.get('type') == 'rate_limit_path_mutation'])}")
+    print(f"  Race conditions     : {len([f for f in all_findings if f.get('type', '').startswith('rate_limit_race_condition')])}")
+    print(f"  Path mutations      : {len([f for f in all_findings if f.get('type', '').startswith('rate_limit_path_mutation')])}")
     print(f"{'='*60}\n")
 
 

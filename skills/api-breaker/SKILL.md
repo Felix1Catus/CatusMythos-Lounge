@@ -247,10 +247,11 @@ Test:
 breaker depth techniques/rate_limit_versioning.md):
 - **Race-condition baseline-vs-burst comparator** — runs a request
   sequence sequentially first (recording the success count), then fires
-  the identical requests as a concurrent thread-pool burst; more
-  successes in the burst than the sequential baseline allowed is a
-  non-atomic check-then-act race (James Kettle's "Smashing the State
-  Machine" class; same root cause as the Stripe fee-discount race —
+  identical requests as a concurrent thread-pool burst; more
+  successes in the burst is only a race candidate because response
+  counts do not prove that a single-use action persisted twice. Confirm
+  state with a controlled read-back before reporting impact (James
+  Kettle's "Smashing the State Machine" class; same broad class as the Stripe fee-discount race —
   $600K exposure from a single $5K-bounty report). Auto-targeted at
   endpoints whose URL suggests a limited-use/financial-impact resource
   (`coupon`/`discount`/`invite`/`redeem`/`gift_card`/`credit`/`balance`/
@@ -262,20 +263,26 @@ breaker depth techniques/rate_limit_versioning.md):
 - **Path/method/casing mutation test** — for any endpoint already
   confirmed rate-limited, re-confirms the baseline 429 still fires, then
   bursts trailing-slash/doubled-slash/case/method-swap/junk-query-param
-  variants and flags any mutation whose response matches the *shape*
-  (status + body-length band) of a pre-limit success — not status code
-  alone, to avoid soft-404 false positives. Direct reproduction of
+  variants and records a candidate when a mutation's response matches
+  the *shape* (status + body-length band) of a pre-limit success. This
+  does not prove the same application operation ran; review the target's
+  response and confirm behavior before reporting. Direct reproduction of
   CVE-2023-38507 (Strapi, path case/slash bypassed its admin-login rate
   limiter) and CVE-2025-71399 (Better Auth, slash-padding bypassed a
   path-based rate limit).
-- **GraphQL batching/aliasing upgrade** — establishes an unbatched
-  baseline (sends the single operation until it 429s, at request #K)
-  before sending a batched/aliased request with K+50 copies; a 200 with
-  all K+50 executed is the actual gateway-blindness differential, not
-  just "batching is accepted." Severity escalates to high when the
-  endpoint URL suggests login/OTP/password-reset (unlimited-rate
-  credential/OTP brute force). Falls back to the original
-  acceptance-only check when no baseline 429 is ever observed.
+- **GraphQL batching/aliasing** — sends a bounded baseline of at most 60
+  side-effect-free `__typename` operations. Only a clean GraphQL result
+  followed by 429 establishes a differential; the tool then sends an
+  array and an alias query, each with at most 110 operations, and checks
+  every returned result. Without a baseline 429, accepted batching is
+  recorded only as an INFO candidate. These probes do not execute login,
+  OTP, password-reset, or other sensitive resolvers, so even the
+  differential is not proof of sensitive impact or backend execution
+  count. Some servers deduplicate identical operations. Verify with an
+  authorized, controlled test operation before assessing impact. Apply
+  operation-count and query-cost limits at the GraphQL execution layer
+  as well as at the HTTP edge ([OWASP GraphQL Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/GraphQL_Cheat_Sheet.html),
+  [Checkmarx GraphQL batching research](https://checkmarx.com/blog/didnt-notice-your-rate-limiting-graphql-batching-attack/)).
 
 ### Step 7: Business Logic Testing
 

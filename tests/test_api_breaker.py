@@ -916,8 +916,16 @@ class ApiBreakerScopeTests(unittest.TestCase):
         dos = api_report.generate_finding_report({
             "type": "graphql_depth_complexity_dos_candidate", "severity": "info", "validated": False,
         }, 2)
+        batch = api_report.generate_finding_report({
+            "type": "graphql_batch_rate_limit_bypass_candidate", "severity": "info", "validated": False,
+        }, 3)
+        race = api_report.generate_finding_report({
+            "type": "rate_limit_race_condition_candidate", "severity": "info", "validated": False,
+        }, 4)
         self.assertEqual(bola["owasp_mapping"]["id"], "API1:2023")
         self.assertEqual(dos["owasp_mapping"]["id"], "API4:2023")
+        self.assertEqual(batch["owasp_mapping"]["id"], "API4:2023")
+        self.assertEqual(race["owasp_mapping"]["id"], "API6:2023")
 
     def test_schema_main_skips_graphql_csrf_without_explicit_test_id(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1168,6 +1176,74 @@ class ApiBreakerScopeTests(unittest.TestCase):
             ["https://api.example.test/v1/graphql", "https://api.example.test/v1/orders"],
         )
         self.assertEqual(graphql, ["https://api.example.test/v1/graphql"])
+
+    def test_rate_limit_targets_include_openapi_and_graphql_mapping_shapes(self):
+        endpoints, graphql = rate_limiter.scope_rate_limit_targets(
+            "https://api.example.test/v1",
+            {
+                "openapi_endpoints": [{"path": "/v1/orders", "method": "GET"}],
+                "graphql": {
+                    "https://api.example.test/v1/graph": {"introspection_enabled": True},
+                    "https://attacker.invalid/graphql": {"introspection_enabled": True},
+                },
+            },
+        )
+        self.assertEqual(endpoints, [
+            "https://api.example.test/v1/orders",
+            "https://api.example.test/v1/graph",
+        ])
+        self.assertEqual(graphql, ["https://api.example.test/v1/graph"])
+
+    def test_graphql_batching_requires_clean_graphql_responses(self):
+        calls = []
+
+        def response(url, method, headers, body):
+            request_data = json.loads(body)
+            calls.append(request_data)
+            if isinstance(request_data, list):
+                return 200, {}, json.dumps([
+                    {"data": {"__typename": "Query"}} for _ in request_data
+                ])
+            query = request_data["query"]
+            if "q0:" in query:
+                alias_count = query.count("__typename")
+                return 200, {}, json.dumps({"data": {
+                    f"q{i}": "Query" for i in range(alias_count)
+                }})
+            if len(calls) == 1:
+                return 200, {}, '{"data":{"__typename":"Query"}}'
+            return 429, {}, "{}"
+
+        with patch.object(rate_limiter, "http_request", side_effect=response):
+            findings = rate_limiter.test_graphql_batching(
+                "https://api.example.test/graphql", baseline_max=3
+            )
+
+        self.assertEqual(
+            [finding["type"] for finding in findings],
+            ["graphql_batch_rate_limit_bypass_candidate", "graphql_alias_rate_limit_bypass_candidate"],
+        )
+        self.assertTrue(all(finding["validated"] is False for finding in findings))
+        self.assertEqual(len(calls[2]), 52)
+
+    def test_graphql_batching_does_not_treat_html_200_as_baseline(self):
+        calls = []
+        with patch.object(rate_limiter, "http_request", side_effect=lambda *args: (
+            calls.append(args) or (200, {}, "<html>login page</html>")
+        )):
+            findings = rate_limiter.test_graphql_batching(
+                "https://api.example.test/graphql", baseline_max=3
+            )
+        self.assertEqual(findings, [])
+        self.assertEqual(len(calls), 3)
+
+    def test_rate_limiter_validates_direct_probe_budgets(self):
+        with self.assertRaises(ValueError):
+            rate_limiter.reconfirm_rate_limit("https://api.example.test", burst_count=0)
+        with self.assertRaises(ValueError):
+            rate_limiter.test_graphql_batching(
+                "https://api.example.test/graphql", baseline_max=61
+            )
 
     def test_rate_limiter_rejects_invalid_request_count_before_network(self):
         argv = ["rate_limiter.py", "--api-base", "https://api.example.test", "--count", "0"]
