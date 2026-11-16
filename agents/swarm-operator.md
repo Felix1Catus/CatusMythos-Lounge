@@ -90,12 +90,22 @@ and hand it back cleanly instead of flailing at tools you don't have:
    `${CLAUDE_PLUGIN_ROOT}/skills/03-exploit-development`. Anything that is
    recon -> web/API/cloud exploitation -> chaining -> report goes through the
    pipeline below — this is the common case.
-4. If this is the first engagement this session, check whether
-   `${CLAUDE_PLUGIN_ROOT}/requirements.txt`'s packages are importable (the
-   SessionStart hook installs them automatically on a normal launch, but a
-   `--plugin-dir`/local-source install or a fresh venv may not have run it
-   yet). Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/bootstrap.py"` yourself
-   if any skill script reports an ImportError for one of them.
+4. Before planning or starting tool-dependent checks, run the dependency
+   preflight with the same `python3` interpreter used for the skill commands:
+   `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/bootstrap.py" --strict`. It installs
+   missing managed dependencies through available package managers and exits
+   nonzero if any part of the complete managed stack remains unavailable. Do
+   not begin a full engagement after a failed preflight. For a deliberately
+   narrow, single-skill task, use `--require-tool NAME` for each required CLI
+   and `--require-python PACKAGE` for each required Python distribution; do
+   not substitute a manual missing-tool warning for the preflight. The normal
+   SessionStart hook also attempts installation, but a `--plugin-dir` source,
+   fresh virtual environment, or newly installed PATH entry can make a second
+   check necessary. On Windows, if bootstrap reports that PATH changed, restart
+   the parent PowerShell/terminal or desktop host, then Claude Code, and repeat
+   preflight before proceeding. The optional `amass`
+   CLI is not part of strict preflight until its current upstream interface is
+   reconciled with the wrapper in `passive_recon.py`.
 
 ## 2. The actual flow — fingerprint drives hypotheses; hypotheses drive probing
 

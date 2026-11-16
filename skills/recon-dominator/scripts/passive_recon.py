@@ -136,7 +136,7 @@ def run_amass_passive(domain):
         success(f"amass: found {len(subdomains)} unique subdomains")
         return list(subdomains)
     except FileNotFoundError:
-        warn("amass not installed. Install: go install -v github.com/owasp-amass/amass/v4/...@master")
+        warn("amass is optional and is not bootstrap-managed until its current CLI/JSON output is verified")
         return []
     except subprocess.TimeoutExpired:
         warn("amass timed out")

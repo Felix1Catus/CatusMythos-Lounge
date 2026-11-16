@@ -16,6 +16,19 @@ CRITICAL: Only use on domains you have explicit authorization to test. Verify sc
 
 ## Instructions
 
+### Toolchain Preflight
+Before running the full recon workflow, install and verify the external
+enumeration stack used by this skill:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/bootstrap.py" --require-tool go --require-tool subfinder --require-tool httpx --require-tool puredns --require-tool naabu --require-tool dig --require-tool whois --require-tool nmap
+```
+
+Do not begin recon if this preflight exits nonzero. If Windows reports a new
+PATH entry, restart the terminal/Claude host and repeat preflight. `amass` is
+currently an optional fallback pending verification of its v5 CLI and JSON
+output against this wrapper.
+
 ### Step 1: Scope Validation
 Before ANY reconnaissance activity:
 1. Ask the user to confirm they have written authorization to test the target domain(s)

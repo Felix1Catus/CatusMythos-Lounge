@@ -16,6 +16,17 @@ CRITICAL: This skill is for authorized penetration testing and red team engageme
 
 ## Instructions
 
+### Toolchain Preflight
+When the input workflow needs live DNS/CNAME trust discovery, verify `dig`
+before collecting or refreshing those facts:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/bootstrap.py" --require-tool dig
+```
+
+Do not run the dependent DNS step after a failed preflight. For supplied
+recon JSON and manual-only analysis, this external tool is not required.
+
 ### Step 1: Input Collection
 Accept one of these inputs:
 1. **Recon JSON data** from recon-dominator (consolidated.json or individual module outputs)

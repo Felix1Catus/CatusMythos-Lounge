@@ -5,8 +5,8 @@ dependencies, test coverage, scope controls, integrations, overlaps, and the
 clearest coverage gaps. This is a map for prioritizing deeper per-skill review;
 it is not itself a line-by-line doc-vs-code audit (that happens per skill).
 Inventory structure originated at `f870a85`. Coverage status refreshed
-2026-11-16 against code at `61aae43`, plus the two PATH_INFO tests added in the
-focused handover update (check `git log -1` for the current tip).
+2026-11-16 against the verified `3aa2f62` baseline and the bootstrap/preflight
+continuation documented below. Check `git log -1` for the exact current tip.
 
 ## Shape of the toolkit
 
@@ -16,8 +16,8 @@ The **core pipeline is stdlib-only by design** (no third-party packages);
 
 - `requests>=2.31.0` — used by 4 scripts (chiefly `16-ai-llm-security`).
 - `playwright>=1.48.0` — used by exactly one script
-  (`webapp-exploit-hunter/scripts/browser_security_auditor.py`); its Chromium
-  binary is separate (`python3 -m playwright install chromium`).
+  (`webapp-exploit-hunter/scripts/browser_security_auditor.py`); bootstrap
+  installs its Chromium binary with `python3 -m playwright install chromium`.
 
 Plugin wiring (`.claude-plugin/plugin.json`): `skills -> ./skills`,
 `agents -> ./agents/swarm-operator.md`, `hooks -> ./hooks/hooks.json`
@@ -26,30 +26,41 @@ Plugin wiring (`.claude-plugin/plugin.json`): `skills -> ./skills`,
 Supporting infrastructure outside `skills/`: `scripts/` (bootstrap +
 check_common_sync + check_skill_cli_docs), `doctrine/`, `lounge/` (multi-seat
 orchestration), `standalone-advanced/hooks/`, `research_notes/`, `tests/`.
+The bootstrap's install commands and strict/narrow preflight are covered
+offline by `tests/test_bootstrap.py`; SessionStart wiring and LF metadata are
+checked by `tests/test_plugin_bootstrap_hook.py` and the same matrix.
 
 ## Test coverage at a glance
 
 | Coverage | Skills |
 |---|---|
-| Broad script-level regression matrices | `recon-dominator` (58), `cloud-pivot-finder` (38), `attack-path-architect` (28), `16-ai-llm-security` (87), `03-exploit-development` (14), `vuln-chain-composer` (63), legacy `webapp-exploit-hunter` testers (60) |
+| Broad script-level regression matrices | `recon-dominator` (59), `cloud-pivot-finder` (38), `attack-path-architect` (28), `16-ai-llm-security` (87), `03-exploit-development` (14), `vuln-chain-composer` (63), legacy `webapp-exploit-hunter` testers (60) |
 | Focused or partial coverage | `webapp-exploit-hunter` browser/crawler/DOM and selected CLI paths; `api-breaker`; `web-cache-auditor` (8 tests for its script) |
+| Plugin infrastructure | `tests/test_bootstrap.py` (30): parsing, install command construction, retry/cache validation, browser setup, PATH readiness, and nonzero preflight gates |
 | No scripts (manual methodology) | `web-protocol-auditor` |
 
-The full suite most recently passed **443 tests plus 21 subtests**. It includes
-local-fixture browser integration with Playwright/Chromium. Coverage is uneven:
+The full suite most recently passed **474 tests plus 21 subtests**. It includes
+local-fixture browser integration with Playwright/Chromium and the new bootstrap
+matrix. The strict bootstrap preflight also passed on the current Windows host.
+Coverage is uneven:
 these matrices emphasize logic and edge cases, and do not constitute end-to-end
 validation of every CLI or prove the absence of bugs. See `HANDOVER.md` for
 specific fixes, test themes, browser limitations, and the latest verification.
 
 ## Per-skill inventory
 
-### recon-dominator — `[58-TEST MATRIX; all scripts covered]`
+### recon-dominator — `[59-TEST MATRIX; all scripts covered]`
 - **Use:** full-scope recon from a domain/list — subdomains, ports, tech
   fingerprint, OSINT, Google dorking, Wayback, JS/source-map recon.
 - **CLIs (10):** `passive_recon`, `active_recon`, `port_scanner`,
   `tech_fingerprint`, `osint_correlator`, `google_dorker`, `wayback_analyzer`,
   `cve_lookup`, `js_recon`, `generate_report`. Shares `_common.py` (109 ln).
 - **Deps:** stdlib; may shell out to user-scoped Go recon tools when present.
+- **Tool setup:** the bootstrap manages Go, subfinder, httpx, puredns, naabu,
+  and allowlisted DNS/WHOIS/Nmap/Perl commands. `amass` is deliberately not
+  managed yet because the current wrapper uses a v4-style invocation and
+  parses JSON from stdout; verify the current v5 CLI/output behavior before
+  enabling it automatically.
 - **Coverage:** `tests/test_recon_dominator.py` covers all scripts' key parsers,
   classifiers, source-map handling, CVE matching, WAF/service parsing, dork
   generation, and report rendering. Includes fixes for prose version ranges,

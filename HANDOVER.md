@@ -6,10 +6,10 @@ doesn't mistake uneven coverage for uniform coverage.
 
 ## Current state
 
-- Verified starting head for this continuation: `61aae43f2d1051f75e125132a654d780c3b22bf3`
-  on local `main`, with `origin/main` matching and a clean tree before the
-  focused PATH_INFO review. This handover/test update is being committed as a
-  descendant; use `git log -1` for the exact post-update tip.
+- Verified starting head for the bootstrap/preflight continuation:
+  `3aa2f62090bce3f9e966cdd4361b58067d981d2b` on local `main`, with
+  `origin/main` matching and a clean tree. The focused PATH_INFO work directly
+  preceded it and remains part of the verified baseline.
 - Full lineage since the audit baseline `73162b06b8458155cdf4113b810da3be6d8e6039`
   (chronological; all were present on `origin/main` at pickup):
   - `caed91e` — broad audit and hardening batch (details in `AUDIT.md`).
@@ -29,19 +29,33 @@ doesn't mistake uneven coverage for uniform coverage.
   - `802be7b` — fixed chain category derivation that silently suppressed
     multi-word vulnerability chains; added vuln-chain matrix.
   - `92354a7` — exploit-development payload-generator matrix.
-  - `d68009c` — legacy web tester matrix and race-PoC thread-count fix; this
-    continuation adds two PATH_INFO regressions, bringing that matrix to 60.
+  - `d68009c` — legacy web tester matrix and race-PoC thread-count fix; the
+    later focused PATH_INFO review recorded in `3aa2f62` added two regressions,
+    bringing that matrix to 60.
   - `61aae43` — fragment img fallback, form-probe fallback, and configurable
     SPA settle behavior for the browser auditor.
+- `3aa2f62` — refreshed this handover/inventory and added two PATH_INFO
+  regressions for status `0` and propagation of unexpected request exceptions.
 - Verification at the `61aae43` code state: **441 tests + 21 subtests** passed;
   Ruff, compileall, CLI docs (`10/94/58`), and shared-helper sync passed. The
-  browser feature has a real local Chromium fixture run. This continuation
-  added two PATH_INFO regressions and reran the complete suite: **443 passed +
+  browser feature has a real local Chromium fixture run. The focused PATH_INFO
+  review recorded in `3aa2f62` added two regressions and reran the suite:
+  **443 passed +
   21 subtests**. Ruff and compileall are clean; CLI docs now report
   **10 skill docs / 95 command references / 58 CLIs**; shared helpers are in
   sync. Chromium and the test/lint stack were installed and verified in this
   Windows environment. These are local-fixture/offline checks, not live-target
-  testing.
+  testing. The `3aa2f62` checkpoint raised the suite to **443 tests + 21
+  subtests**. Bootstrap changes and their new verification are recorded in
+  this 2026-11-16 addendum; `git log -1` is the source of truth for the current
+  branch tip.
+- **Verification at the bootstrap continuation code state:** full suite **474
+  tests + 21 subtests passed**; Ruff, compileall, CLI docs (**10 skill docs / 95
+  command references / 58 CLIs**), shared-helper sync, and `git diff --check`
+  passed. The real `--strict` preflight passed on Windows, including a live
+  local Chromium headless launch. This host already had the managed dependencies,
+  so no OS package installation ran; installer and PATH-change cases are tested
+  with mocks. No live targets were contacted.
 - The browser auditor has now had a **real Playwright/Chromium integration run**
   against a local fixture (passive, active query, active fragment via both
   `innerHTML` and `document.write`, and form submission all exercised). Two bugs
@@ -63,9 +77,14 @@ For each skill deepening pass:
 4. Add a per-skill regression matrix, including boundaries and negative cases.
    Keep tests offline or on loopback fixtures unless browser integration is
    specifically required and locally isolated.
-5. Install and verify the required tools before running dependent checks. Run
-   the full pytest suite, Ruff, compileall, and relevant CLI/helper/manifest
-   checks. Do not describe skipped or partial validation as complete.
+5. Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/bootstrap.py" --strict` before a
+   full engagement, or use `--require-tool` / `--require-python` for a narrow
+   task. If a newly installed executable needs a refreshed PATH, stop, restart
+   the parent PowerShell/terminal or desktop host and Claude Code, then rerun
+   preflight. Install and verify test tools before dependent checks. Run the
+   full pytest suite, Ruff, compileall, and relevant
+   CLI/helper/manifest checks. Do not describe skipped or partial validation
+   as complete.
 6. Update `HANDOVER.md`, `INVENTORY.md`, and dated `AUDIT.md` addenda with what
    was inspected, what changed, verification, and remaining uncertainty.
 7. Commit one logical chunk with the configured author identity, push to
@@ -78,6 +97,16 @@ independently re-verified line by line)
 **Deepest automated coverage:** cache-audit helpers, static DOM analysis,
 crawler discovery, redirect scope, selected imported-API data handling, XSS
 finding-confidence, PoC-generation safety.
+
+**Bootstrap/preflight deepened 2026-11-16:** setup markers are now revalidated
+against the active interpreter and package versions; failed Python installs
+retry on later runs; Playwright Chromium is installed and its executable is
+checked; missing allowlisted system tools are installed through existing
+noninteractive package managers; Go installs are verified and Windows user
+PATH is persisted. `--strict` gates the complete managed stack, while
+`--require-tool` and `--require-python` gate narrower tasks. See the dated
+addendum for exact tests and validation boundaries. Actual OS package-manager
+installation was not exercised in this already-provisioned Windows environment.
 
 **Areas deepened since the prior handover (coverage is regression depth, not a
 claim that every behavior is exhaustively validated):**
@@ -113,7 +142,9 @@ claim that every behavior is exhaustively validated):**
   (source/target edge + fully-connected hosts); and `engagement_planner`'s
   authorization-defaults-false gate + markdown render.
 - `recon-dominator` — FULLY DEEPENED 2026-11-16: every script now has
-  regression coverage (58-test matrix in `tests/test_recon_dominator.py`).
+  regression coverage (59-test matrix in `tests/test_recon_dominator.py`). This
+  bootstrap pass also added a regression for the optional Amass-not-installed
+  path so it no longer recommends the stale v4 Go install command.
   `cve_lookup` version-range matching and `active_recon`'s Sitting-Ducks SOA
   delegation verdict were covered first, with two real `cve_lookup` bugs fixed
   (prose "before/prior to/< X" treated as inclusive -> false positive on the
@@ -314,6 +345,10 @@ The two API write gates are the clearest friction with "don't be passive":
 authorized workflows must document and pass the flags, not silently skip write
 testing.
 
+Bootstrap preflight checks dependency readiness only. It does not replace
+authorization/scope checks and does not change any active payload, API write,
+browser `--active`, or `--submit-forms` behavior.
+
 ## Browser auditor — verified by integration run (2026-11-16)
 - **Working:** missing-header/cookie-flag/sensitive-storage findings; off-origin
   request blocking + counting; WebSocket interception (no upstream connect);
@@ -361,18 +396,22 @@ testing.
    *heuristic* that only enables deeper tests; it is not itself reported as
    RCE. Revisit the status policy if fixtures show excessive unnecessary
    uploads.
-2. **Inventory — started, needs refresh.** `INVENTORY.md` exists from
-   `d9f7513`, but its test-coverage table and priority list still say several
-   skills have zero tests. Update it to reflect the matrices listed above and
-   keep its structural CLI/dependency/overlap map. **Coverage status was
-   refreshed in this continuation;** still verify the structural map against
-   the full current plugin if the directory or CLI surface changes.
-3. Revisit bootstrap + task preflight against "install required tools directly
-   when feasible; don't run dependent checks with an incomplete stack." Current
-   bootstrap installs Python deps + user-scoped Go tools, but only *reports*
-   missing system tools (`nmap`, `dig`, `whois`, `perl`) and does not install
-   Chromium. Preserve Windows fixes: `python3`, LF line endings, `hooks/hooks.json`.
-4. Consolidate the five copied `_common.py` helpers? A sync check exists instead
+2. **Inventory structure — coverage refreshed; structural map still needs
+   review if skills, CLIs, dependencies, or plugin references move.** Inventory
+   now includes the bootstrap test matrix and its preflight behavior.
+3. **Bootstrap + task preflight — implemented; deeper OS-specific install
+   validation remains open.** Missing Python dependencies, Chromium, Go, Go
+   recon tools, and allowlisted system tools are actively installed through
+   available managers. Strict/narrow preflights stop dependent work if any
+   required tool is still unavailable. Revisit package-manager behavior on
+   clean Windows/macOS/Linux images. `amass` is deliberately excluded from
+   managed installs until its v5 CLI and JSON-output behavior are verified
+   against this repo's v4-style wrapper. Python requirement ranges and Go
+   `@latest` references are still unpinned; research reproducible, verifiable
+   pinning before tightening them.
+   Preserve Windows fixes: `python3`, LF `hooks/hooks.json`, actual
+   `hooks/hooks.json` path.
+4. Consolidate the copied `_common.py` helpers? A sync check exists instead
    of consolidation. Map imports/CLI examples/plugin refs/tests before moving.
 5. Continue skill deepening where meaningful gaps remain, especially
    `api-breaker` paths not covered by the current partial tests, the remaining

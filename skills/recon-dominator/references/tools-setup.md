@@ -1,5 +1,13 @@
 # Required and Optional Tools Setup
 
+Before a full engagement, run
+`python3 "${CLAUDE_PLUGIN_ROOT}/scripts/bootstrap.py" --strict`. The bootstrap
+installs and verifies the managed toolchain. For a narrower recon task, use
+`--require-tool dig --require-tool nmap` (plus any Go tools the selected flow
+needs); a nonzero result means the dependent checks must wait until the tools
+are available. Manual install commands below remain useful when no supported
+package manager is present.
+
 ## Required (Python - no install needed)
 The core scripts use only Python 3 standard library. No pip install required.
 
@@ -28,9 +36,12 @@ go install -v github.com/projectdiscovery/naabu/v2/cmd/naabu@latest
 ```
 
 ### amass - Comprehensive subdomain enumeration
-```bash
-go install -v github.com/owasp-amass/amass/v4/...@master
-```
+
+This tool is intentionally not installed by bootstrap yet. The recon wrapper
+uses the v4-style `amass enum -passive` interface and parses JSON from stdout;
+the upstream project's current installation docs describe v5. Verify that the
+installed CLI still accepts this invocation and emits the expected JSON before
+manually enabling it; until then, use the built-in subfinder/Wayback sources.
 
 ## System Tools
 - `dig` - DNS queries (pre-installed on macOS/Linux)

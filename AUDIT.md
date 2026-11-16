@@ -123,3 +123,77 @@ These checks improve coverage but do not establish that the repository is
 bug-free or that every skill has exhaustive end-to-end coverage. The remaining
 gaps and browser policy limitations are maintained in `HANDOVER.md` and
 `INVENTORY.md`.
+
+---
+
+## Follow-up addendum — dependency bootstrap and preflight (2026-11-16)
+
+Starting point was the clean, verified `main` tip `3aa2f62090bce3f9e966cdd4361b58067d981d2b`.
+This pass addresses the handover's open bootstrap/preflight item. The previous
+bootstrap trusted successful package markers without checking the active
+interpreter, cached failures indefinitely, reported missing system tools rather
+than installing them, and left Playwright's browser/manual OS dependencies to
+the operator. Its hook timeout was also too short for its worst-case sequence.
+
+### Changes
+
+- Bootstrap revalidates Python imports and package version constraints in the
+  interpreter it is running under. It retries previous failures so transient
+  network/proxy problems do not freeze a skill in a permanently unavailable
+  state. Requirements hashing normalizes CRLF/LF; unreadable/malformed marker
+  data no longer aborts the non-strict startup path.
+- SessionStart now attempts missing Python dependencies, Playwright Chromium,
+  Go, the managed Go recon CLIs, and allowlisted system commands through
+  package managers already present on the host: WinGet/Chocolatey, Homebrew,
+  apt/dnf/yum/pacman. Each attempt is logged, uses noninteractive flags, and is
+  bounded by a 540-second total install budget inside the official 600-second
+  command-hook maximum. It does not fetch and execute a package-manager
+  bootstrap script.
+- Playwright Chromium is installed through its own Python CLI. Strict browser
+  preflight verifies an actual headless launch; on Linux, a missing-library
+  error triggers Playwright's `install-deps chromium` through noninteractive
+  `sudo -n` (or directly when already root), followed by a retry.
+- `--strict` now exits nonzero until the complete *managed* stack is usable.
+  Narrow `--require-tool` and `--require-python` modes install and verify only
+  the selected task dependencies. The swarm operator and browser/AI skill docs
+  now direct agents to preflight before dependent work. On Windows, newly
+  installed tools outside the parent session's PATH cause preflight failure;
+  the Go bin is persisted to the user PATH and the agent must restart its
+  terminal/host and re-run preflight.
+- The active-testing behavior and scope gates were not reduced or changed.
+  Preflight is not a target authorization mechanism. API mutation flags,
+  browser `--active` / `--submit-forms`, injection probes, and cache replay
+  controls remain as they were.
+- `amass` was deliberately left outside managed installs: the current wrapper
+  uses `amass enum -passive` v4-style arguments and parses JSON from stdout,
+  while the upstream project now documents a v5 installation path. Whether
+  the current CLI preserves those exact flags/output semantics remains
+  unverified; check it with a fixture before bootstrap manages the install.
+
+### Verification and limits
+
+- Added offline bootstrap tests for line-ending-stable requirements hashes,
+  version-aware markers, retry after cached failure, installer command building
+  on Windows and Linux, narrow and strict preflight gates, Chromium binary and
+  OS-library setup, Go executable visibility, stale PATH handling, and LF-only
+  SessionStart metadata. `tests/test_bootstrap.py` contributes 30 tests; the
+  existing hook test also checks its Python command, timeout, and LF bytes.
+- Final verification on this code state: **474 tests + 21 subtests passed**;
+  Ruff, compileall, helper sync, CLI docs (**10 / 95 / 58**), and
+  `git diff --check` passed. `python3 scripts/bootstrap.py --strict` passed on
+  Windows, including a real local Chromium launch. The host already had every
+  managed tool, so no OS package installation ran.
+- The strict preflight was run on this Windows host. `requests`, Playwright,
+  Chromium, Go, Nmap, dig, WHOIS, Perl, and the four managed Go CLIs were already
+  available; a real local Chromium headless launch passed. No package-manager
+  installation was triggered on this host. Package-manager installs and Linux
+  library installation were tested with mocks only; clean-host Windows/macOS/
+  Linux installation remains unverified.
+- Python package constraints and Go `@latest` references remain intentionally
+  unpinned in this pass. Supply-chain pinning and platform installer testing
+  remain follow-up work. No live targets were contacted.
+
+Primary implementation references: [Claude Code command-hook limits](https://code.claude.com/docs/en/hooks-guide),
+[WinGet install options](https://learn.microsoft.com/en-us/windows/package-manager/winget/install),
+[Playwright Python browser installation](https://playwright.dev/python/docs/browsers), and
+[OWASP Amass current install docs](https://github.com/owasp-amass/docs/blob/master/docs/index.md).

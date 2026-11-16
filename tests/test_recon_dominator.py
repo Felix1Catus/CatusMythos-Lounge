@@ -44,6 +44,17 @@ dorker = load_script("recon_google_dorker", "google_dorker.py")
 report = load_script("recon_generate_report", "generate_report.py")
 
 
+class PassiveReconOptionalToolTests(unittest.TestCase):
+    def test_missing_amass_reports_unverified_compatibility_without_old_install_command(self):
+        with patch.object(passive.subprocess, "run", side_effect=FileNotFoundError), patch.object(
+            passive, "warn"
+        ) as warning:
+            self.assertEqual(passive.run_amass_passive("example.com"), [])
+        warning.assert_called_once()
+        self.assertIn("not bootstrap-managed", warning.call_args.args[0])
+        self.assertNotIn("go install", warning.call_args.args[0])
+
+
 class ParseVersionTests(unittest.TestCase):
     def test_basic_and_empty(self):
         self.assertEqual(cve._parse_version("4.2.1"), (4, 2, 1))

@@ -1,5 +1,5 @@
 {
-  "description": "Installs CatusMythos-Lounge's optional Python dependencies (requirements.txt) once per requirements.txt version, and best-effort installs/reports the optional recon/analysis CLI tools several skills can use. Always exits 0 -- nothing here is required for the core pipeline, which is stdlib-only.",
+  "description": "Verifies and installs declared Python, browser, Go, and allowlisted system-tool dependencies through available package managers. Missing dependencies are reported; strict task preflight exits nonzero until its required stack is ready.",
   "hooks": {
     "SessionStart": [
       {
@@ -13,7 +13,7 @@
               "--plugin-root", "${CLAUDE_PLUGIN_ROOT}",
               "--data-dir", "${CLAUDE_PLUGIN_DATA}"
             ],
-            "timeout": 240
+            "timeout": 600
           }
         ]
       }

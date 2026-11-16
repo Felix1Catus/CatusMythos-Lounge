@@ -56,7 +56,7 @@ This skill activates when the user asks about:
 ## Prerequisites
 
 ```bash
-pip install requests
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/bootstrap.py" --require-python requests
 ```
 All five scripts in this skill are otherwise stdlib-only (`model_supply_chain.py`
 has zero third-party dependencies at all; `requests` is a guarded, optional

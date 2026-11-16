@@ -16,6 +16,17 @@ CRITICAL: Only test cloud infrastructure you have explicit authorization to test
 
 ## Instructions
 
+### Toolchain Preflight
+Before running the cloud-discovery workflow, verify the DNS and WHOIS tools
+used by its enrichment and delegation checks:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/bootstrap.py" --require-tool dig --require-tool whois
+```
+
+Do not start dependent checks if preflight exits nonzero. If Windows reports a
+new PATH entry, restart the terminal/Claude host and repeat preflight.
+
 ### Step 1: Cloud Provider Detection
 
 ```bash

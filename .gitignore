@@ -4,6 +4,7 @@ router_seen/
 *.log
 STATE/
 .lounge-runtime/
+/setup.json
 
 # Python
 __pycache__/

@@ -150,13 +150,36 @@ cp -r skills/* ~/.claude/skills/
 - Claude Code with skills support
 - Optional, for faster recon: `subfinder`, `httpx`, `puredns`, `naabu`,
   `dig`, `whois`, `nmap`
-- Optional browser testing: the bootstrap installs Playwright; install its
-  Chromium binary once with `python3 -m playwright install chromium`.
+- Browser-backed testing: Playwright and its Chromium binary are managed by
+  the bootstrap.
 
-At session start, the plugin installs missing optional Python dependencies
-and user-scoped Go recon tools when Go is available. Missing system packages
-are reported with install commands; the bootstrap does not invoke a system
-package manager or request elevated privileges.
+At session start, the plugin verifies and attempts to install missing Python
+dependencies, Chromium, Go, user-scoped Go recon tools, and the allowlisted
+system tools (`nmap`, `dig`, `whois`, and Perl). It uses package managers that
+are already installed: WinGet or Chocolatey on Windows, Homebrew on macOS, and
+apt, dnf, yum, or pacman on Linux. Installs are logged and noninteractive. A
+system manager may require administrator rights; if installation fails, the
+bootstrap reports the unresolved tools instead of treating them as ready.
+
+Before a full engagement, require the complete managed stack:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/bootstrap.py" --strict
+```
+
+For a narrower task, require only its external tools or Python packages; the
+bootstrap installs those if missing and exits nonzero if they are still not
+available:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/bootstrap.py" --require-tool dig --require-tool nmap
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/bootstrap.py" --require-python requests
+```
+
+If a Windows install adds a new directory to PATH, restart the parent
+PowerShell/terminal or desktop host, then Claude Code, and repeat the preflight
+before starting dependent checks. `amass` remains optional until its current
+CLI and JSON-output behavior are verified against this repo's v4-style wrapper.
 
 HTTPS certificate verification is enabled by default. For an authorized
 target with a self-signed certificate, set `CATUS_INSECURE_TLS=1` in the
