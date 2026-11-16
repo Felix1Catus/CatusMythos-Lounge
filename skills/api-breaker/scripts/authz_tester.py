@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 
 
 from _common import http_request, log, same_origin_url, success, vuln, warn
+from response_safety import safe_response_preview
 # Admin/privileged endpoint patterns
 ADMIN_PATTERNS = [
     "/admin", "/admin/", "/api/admin", "/api/v1/admin",
@@ -39,23 +40,6 @@ OBJECT_ID_RESOURCES = {
     "users", "accounts", "orders", "items", "products", "posts", "messages",
     "documents", "files", "tickets",
 }
-SENSITIVE_RESPONSE_KEY = re.compile(
-    r"(?:password|passwd|secret|token|api[_-]?key|private[_-]?key|"
-    r"authorization|cookie|credit.?card|cc.?number|ssn|social.?security|"
-    r"email|phone|mobile|address|date.?of.?birth|\bdob\b|"
-    r"first.?name|last.?name|full.?name|display.?name|username|"
-    r"(?:^|[_-])name(?:$|[_-]))",
-    re.IGNORECASE,
-)
-INLINE_EMAIL = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
-INLINE_JWT = re.compile(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*\b")
-INLINE_SECRET_ASSIGNMENT = re.compile(
-    r"(?i)\b(password|passwd|secret|token|api[_-]?key|authorization|cookie)"
-    r"\b[\"']?\s*[:=]\s*[\"']?(?:Bearer\s+)?[^\s,;\"'}]+"
-)
-INLINE_BEARER = re.compile(r"(?i)\bBearer\s+[^\s,;\"'}]+")
-
-
 def parse_delay(value):
     try:
         delay = float(value)
@@ -64,35 +48,6 @@ def parse_delay(value):
     if not math.isfinite(delay) or not 0 <= delay <= 60:
         raise argparse.ArgumentTypeError("delay must be finite and between 0 and 60 seconds")
     return delay
-
-
-def _redact_response_values(value):
-    if isinstance(value, dict):
-        return {
-            key: "[REDACTED]" if SENSITIVE_RESPONSE_KEY.search(str(key))
-            else _redact_response_values(item)
-            for key, item in value.items()
-        }
-    if isinstance(value, list):
-        return [_redact_response_values(item) for item in value]
-    return value
-
-
-def safe_response_preview(body, max_chars=200):
-    """Keep short JSON evidence while redacting sensitive values and omitting HTML/text."""
-    if not isinstance(body, str):
-        return "[non-text response omitted]"
-    try:
-        parsed = json.loads(body)
-        preview = json.dumps(_redact_response_values(parsed), ensure_ascii=False)
-    except (json.JSONDecodeError, ValueError, TypeError, RecursionError):
-        return f"[non-JSON response omitted; length={len(body)}]"
-
-    preview = INLINE_SECRET_ASSIGNMENT.sub("[REDACTED]", preview)
-    preview = INLINE_BEARER.sub("Bearer [REDACTED]", preview)
-    preview = INLINE_JWT.sub("[REDACTED]", preview)
-    preview = INLINE_EMAIL.sub("[REDACTED]", preview)
-    return preview[:max_chars]
 
 
 def extract_object_ids(body):

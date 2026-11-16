@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 
 
 from _common import http_request, log, same_origin_url, success, warn
+from response_safety import safe_response_preview
 # Extra fields to inject for mass assignment testing
 INJECTION_FIELDS = {
     # Privilege escalation
@@ -199,7 +200,7 @@ def test_mass_assignment_flat(url, method, auth_headers, baseline_payload, delay
                         "method": method,
                         "url": url,
                         "status": status,
-                        "response_preview": body[:300],
+                        "response_preview": safe_response_preview(body, max_chars=300),
                     })
                     break  # Found for this field, move to next
 
@@ -271,7 +272,7 @@ def test_mass_assignment_nested(url, method, auth_headers, baseline_payload, del
                     "method": method,
                     "url": url,
                     "status": status,
-                    "response_preview": body[:300],
+                    "response_preview": safe_response_preview(body, max_chars=300),
                 })
 
     return findings

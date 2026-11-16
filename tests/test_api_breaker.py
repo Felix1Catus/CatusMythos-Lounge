@@ -183,7 +183,9 @@ class ApiBreakerScopeTests(unittest.TestCase):
 
     def test_no_auth_data_is_candidate_until_sensitivity_is_known(self):
         def record_request(url, method="GET", headers=None, **kwargs):
-            return 200, {}, "x" * 80
+            return 200, {}, json.dumps({
+                "id": "object-9", "email": "alice@example.test", "password": "fixture-secret",
+            })
 
         with patch.object(auth_analyzer, "http_request", side_effect=record_request):
             findings = auth_analyzer.test_no_auth_access(
@@ -196,6 +198,9 @@ class ApiBreakerScopeTests(unittest.TestCase):
         self.assertEqual(len(findings), 1)
         self.assertEqual(findings[0]["type"], "no_auth_required_candidate")
         self.assertFalse(findings[0]["validated"])
+        self.assertIn("object-9", findings[0]["response_preview"])
+        self.assertNotIn("alice@example.test", findings[0]["response_preview"])
+        self.assertNotIn("fixture-secret", findings[0]["response_preview"])
 
     def test_bola_object_urls_replace_templates_and_preserve_query(self):
         base = "https://api.example.test"
@@ -632,13 +637,18 @@ class ApiBreakerScopeTests(unittest.TestCase):
                 [],
             )
 
-        with patch.object(logic_tester, "http_request", return_value=(200, {}, '{"price": 0}')):
+        response = json.dumps({
+            "price": 0, "email": "buyer@example.test", "access_token": "fixture-token",
+        })
+        with patch.object(logic_tester, "http_request", return_value=(200, {}, response)):
             findings = logic_tester.test_price_manipulation(
                 "https://api.example.test/orders", "POST", {}, delay=0
             )
         self.assertEqual(findings[0]["type"], "price_manipulation_candidate")
         self.assertEqual(findings[0]["severity"], "INFO")
         self.assertFalse(findings[0]["validated"])
+        self.assertNotIn("buyer@example.test", findings[0]["response_preview"])
+        self.assertNotIn("fixture-token", findings[0]["response_preview"])
 
     def test_quantity_success_without_injected_value_echo_is_not_a_finding(self):
         with patch.object(logic_tester, "http_request", return_value=(200, {}, '{"id": "123"}')):

@@ -16,6 +16,7 @@ import math
 
 
 from _common import http_request, log, same_origin_url, success, warn
+from response_safety import safe_response_preview
 
 
 MUTATING_METHODS = {"POST", "PUT", "PATCH"}
@@ -187,7 +188,7 @@ def test_price_manipulation(url, method, auth_headers, delay=0):
                     "method": method,
                     "payload": test["payload"],
                     "status": status,
-                    "response_preview": body[:300],
+                    "response_preview": safe_response_preview(body, max_chars=300),
                 })
 
     return findings
@@ -235,7 +236,7 @@ def test_quantity_overflow(url, method, auth_headers, delay=0):
                 "method": method,
                 "payload": test["payload"],
                 "status": status,
-                "response_preview": body[:300],
+                "response_preview": safe_response_preview(body, max_chars=300),
             })
 
     return findings
@@ -278,7 +279,7 @@ def test_coupon_stacking(url, method, auth_headers, delay=0):
                     "method": method,
                     "payload": test["payload"],
                     "status": status,
-                    "response_preview": body[:300],
+                    "response_preview": safe_response_preview(body, max_chars=300),
                 })
 
     return findings
@@ -369,7 +370,7 @@ def test_negative_amounts(url, method, auth_headers, delay=0):
                 "method": method,
                 "payload": test["payload"],
                 "status": status,
-                "response_preview": body[:300],
+                "response_preview": safe_response_preview(body, max_chars=300),
             })
 
     return findings
@@ -416,7 +417,7 @@ def test_privilege_escalation(url, method, auth_headers, delay=0):
                         "method": m,
                         "payload": test["payload"],
                         "status": status,
-                        "response_preview": body[:300],
+                        "response_preview": safe_response_preview(body, max_chars=300),
                     })
 
     return findings

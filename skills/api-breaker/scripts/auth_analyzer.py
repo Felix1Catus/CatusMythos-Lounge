@@ -32,6 +32,7 @@ from datetime import datetime, timezone
 
 
 from _common import http_request, log, same_origin_url, success, vuln, warn
+from response_safety import safe_response_preview
 # Common weak JWT secrets for brute-force
 WEAK_SECRETS = [
     "secret", "password", "123456", "key", "private", "public",
@@ -768,7 +769,7 @@ def test_no_auth_access(base_url, endpoints, delay=0, auth_token=None, extra_hea
                     "url": url,
                     "status": status,
                     "response_length": len(body),
-                    "response_preview": body[:200],
+                    "response_preview": safe_response_preview(body),
                     "authenticated_status": auth_status,
                     "validated": False,
                 })
