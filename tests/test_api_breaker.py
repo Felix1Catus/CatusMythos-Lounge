@@ -825,6 +825,11 @@ class ApiBreakerScopeTests(unittest.TestCase):
         self.assertIsNone(logic_tester._numeric_json_pointer('{"value":1}', "/missing"))
         self.assertIsNone(logic_tester._numeric_json_pointer('{"value":NaN}', "/value"))
         self.assertIsNone(logic_tester._numeric_json_pointer('{"value":Infinity}', "/value"))
+        large_count = logic_tester._numeric_json_pointer(
+            '{"value":9007199254740993}', "/value"
+        )
+        self.assertEqual(large_count, 9007199254740993)
+        self.assertIsInstance(large_count, int)
         deeply_nested = "[" * 1500 + "1" + "]" * 1500
         self.assertIsNone(logic_tester._numeric_json_pointer(deeply_nested, ""))
 
@@ -842,6 +847,60 @@ class ApiBreakerScopeTests(unittest.TestCase):
         self.assertEqual(second, [])
         self.assertEqual(budget.used, 10)
         self.assertEqual(request.call_count, 10)
+
+    def test_race_202_responses_remain_inconclusive_for_state_comparison(self):
+        def respond(url, method="GET", headers=None, data=None, timeout=8, **_kwargs):
+            if method == "GET":
+                return 200, {"Cache-Control": "no-store"}, '{"count":0}'
+            return 202, {}, '{"accepted":true}'
+
+        with patch.object(logic_tester, "http_request", side_effect=respond):
+            findings = logic_tester.test_race_condition(
+                "https://api.example.test/redeem",
+                "POST",
+                {},
+                state_readback_url="https://api.example.test/state",
+                state_json_pointer="/count",
+            )
+
+        self.assertEqual(len(findings), 3)
+        self.assertTrue(all(f["sequential_baseline_status"] == 202 for f in findings))
+        self.assertTrue(all("state_effect_multiple" not in f for f in findings))
+        self.assertTrue(all("not comparable" in f["evidence"] for f in findings))
+
+    def test_race_cached_state_metadata_is_inconclusive_and_revalidated(self):
+        state_reads = {"count": 0}
+        values = (0, 1, 11)
+
+        def respond(url, method="GET", headers=None, data=None, timeout=8, **_kwargs):
+            if method == "GET":
+                value = values[state_reads["count"] % len(values)]
+                state_reads["count"] += 1
+                return 200, {"Age": "0", "X-Cache": "TCP_HIT"}, json.dumps({"count": value})
+            return 200, {}, '{"ok":true}'
+
+        with patch.object(logic_tester, "http_request", side_effect=respond) as request:
+            findings = logic_tester.test_race_condition(
+                "https://api.example.test/redeem",
+                "POST",
+                {},
+                state_readback_url="https://api.example.test/state",
+                state_json_pointer="/count",
+            )
+
+        self.assertEqual(len(findings), 3)
+        self.assertTrue(all("state_effect_multiple" not in f for f in findings))
+        self.assertTrue(all("cache-age or cache-hit" in f["evidence"] for f in findings))
+        get_headers = [
+            call.kwargs["headers"] for call in request.call_args_list
+            if call.kwargs.get("method") == "GET"
+        ]
+        self.assertEqual(len(get_headers), 9)
+        self.assertTrue(all(
+            headers.get("Cache-Control") == "no-cache, no-store, max-age=0"
+            and headers.get("Pragma") == "no-cache"
+            for headers in get_headers
+        ))
 
     def test_race_state_readback_suppresses_2xx_without_duplicate_side_effect(self):
         state = {"count": 0}
@@ -1536,6 +1595,17 @@ class ApiBreakerScopeTests(unittest.TestCase):
                 "https://api.example.test/graphql", baseline_max=61
             )
 
+    def test_rate_limiter_race_validates_both_phases_before_network(self):
+        for count, workers in ((0, 1), (2, 0), (2, rate_limiter.MAX_RATE_LIMIT_WORKERS + 1)):
+            with self.subTest(count=count, workers=workers), patch.object(
+                rate_limiter, "http_request"
+            ) as request:
+                with self.assertRaises(ValueError):
+                    rate_limiter.test_race_condition(
+                        "https://api.example.test/redeem", count=count, workers=workers
+                    )
+                request.assert_not_called()
+
     def test_rate_limiter_rejects_invalid_request_count_before_network(self):
         argv = ["rate_limiter.py", "--api-base", "https://api.example.test", "--count", "0"]
         with patch.object(sys, "argv", argv), patch.object(rate_limiter, "http_request") as request:
@@ -1543,6 +1613,46 @@ class ApiBreakerScopeTests(unittest.TestCase):
                 rate_limiter.main()
         self.assertEqual(error.exception.code, 2)
         request.assert_not_called()
+
+    def test_api_report_loads_supported_finding_shapes_and_skips_invalid_shapes(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            single = root / "single.json"
+            single.write_text(json.dumps({"type": "bola", "url": "/users/1"}), encoding="utf-8")
+            aggregate = root / "aggregate.json"
+            aggregate.write_text(json.dumps({"findings": [
+                {"type": "no_rate_limit_candidate"}, None, "bad item",
+            ]}), encoding="utf-8")
+            list_file = root / "list.json"
+            list_file.write_text(json.dumps([{"type": "mass_assignment"}, {"type": "bfla"}]), encoding="utf-8")
+            wrong_findings = root / "wrong-findings.json"
+            wrong_findings.write_text(json.dumps({"findings": {"type": "bola"}}), encoding="utf-8")
+            scalar = root / "scalar.json"
+            scalar.write_text("42", encoding="utf-8")
+            corrupt = root / "corrupt.json"
+            corrupt.write_text("{broken", encoding="utf-8")
+
+            self.assertEqual(api_report.load_findings_from_dir(single), [{
+                "type": "bola", "url": "/users/1",
+            }])
+            loaded = api_report.load_findings_from_dir(root)
+            self.assertEqual(
+                [finding["type"] for finding in loaded],
+                ["no_rate_limit_candidate", "mass_assignment", "bfla", "bola"],
+            )
+
+    def test_api_report_normalizes_malformed_finding_fields(self):
+        report = api_report.generate_finding_report({
+            "type": [], "severity": ["critical"], "url": {"host": "bad"},
+            "method": 3, "payload": {"value": "ok"},
+        }, 1)
+        self.assertEqual(report["type"], "unknown")
+        self.assertEqual(report["severity"], "medium")
+        self.assertEqual(report["affected_endpoint"]["url"], "N/A")
+        self.assertEqual(report["affected_endpoint"]["method"], "3")
+        json.dumps(report)
+        with self.assertRaises(ValueError):
+            api_report.generate_finding_report([{"type": "bola"}], 1)
 
     def test_schema_builder_paths_are_scoped_and_absolute_paths_are_canonicalized(self):
         paths = schema_builder.collect_scoped_schema_paths(

@@ -78,29 +78,70 @@ class RequestDecisionTests(unittest.TestCase):
         self.assertEqual(bsa.request_decision("POST", "http://h.test/a", self.scope), (False, "method"))
 
     def test_post_allowed_once_for_pending_form(self):
-        key = bsa.form_request_key("POST", "http://h.test/submit", self.scope)
+        key = bsa.form_request_key("POST", "http://h.test/submit", self.scope, marker=12345)
         self.assertIsNotNone(key)
         # First matching POST consumes the one-shot grant.
-        self.assertEqual(bsa.request_decision("POST", "http://h.test/submit", self.scope, key), (True, "form"))
+        self.assertEqual(bsa.request_decision(
+            "POST", "http://h.test/submit", self.scope, key, "document", "value=12345"
+        ), (True, "form"))
         self.assertTrue(key["used"])
         # A second POST during the same window is no longer authorized.
-        self.assertEqual(bsa.request_decision("POST", "http://h.test/submit", self.scope, key), (False, "method"))
+        self.assertEqual(bsa.request_decision(
+            "POST", "http://h.test/submit", self.scope, key, "document", "value=12345"
+        ), (False, "method"))
 
     def test_pending_form_path_must_match(self):
-        key = bsa.form_request_key("POST", "http://h.test/submit", self.scope)
-        self.assertEqual(bsa.request_decision("POST", "http://h.test/other", self.scope, key), (False, "method"))
+        key = bsa.form_request_key("POST", "http://h.test/submit", self.scope, marker=12345)
+        self.assertEqual(bsa.request_decision(
+            "POST", "http://h.test/other", self.scope, key, "document", "value=12345"
+        ), (False, "method"))
+
+    def test_get_mutation_is_blocked_unless_exact_canary_form_is_submitted(self):
+        self.assertEqual(
+            bsa.request_decision("GET", "http://h.test/account/logout", self.scope),
+            (False, "state_changing"),
+        )
+        key = bsa.form_request_key(
+            "GET", "http://h.test/account/logout?fixed=1", self.scope, marker=12345
+        )
+        self.assertEqual(bsa.request_decision(
+            "GET", "http://h.test/account/logout?fixed=1&comment=12345",
+            self.scope, key, "document",
+        ), (True, "form"))
+
+    def test_form_grant_is_bound_to_action_query_and_canary(self):
+        key = bsa.form_request_key(
+            "POST", "http://h.test/submit?tenant=one", self.scope, marker=12345
+        )
+        self.assertEqual(bsa.request_decision(
+            "POST", "http://h.test/submit?tenant=two", self.scope, key,
+            "document", "value=12345",
+        ), (False, "method"))
+        self.assertEqual(bsa.request_decision(
+            "POST", "http://h.test/submit?tenant=one", self.scope, key,
+            "document", "value=other",
+        ), (False, "method"))
+        self.assertEqual(bsa.request_decision(
+            "POST", "http://h.test/submit?tenant=one&extra=1", self.scope, key,
+            "document", "value=12345",
+        ), (False, "method"))
+        self.assertFalse(key["used"])
 
     def test_form_grant_bound_to_document_navigation(self):
         # Regression: a racing same-path xhr/fetch POST must not consume the
         # one-shot form grant; only the form's own document navigation does.
-        key = bsa.form_request_key("POST", "http://h.test/submit", self.scope)
+        key = bsa.form_request_key("POST", "http://h.test/submit", self.scope, marker=12345)
         self.assertEqual(
-            bsa.request_decision("POST", "http://h.test/submit", self.scope, key, "xhr"),
+            bsa.request_decision(
+                "POST", "http://h.test/submit", self.scope, key, "xhr", "value=12345"
+            ),
             (False, "method"),
         )
         self.assertFalse(key["used"])
         self.assertEqual(
-            bsa.request_decision("POST", "http://h.test/submit", self.scope, key, "document"),
+            bsa.request_decision(
+                "POST", "http://h.test/submit", self.scope, key, "document", "value=12345"
+            ),
             (True, "form"),
         )
         self.assertTrue(key["used"])
@@ -133,19 +174,32 @@ class StorageStateTests(unittest.TestCase):
         self.assertEqual(out["cookies"][0]["value"], "v")  # value kept in-memory for the session
         self.assertEqual(out["origins"][0]["localStorage"][0]["value"], "secret")
 
-    def test_registrable_parent_domain_cookie_kept(self):
-        # A multi-label parent cookie is kept when a scoped host is its subdomain.
+    def test_parent_cookie_requires_parent_host_to_be_explicitly_scoped(self):
         scope = {("https", "sub.app.test", 443)}
         raw = {"cookies": [{"name": "s", "value": "v", "domain": "app.test"}], "origins": []}
         out = bsa.sanitize_storage_state(raw, scope)
+        self.assertEqual(out["cookies"], [])
+        explicit_parent = scope | {("https", "app.test", 443)}
+        out = bsa.sanitize_storage_state(raw, explicit_parent)
         self.assertEqual(len(out["cookies"]), 1)
 
-    def test_single_label_parent_cookie_rejected(self):
-        # Regression: a bare single-label (TLD-like) cookie domain must not be
-        # applied across a whole suffix via suffix-match.
-        raw = {"cookies": [{"name": "s", "value": "v", "domain": ".test"}], "origins": []}
-        out = bsa.sanitize_storage_state(raw, self.scope)
+    def test_public_suffix_parent_cookie_rejected_without_psl_guessing(self):
+        scope = {("https", "shop.example.co.uk", 443)}
+        raw = {"cookies": [{"name": "s", "value": "v", "domain": ".co.uk"}], "origins": []}
+        out = bsa.sanitize_storage_state(raw, scope)
         self.assertEqual(out["cookies"], [])
+
+    def test_cookie_url_is_origin_validated_and_matches_domain(self):
+        raw = {"cookies": [{"name": "s", "value": "v", "url": "https://app.test/path"}], "origins": []}
+        out = bsa.sanitize_storage_state(raw, self.scope)
+        self.assertEqual(out["cookies"][0]["url"], "https://app.test/path")
+        out_of_scope = {"cookies": [{"name": "s", "value": "v", "url": "https://evil.test/path"}], "origins": []}
+        self.assertEqual(bsa.sanitize_storage_state(out_of_scope, self.scope)["cookies"], [])
+        mismatch = {"cookies": [{
+            "name": "s", "value": "v", "domain": "evil.test",
+            "url": "https://app.test/path",
+        }], "origins": []}
+        self.assertEqual(bsa.sanitize_storage_state(mismatch, self.scope)["cookies"], [])
 
     def test_out_of_scope_entries_dropped(self):
         raw = {
@@ -159,6 +213,11 @@ class StorageStateTests(unittest.TestCase):
     def test_non_dict_rejected(self):
         with self.assertRaises(ValueError):
             bsa.sanitize_storage_state([], self.scope)
+
+    def test_non_array_cookie_or_origin_fields_rejected(self):
+        for raw in ({"cookies": None}, {"origins": {"origin": "https://app.test"}}):
+            with self.subTest(raw=raw), self.assertRaises(ValueError):
+                bsa.sanitize_storage_state(raw, self.scope)
 
 
 class ActiveProbeTests(unittest.TestCase):
@@ -229,6 +288,11 @@ class ExecutionPayloadTests(unittest.TestCase):
         self.assertIn("Object.defineProperty(window, 'postMessage'", bsa.INIT_SCRIPT)
         self.assertNotIn("Window.prototype.postMessage =", bsa.INIT_SCRIPT)
 
+    def test_init_script_closes_the_page_side_mocked_websocket(self):
+        self.assertIn("new Proxy(OriginalWebSocket", bsa.INIT_SCRIPT)
+        self.assertIn("socket.close(1000, 'blocked by browser audit')", bsa.INIT_SCRIPT)
+        self.assertIn("audit.webSocketsClosed += 1", bsa.INIT_SCRIPT)
+
 
 # --------------------------------------------------------------------------
 # Chromium-gated live integration test
@@ -252,6 +316,8 @@ CHROMIUM = _chromium_available()
 
 class _FixtureA(BaseHTTPRequestHandler):
     port_b = 0
+    submissions = []
+    websocket_upstream_attempts = 0
 
     def log_message(self, *a):
         pass
@@ -267,12 +333,20 @@ class _FixtureA(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_GET(self):
+        if self.headers.get("Upgrade", "").lower() == "websocket":
+            type(self).websocket_upstream_attempts += 1
         path = self.path.split("?", 1)[0]
         if path == "/":
             self._send(
                 "<!doctype html><title>Home</title><body>"
                 "<a href='/reflect?q=hi'>r</a>"
                 "<a href='/frag'>f</a>"
+                "<a href='/account/logout'>logout</a>"
+                "<form method='post' action='/submit?fixed=post'>"
+                "<input name='comment' value='hello'></form>"
+                "<form method='get' action='/account/logout'>"
+                "<input name='comment' value='hello'></form>"
+                "<script>fetch('/account/logout?from=script').catch(() => {});</script>"
                 "<img src='http://127.0.0.1:%d/p.png'>"
                 "<script>try{localStorage.setItem('auth_token','x');}catch(e){}"
                 "try{window.postMessage('p','*');}catch(e){}"
@@ -295,9 +369,22 @@ class _FixtureA(BaseHTTPRequestHandler):
                 "try{document.write(decodeURIComponent(location.hash.slice(1)));}catch(e){}"
                 "</script></body>"
             )
+        elif path == "/account/logout":
+            from urllib.parse import parse_qs, urlsplit
+            query = parse_qs(urlsplit(self.path).query)
+            value = query.get("comment", [""])[0]
+            self.submissions.append(("GET", self.path, value))
+            self._send("<!doctype html><title>GET submit</title><body>{}</body>".format(value))
         else:
             self.send_response(404)
             self.end_headers()
+
+    def do_POST(self):
+        from urllib.parse import parse_qs
+        body = self.rfile.read(int(self.headers.get("Content-Length", "0"))).decode("utf-8", "replace")
+        self.submissions.append(("POST", self.path, body))
+        value = parse_qs(body).get("comment", [""])[0]
+        self._send("<!doctype html><title>POST submit</title><body>{}</body>".format(value))
 
 
 class _FixtureB(BaseHTTPRequestHandler):
@@ -341,6 +428,8 @@ class BrowserIntegrationTests(unittest.TestCase):
         return bsa.run_browser_audit(args, target, allowed)
 
     def test_passive_findings_and_controls(self):
+        _FixtureA.submissions.clear()
+        _FixtureA.websocket_upstream_attempts = 0
         r = self._run([])
         types_seen = {f["type"] for f in r["findings"]}
         self.assertIn("missing_security_header", types_seen)
@@ -353,10 +442,14 @@ class BrowserIntegrationTests(unittest.TestCase):
         self.assertTrue(r["websockets"][0]["url"].startswith("ws://127.0.0.1"))
         self.assertFalse(r["websockets"][0]["upstream_connected"])
         self.assertGreaterEqual(r["summary"]["websockets_seen"], 1)
+        self.assertGreaterEqual(r["summary"]["websockets_closed_by_isolation"], 1)
+        self.assertEqual(_FixtureA.websocket_upstream_attempts, 0)
         # Off-origin request to fixture B was blocked and counted, and blocked
         # requests do not consume the allowed-request budget.
         self.assertGreaterEqual(r["summary"]["requests_blocked_by_origin"], 1)
         self.assertIn("requests_allowed", r["summary"])
+        self.assertGreaterEqual(r["summary"].get("requests_blocked_state_changing", 0), 1)
+        self.assertEqual(_FixtureA.submissions, [])
 
     def test_active_query_dom_xss_detected(self):
         r = self._run(["--active"])
@@ -370,6 +463,20 @@ class BrowserIntegrationTests(unittest.TestCase):
         r = self._run(["--active"])
         dom = [f for f in r["findings"] if f["type"] == "dom_xss"]
         self.assertTrue(any(f["source"] == "fragment" for f in dom))
+
+    def test_submit_forms_authorizes_only_canary_get_and_post_documents(self):
+        _FixtureA.submissions.clear()
+        report = self._run(["--submit-forms"])
+        self.assertGreaterEqual(report["summary"]["form_submissions"], 2)
+        self.assertGreaterEqual(report["summary"]["requests_blocked_state_changing"], 1)
+        self.assertTrue(any(method == "POST" and path.startswith("/submit?")
+                            and "comment=" in body and "__catusAuditExecuted" in body
+                            for method, path, body in _FixtureA.submissions))
+        self.assertTrue(any(method == "GET" and path.startswith("/account/logout?")
+                            and "comment=" in path and "__catusAuditExecuted" in marker
+                            for method, path, marker in _FixtureA.submissions))
+        self.assertTrue(any(f["type"] == "dom_xss" and f["source"].startswith("form input")
+                            for f in report["findings"]))
 
 
 if __name__ == "__main__":

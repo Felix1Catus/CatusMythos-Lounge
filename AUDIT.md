@@ -590,3 +590,68 @@ passed. All network integration remained loopback-only.
 Code, regression fixtures, skill guidance, and primary-source research notes
 are commit `7f26773c848cf6ebcedc7adf046b79fb17d386fe`
 (`Add state-aware API race checks`) on `main`.
+
+## Scoped closeout addendum — 2026-11-16
+
+This addendum closes the six-item checklist in `HANDOVER.md`. It is scoped to
+those named items and does not reopen other skills or propose a wider reorg.
+
+1. **API response previews:** rechecked all eight emitters in
+   `auth_analyzer.py`, `logic_tester.py`, and `mass_assignment.py`. Each uses
+   `safe_response_preview`; no raw emitter or additional fix was needed. The
+   mass-assignment regression now verifies redaction of a password, email,
+   API-key field, and inline Bearer value.
+2. **Rate limiting:** reviewed active concurrent bursts, forwarded-header/path
+   mutations, and GraphQL batching. Fixed the ordering bug that sent sequential
+   baseline traffic before validating race count/workers. Invalid inputs now
+   fail before all network requests; three subcases prove that invariant.
+   Payload depth and active behavior were preserved.
+3. **Business-state races:** retained exact integer values from JSON Pointer
+   reads, excluded HTTP 202 from synchronous state controls, sent explicit
+   no-cache read headers, and suppressed comparative state claims when Age or
+   cache-hit/stale metadata makes reads suspect. Regressions cover large
+   integers, 202, cache metadata, and cache-bypass headers. The three active
+   payload cases and ten-request bursts were not removed or gated.
+4. **Report inputs:** the loader accepts single finding objects, aggregate
+   `findings` arrays, and top-level arrays. It warns and skips malformed roots,
+   invalid containers, non-object entries, unreadable files, and corrupt JSON.
+   Report rendering normalizes malformed fields before mappings, impact, and
+   curl generation.
+5. **Bootstrap / Amass:** documented the supplied Amass v5 CLI/output drift
+   and wordlist-engine report in `MANUAL_OPTIONAL_TOOLS`, README, tools setup,
+   and inventory. `amass` is still excluded from `GO_TOOLS`. The bootstrap's
+   install/verify behavior for its managed stack is unchanged; strict/narrow
+   preflight still stops dependent tasks when a required tool is unavailable.
+6. **Browser auditor:** routed in-scope GET/HEAD mutation paths now use the
+   state-changing-path policy; one-shot form grants bind method, origin,
+   path/query, document navigation, and a unique marker; WebSocket handling uses
+   local mocks with no upstream connection and closes the page-side mock; and
+   storage-state filtering requires exact allowed origins/hosts instead of a
+   public-suffix approximation. Playwright 1.48.0 and 1.65.2 loopback runs
+   cover WebSocket isolation and canary-bearing GET/POST form submission.
+
+The code and regression coverage also exposed one closeout lint defect: a
+repeated WebSocket counter key in the browser page report. The duplicate was
+removed; the retained counter uses the normalized page value.
+
+### Final verification
+
+- `python3 -m unittest discover -s tests`: **553 tests passed** in 111.068 s.
+  The full run exercised loopback/browser fixtures and mocked target requests;
+  no live external target was contacted.
+- Focused API-breaker suite: **82 tests + 29 subtests passed**.
+- Playwright 1.48.0 / Python 3.13.17 loopback checks: **2 browser integration
+  tests passed**. The full suite ran with Playwright 1.65.2 on Python 3.14.8.
+- `python3 -m ruff check .`, `python3 -m compileall -q .`,
+  `python3 scripts/check_common_sync.py`,
+  `python3 scripts/check_skill_cli_docs.py` (**10 skill docs / 95 command
+  references / 58 CLIs**), and `git diff --check` all passed. Git emitted only
+  expected PowerShell line-ending normalization warnings for three files.
+- Earlier `555 tests + 68 subtests` entries in this report and handover are
+  historical checkpoint records. The current exact checkout's final full-suite
+  command reports 553 top-level tests; use this result for the closeout.
+
+No repository-wide restructure, live target assessment, or broad tool-version
+pinning was part of this closeout. The Amass unblock evidence remains the
+installed `amass --help` and `amass enum --help`, visible wordlist guesses on an
+owned-domain fixture, and a reliable structured-output path.

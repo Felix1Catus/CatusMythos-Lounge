@@ -236,7 +236,13 @@ class TargetedAuditFixTests(unittest.TestCase):
         with patch.object(
             mass_assignment,
             "http_request",
-            return_value=(200, {}, '{"role":"admin","password":"fixture-secret"}'),
+            return_value=(
+                200,
+                {},
+                '{"role":"admin","password":"fixture-secret",'
+                '"email":"alice@example.test","api_key":"api-secret",'
+                '"message":"Bearer bearer-value"}',
+            ),
         ):
             findings = mass_assignment.test_mass_assignment_flat(
                 "https://api.example.test/users", "POST", {}, {}, delay=0
@@ -244,7 +250,10 @@ class TargetedAuditFixTests(unittest.TestCase):
         self.assertEqual(findings[0]["type"], "mass_assignment_candidate")
         self.assertEqual(findings[0]["severity"], "INFO")
         self.assertFalse(findings[0]["validated"])
-        self.assertNotIn("fixture-secret", findings[0]["response_preview"])
+        for sensitive in (
+            "fixture-secret", "alice@example.test", "api-secret", "bearer-value",
+        ):
+            self.assertNotIn(sensitive, findings[0]["response_preview"])
 
         normalized = findings_importer.normalize_finding(findings[0], "mass_assignment")
         self.assertEqual(normalized["severity"], "INFO")

@@ -4,12 +4,10 @@ Structural inventory of every skill: intended use, CLIs and their purpose,
 dependencies, test coverage, scope controls, integrations, overlaps, and the
 clearest coverage gaps. This is a map for prioritizing deeper per-skill review;
 it is not itself a line-by-line doc-vs-code audit (that happens per skill).
-Inventory structure originated at `f870a85`. Coverage status refreshed
-2026-11-16 against the verified `3aa2f62` bootstrap baseline, the API-breaker
-continuation from `a95bab9`, the BOLA URL fix at `9efbba5`, and the BOLA/BFLA
-evidence follow-up at `511a522`, JWT/auth hardening at `68dd243`, and the exp
-boundary fix at `0f58b5e`. The rate-limit pass is recorded in the latest
-handover addendum; `git log -1` gives the exact current tip.
+Inventory structure originated at `f870a85`. Coverage status was refreshed
+2026-11-16 through the scoped closeout in `HANDOVER.md`; the final verification
+and commit are recorded in the latest dated addendum below. Earlier checkpoints
+remain historical snapshots; `git log -1` is the source of truth for the tip.
 
 ## Shape of the toolkit
 
@@ -38,14 +36,14 @@ checked by `tests/test_plugin_bootstrap_hook.py` and the same matrix.
 | Coverage | Skills |
 |---|---|
 | Broad script-level regression matrices | `recon-dominator` (59), `cloud-pivot-finder` (38), `attack-path-architect` (28), `16-ai-llm-security` (87), `03-exploit-development` (14), `vuln-chain-composer` (63), legacy `webapp-exploit-hunter` testers (60) |
-| Focused or partial coverage | `api-breaker` (77 focused scope/discovery/business-logic/GraphQL/BOLA/BFLA/auth-analyzer/rate-limit regressions); `webapp-exploit-hunter` browser/crawler/DOM and selected CLI paths; `web-cache-auditor` (12 focused tests for its script) |
+| Focused or partial coverage | `api-breaker` (focused scope/discovery/business-logic/GraphQL/BOLA/BFLA/auth-analyzer/rate-limit/report regressions); `webapp-exploit-hunter` browser/crawler/DOM and selected CLI paths; `web-cache-auditor` (12 focused tests for its script) |
 | Plugin infrastructure | `tests/test_bootstrap.py` (30): parsing, install command construction, retry/cache validation, browser setup, PATH readiness, and nonzero preflight gates |
 | No scripts (manual methodology) | `web-protocol-auditor` |
 
-The full suite most recently passed **555 tests plus 68 subtests**. It includes
-local-fixture browser integration with Playwright/Chromium, bootstrap
-regressions, and the new API-breaker matrix. The strict bootstrap preflight also
-passed on the current Windows host. Coverage is uneven:
+The closeout verification passed **553 unittest cases** on Python 3.14.8. It
+includes local-fixture Playwright/Chromium integration, bootstrap regressions,
+and the API-breaker closeout tests. Playwright 1.48.0 minimum-version browser
+integration also passed separately. Coverage is uneven:
 these matrices emphasize logic and edge cases, and do not constitute end-to-end
 validation of every CLI or prove the absence of bugs. See `HANDOVER.md` for
 specific fixes, test themes, browser limitations, and the latest verification.
@@ -60,10 +58,13 @@ specific fixes, test themes, browser limitations, and the latest verification.
   `cve_lookup`, `js_recon`, `generate_report`. Shares `_common.py` (109 ln).
 - **Deps:** stdlib; may shell out to user-scoped Go recon tools when present.
 - **Tool setup:** the bootstrap manages Go, subfinder, httpx, puredns, naabu,
-  and allowlisted DNS/WHOIS/Nmap/Perl commands. `amass` is deliberately not
-  managed yet because the current wrapper uses a v4-style invocation and
-  parses JSON from stdout; verify the current v5 CLI/output behavior before
-  enabling it automatically.
+  and allowlisted DNS/WHOIS/Nmap/Perl commands. `amass` remains manual and is
+  not in `GO_TOOLS`: v5 removed `enum`'s one-shot `-o`/`-json` output, the
+  documented `subs` readback CLI moved between point releases, and an Apr 2026
+  v5.1.1/`develop` report says `-brute`/`-w` wordlists are accepted but unused
+  by the engine. Re-evaluate from the installed `amass --help` and `amass enum
+  --help`, a visible wordlist-guess fixture, and a reliable structured-output
+  check; see `bootstrap.py`'s `MANUAL_OPTIONAL_TOOLS` note.
 - **Coverage:** `tests/test_recon_dominator.py` covers all scripts' key parsers,
   classifiers, source-map handling, CVE matching, WAF/service parsing, dork
   generation, and report rendering. Includes fixes for prose version ranges,
@@ -92,7 +93,7 @@ specific fixes, test themes, browser limitations, and the latest verification.
 - **Scope controls:** `--active`, `--submit-forms`, `--callback-url`,
   `--allow-destructive-poc`, `--skip-lfi-chains`; HTTPS-verified default.
 
-### api-breaker — `[77 FOCUSED REGRESSIONS; STILL PARTIAL]`
+### api-breaker — `[82 FOCUSED TESTS; SCOPED CLOSEOUT COMPLETE]`
 - **Use:** API security from domains — discover REST/GraphQL/SOAP, rebuild
   schemas, test BOLA/IDOR, BFLA, mass assignment, JWT, rate-limit bypass, logic.
 - **CLIs (8; `_common.py` and `response_safety.py` are support modules):** `api_discovery`, `schema_builder` (1814 ln),
@@ -242,19 +243,20 @@ protocol skills). Cosmetic, but a cleanup pass would make provenance consistent.
 `.claude-plugin/hooks.json`; the hook actually lives at `hooks/hooks.json`
 (as `plugin.json` correctly declares). The stale comment was corrected.
 
-## Prioritized gaps (for the deepening phase)
-1. **`api-breaker`** — several CLIs (`api_discovery`, `schema_builder`,
-   `rate_limiter`, `logic_tester`, `api_report`) still lack broad per-script
-   regression matrices; write-probe and imported-scope behavior needs continued
-   active, authorized validation.
-2. **`webapp-exploit-hunter`** — most legacy tester logic now has offline
-   coverage, but auth/SQLi network paths, generated reports, and chained upload
-   flows need deeper integration fixtures. Continue browser state/redaction and
-   form-authorization edge coverage.
-3. **`vuln-chain-composer`** — broad matrix added; continue testing unseen input
-   shapes and pipeline-level integration, especially arbitrary chain outputs.
-4. **Live workflow integration** — current matrices are mainly unit-level or
-   loopback fixtures. Exercise full authorized recon→test→import→chain→report
-   flows using local fixtures before claiming end-to-end coverage.
-5. **`web-protocol-auditor`** — manual methodology only; update against current
-   primary sources and validate its steps in an isolated lab where feasible.
+## Coverage limits (descriptive; not active closeout tasks)
+
+- API-breaker and webapp-exploit-hunter coverage mixes pure unit tests with
+  local HTTP/Chromium fixtures. No live external targets were used for this
+  closeout, so application-specific ownership and business-state semantics are
+  not asserted.
+- Some legacy webapp auth/SQLi network paths and generated-report workflows
+  have less integration coverage than the browser auditor and upload paths.
+- Vuln-chain-composer has a broad script matrix; arbitrary real-world imported
+  finding shapes and a complete recon-to-report workflow are not covered by a
+  single end-to-end fixture.
+- `web-protocol-auditor` is intentionally manual methodology, not executable
+  scanning code.
+
+These notes describe where the existing test evidence is narrower. The scoped
+closeout checklist is in `HANDOVER.md`; they do not reopen the other skills or
+authorize a repository-wide restructuring pass.

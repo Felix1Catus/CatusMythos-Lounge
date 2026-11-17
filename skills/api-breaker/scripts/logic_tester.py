@@ -13,6 +13,7 @@ import urllib.parse
 import concurrent.futures
 from datetime import datetime, timezone
 import math
+import re
 
 
 from _common import http_request, log, same_origin_url, success, warn
@@ -22,7 +23,8 @@ from response_safety import safe_response_preview
 MUTATING_METHODS = {"POST", "PUT", "PATCH"}
 RACE_REQUESTS_PER_CASE = 10
 RACE_MAX_REQUEST_BUDGET = 840
-RACE_ACCEPTED_STATUSES = {200, 201, 202}
+RACE_RESPONSE_SUCCESS_STATUSES = {200, 201, 202, 204}
+RACE_COMPLETED_STATUSES = {200, 201, 204}
 
 
 class RequestBudget:
@@ -281,21 +283,50 @@ def _numeric_json_pointer(body, pointer):
     except (json.JSONDecodeError, TypeError, ValueError, IndexError, RecursionError):
         return None
 
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
+    if isinstance(value, bool):
         return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and math.isfinite(value):
+        return value
+    return None
+
+
+def _response_may_be_cached(headers):
+    """Treat explicit cache hits/stale ages as unsuitable state evidence."""
+    lowered = {str(key).lower(): str(value) for key, value in (headers or {}).items()}
+    age = lowered.get("age", "").strip()
     try:
-        return float(value) if math.isfinite(value) else None
-    except (OverflowError, TypeError, ValueError):
-        return None
+        if age and float(age) > 0:
+            return True
+    except ValueError:
+        pass
+
+    for name in ("cache-status", "x-cache", "x-cache-status", "cf-cache-status", "x-proxy-cache"):
+        value = lowered.get(name, "")
+        tokens = re.split(r"[,;\s=]+", value.casefold())
+        if any(
+            token in ("hit", "stale")
+            or token.endswith(("_hit", "-hit", "_stale", "-stale"))
+            for token in tokens
+        ):
+            return True
+    return False
 
 
 def _read_race_state(state_url, headers, pointer, request_budget=None):
     if request_budget is not None and not request_budget.consume():
-        return None
-    status, _, body = http_request(state_url, method="GET", headers=headers)
+        return None, False
+    read_headers = dict(headers)
+    read_headers["Cache-Control"] = "no-cache, no-store, max-age=0"
+    read_headers["Pragma"] = "no-cache"
+    status, response_headers, body = http_request(
+        state_url, method="GET", headers=read_headers
+    )
+    cached = _response_may_be_cached(response_headers)
     if status != 200:
-        return None
-    return _numeric_json_pointer(body, pointer)
+        return None, cached
+    return _numeric_json_pointer(body, pointer), cached
 
 
 def test_price_manipulation(url, method, auth_headers, delay=0):
@@ -494,22 +525,25 @@ def test_race_condition(
         baseline_state_observed = False
         control_state = None
         before_state = None
+        state_cache_suspected = False
 
         if state_readback_url:
-            before_state = _read_race_state(
+            before_state, before_cached = _read_race_state(
                 state_readback_url, auth_headers, state_json_pointer, request_budget
             )
+            state_cache_suspected = state_cache_suspected or before_cached
             if before_state is not None:
                 if request_budget is None or request_budget.consume():
                     baseline_status, _, _ = http_request(
                         url, method=method, headers=headers, data=data
                     )
-                    control_state = _read_race_state(
+                    control_state, control_cached = _read_race_state(
                         state_readback_url, auth_headers, state_json_pointer,
                         request_budget,
                     )
+                    state_cache_suspected = state_cache_suspected or control_cached
                     if (
-                        baseline_status in RACE_ACCEPTED_STATUSES
+                        baseline_status in RACE_COMPLETED_STATUSES
                         and control_state is not None
                     ):
                         baseline_delta = control_state - before_state
@@ -532,16 +566,22 @@ def test_race_condition(
                     status, _, _ = future.result()
                 except Exception:
                     status = 0
-                if status in RACE_ACCEPTED_STATUSES:
+                if status in RACE_RESPONSE_SUCCESS_STATUSES:
                     success_count += 1
 
         concurrent_state = None
         if state_readback_url:
-            concurrent_state = _read_race_state(
+            concurrent_state, concurrent_cached = _read_race_state(
                 state_readback_url, auth_headers, state_json_pointer, request_budget
             )
+            state_cache_suspected = state_cache_suspected or concurrent_cached
 
-        if state_readback_url and baseline_state_observed and baseline_delta == 0:
+        if (
+            state_readback_url
+            and baseline_state_observed
+            and baseline_delta == 0
+            and not state_cache_suspected
+        ):
             warn(
                 f"Race state baseline did not change for {test['name']}; "
                 "check whether the selected pointer tracks this action."
@@ -549,11 +589,12 @@ def test_race_condition(
             continue
 
         comparable_state = (
-            baseline_status in RACE_ACCEPTED_STATUSES
+            baseline_status in RACE_COMPLETED_STATUSES
             and baseline_delta is not None
             and baseline_delta != 0
             and control_state is not None
             and concurrent_state is not None
+            and not state_cache_suspected
         )
         state_effect_multiple = None
         if comparable_state:
@@ -582,11 +623,18 @@ def test_race_condition(
             if success_count <= 1:
                 continue
             if state_readback_url:
-                evidence = (
-                    "Multiple concurrent requests returned 2xx, but the configured "
-                    "sequential baseline and numeric state read-back were not "
-                    "comparable; duplicate side effects remain unverified."
-                )
+                if state_cache_suspected:
+                    evidence = (
+                        "Multiple concurrent requests returned 2xx, but cache-age or "
+                        "cache-hit metadata made the state read-back inconclusive; "
+                        "duplicate side effects remain unverified."
+                    )
+                else:
+                    evidence = (
+                        "Multiple concurrent requests returned 2xx, but the configured "
+                        "sequential baseline and numeric state read-back were not "
+                        "comparable; duplicate side effects remain unverified."
+                    )
             else:
                 evidence = (
                     "Multiple concurrent requests returned 2xx; no sequential "

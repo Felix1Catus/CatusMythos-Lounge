@@ -1,4 +1,4 @@
-# Handover and open items
+# Handover and closeout status
 
 Living status note for the ongoing CatusMythos-Lounge improvement work. Keep it
 current; it records what has and has **not** been deeply reviewed so later work
@@ -559,37 +559,52 @@ claim that every behavior is exhaustively validated):**
   generate_poc/vuln_report remain covered only by their earlier targeted tests.
 
 ## Browser auditor (`webapp-exploit-hunter/scripts/browser_security_auditor.py`)
-Known-weak / unverified areas to review and add regression tests for:
-- **Request policy:** allows all same-origin GET/HEAD, blocks off-origin, and
-  permits an in-scope POST only for a pending form's document navigation. An
-  in-scope GET can still mutate state (including a GET form action); the
-  state-changing path skip-list only filters crawled links. The PATH_INFO
-  fingerprint below is also a coarse status heuristic, not a vulnerability
-  finding.
-- **Form POST authorization:** the pending-submit grant is not bound to the exact
-  query string, form identity, or body. Document-navigation binding prevents a
-  racing fetch/XHR from consuming it, but the grant remains broader than one
-  exact action URL. Snapshot/reload can reorder controls, so stored indices
-  still merit revalidation.
-- **WebSockets:** connections are intercepted and closed without upstream
-  connection or frame forwarding, and are counted separately from HTTP
-  requests. `ws://`/`wss://` URLs are now redacted/reported correctly. The
-  behavior is integration-tested in Chromium but should be checked against
-  other supported Playwright versions.
-- **Storage state:** localStorage origins are filtered by exact canonical origin,
-  but cookie domains allow multi-label parent-domain suffix matches. Single-label
-  parent domains are rejected, but this is not a public-suffix-list check;
-  cookie `url` fields pass through without their own origin validation.
-- **Redaction:** query/fragment stripped and bodies/values omitted, but URL
-  paths, page titles, cookie names, and storage key names are retained and could
-  themselves carry sensitive data.
-- **Budgets:** the HTTP cap counts requests allowed through; WebSockets are
-  counted separately and the stored socket list is bounded. `max-pages` counts
-  crawled documents, not temporary probe/form pages (active mode can create up
-  to 10 extra pages per crawled page). Form-submission count records attempts,
-  not confirmed network writes.
-- **SPA timing:** RESOLVED 2026-11-16 — see "third browser pass" below
-  (networkidle best-effort wait + `--settle-ms`).
+The four browser bullets in the closeout checklist were resolved on 2026-11-16:
+
+- **Request policy / mutating GETs:** every routed same-origin GET/HEAD request
+  now checks the state-changing path patterns, not just crawler links. Such
+  requests are blocked unless they are the exact canary-bearing, in-scope
+  document navigation from an explicitly requested `--submit-forms` probe.
+  Local Chromium coverage proves an unsolicited `/account/logout` GET is
+  blocked and an authorized GET form with its marker is submitted. Other active
+  query/fragment probes still run.
+- **Form grant scope:** a one-shot grant matches the method, exact allowed
+  origin, path, action query (exact for POST; retained action parameters for
+  GET), top-level document navigation, and unique marker in the submitted
+  query/body. Same-path XHR/fetch cannot consume it. Unit tests cover wrong
+  method/path/query/body; a loopback Chromium fixture submits both GET and POST.
+- **WebSocket compatibility:** root `requirements.txt` sets the supported floor
+  at Playwright 1.48.0. Official Python API docs mark
+  `BrowserContext.route_web_socket` and `WebSocketRoute.close` as introduced in
+  1.48. A real loopback fixture passed on Playwright 1.48.0 / Python 3.13.17
+  with its declared `greenlet==3.1.1`, and the repository suite exercises the
+  current Playwright 1.65.2 install. The first minimum-version probe exposed a
+  sync-API hang when calling `WebSocketRoute.close()` inside the route callback.
+  The final policy avoids that nested call: routing creates a local mock, never
+  calls `connect_to_server`, and the init script closes the page-side mock after
+  it opens. Integration asserts the close event and zero upstream handshakes.
+- **Storage-state scope / PSL:** localStorage is filtered by exact canonical
+  origin. Cookie domains must exactly equal an explicitly allowed hostname;
+  parent cookies are accepted only when the parent host itself is explicitly
+  allowed. A cookie `url` must have an allowed origin and match any supplied
+  domain. The code no longer approximates a public-suffix list. Regressions
+  cover `.co.uk`, explicit parent scope, out-of-scope cookie URLs, mismatches,
+  and malformed cookie/origin arrays.
+
+The earlier SPA timing item is resolved by the best-effort network-idle wait
+and `--settle-ms` described below.
+
+### Previously documented limitations outside this closeout
+
+- URL paths, page titles, cookie names, and storage key names are retained in
+  some report fields; query/fragment strings and values/bodies are omitted.
+- `max-pages` counts crawled documents, not temporary probe/form pages. The
+  form-submission metric counts attempts, not verified network writes.
+- Form indices are re-read after navigation but can still be affected by pages
+  that reorder their controls dynamically.
+
+These are pre-existing bounds outside the exact browser checklist; they were
+not expanded into new review tasks in this pass.
 
 ## Active-testing doctrine — intentional gates (keep, document, invoke; don't drop)
 The injection scanners (SQLi/SSRF/SSTI/LFI/upload/race/WAF/reflected-XSS) still
@@ -663,64 +678,54 @@ browser `--active`, or `--submit-forms` behavior.
   250 — behavior unchanged by default) so operators can wait longer for
   async-rendered SPA DOM/forms. SKILL.md documents the variants and the flag.
 
-## Open items
-1. **PATH_INFO review — completed 2026-11-16.** The shared
-   `http_request_timed` helper catches ordinary request/network exceptions and
-   returns status `0`; the detector explicitly classifies `0` and `404` as
-   non-permissive. The broad catch that was removed would have hidden
-   unexpected programming errors, so it should stay removed. Added regressions
-   for status `0` and unexpected exception propagation; no code bug was found.
-   Residual caveat: any other status (including 401/403/5xx) is a permissive
-   *heuristic* that only enables deeper tests; it is not itself reported as
-   RCE. Revisit the status policy if fixtures show excessive unnecessary
-   uploads.
-2. **Inventory structure — coverage refreshed; structural map still needs
-   review if skills, CLIs, dependencies, or plugin references move.** Inventory
-   now includes bootstrap behavior and the 77 focused API-breaker regressions.
-3. **Bootstrap + task preflight — implemented; deeper OS-specific install
-   validation remains open.** Missing Python dependencies, Chromium, Go, Go
-   recon tools, and allowlisted system tools are actively installed through
-   available managers. Strict/narrow preflights stop dependent work if any
-   required tool is still unavailable. Revisit package-manager behavior on
-   clean Windows/macOS/Linux images. `amass` is deliberately excluded from
-   managed installs until its v5 CLI and JSON-output behavior are verified
-   against this repo's v4-style wrapper. Python requirement ranges and Go
-   `@latest` references are still unpinned; research reproducible, verifiable
-   pinning before tightening them.
-   Preserve Windows fixes: `python3`, LF `hooks/hooks.json`, actual
-   `hooks/hooks.json` path.
-4. Consolidate the copied `_common.py` helpers? A sync check exists instead
-   of consolidation. Map imports/CLI examples/plugin refs/tests before moving.
-5. Continue skill deepening where meaningful gaps remain. `api-breaker` is still
-   only partially audited. GraphQL depth/authz/CSRF response-confidence and
-   input-bound work now has an offline regression pass, but still needs
-   isolated HTTP integration and review of target-specific ownership/read-back
-   behavior. BOLA/BFLA request wiring now has a local HTTP fixture pass and
-   separate User A/User B cookie handling, but no live API test; continue
-   reviewing ownership evidence and state-changing write/read-back behavior.
-   JWT has 47 focused offline regressions but still needs isolated HTTP
-   integration and review of the RS/PS relabel hypothesis. All API-breaker
-   response-preview emitters use the shared sanitizer; review pattern limits
-   against app-specific data formats. Rate-limit header and GraphQL behavior
-   now have loopback integration, but no live authorized API check. Coupon
-   stacking rejects generic-success and request-echo signals, while business
-   totals still need controlled read-back. `logic_tester.py` keeps its three
-   active ten-request race bursts and now has an optional same-origin numeric
-   state read-back: for each payload it compares a sequential control with the
-   concurrent state delta. A run-wide budget caps burst, control, and read-back
-   traffic at 840 attempts by default. Loopback fixtures cover idempotent
-   2xx responses and excess state changes; target-specific workflows and the
-   semantics of an operator-selected read-only GET remain unverified. Keep
-   active probes enabled and improve evidence and bounded work rather than
-   converting them to passive-only checks. Continue with target-specific
-   state verification and broad report input shapes. Cache query probes use a five-name seed set;
-   duplicate-key, semicolon, parameter-cloaking, and broader normalization
-   cases remain manual. The plugin-wide structural reorganization and shared
-   helper consolidation have not been done. Continue the remaining browser
-   scope/state/redaction edge cases and live-protocol methodology. Ground
-   changes in primary-source research, bounded active probes, explicit
-   evidence/confidence rules, and regression coverage. The matrices above do
-   not prove complete coverage or absence of bugs.
+## Closeout checklist (all six items complete)
+
+1. **API response-preview redaction — closed 2026-11-16.** Reviewed every
+   `response_preview` emitter in `auth_analyzer.py` (1), `logic_tester.py` (5),
+   and `mass_assignment.py` (2). All call the shared `safe_response_preview`
+   helper already used by `authz_tester.py`; no raw emitter or new bug was
+   found. Regression fixtures include email, API-key, bearer, and password
+   values and assert those values are absent from emitted previews.
+2. **Rate-limit bypass/batching — closed 2026-11-16.** Reviewed active burst,
+   forwarded-header/path mutations, and GraphQL batching. Found and fixed a
+   validation-order bug: invalid worker/count values now fail before even the
+   sequential baseline request. Added a three-case regression asserting zero
+   network calls for invalid input. Selected active probes and their defaults
+   are preserved.
+3. **Business-state race read-back — closed 2026-11-16.** Candidate evidence
+   stays distinct from confirmed state impact. Integer JSON-pointer values
+   retain exact precision; 202 responses do not qualify as a completed
+   synchronous control; state reads request cache bypass and suspected cache
+   hits/stale data suppress comparative claims. Regressions cover large
+   integers, 202 controls, cache metadata, and no-cache headers. All three
+   active payload cases and ten-request bursts are retained. The optional
+   read-back still requires an operator-selected disposable object and a truly
+   read-only route.
+4. **API report input shapes — closed 2026-11-16.** The report loader handles
+   one finding object, aggregate `findings` objects, and arrays; it warns and
+   skips malformed roots, invalid containers, non-object entries, unreadable
+   files, and corrupt JSON. Report rendering normalizes malformed type,
+   severity, URL, method, and path values instead of crashing. Regression
+   tests cover each supported shape and malformed inputs.
+5. **Bootstrap / Amass — resolved and closed 2026-11-16.** `amass` is not in
+   `GO_TOOLS`. The manual-tool note records that v5 dropped enum's one-shot
+   `-o`/`-json` output, the documented `subs` readback command changed between
+   v5.x releases, and an April 2026 v5.1.1/`develop` report says `-brute`/`-w`
+   are accepted but unused by the engine (with no acknowledged fix). Revisit
+   only when the installed `amass --help` and `amass enum --help`, visible
+   wordlist guesses on an owned-domain fixture, and a reliable structured
+   output path have all been verified. Bootstrap's install-and-verify behavior
+   for tools it already manages was not changed. No repository-wide
+   package-manager or pinning project is part of this closeout.
+6. **Browser auditor — closed 2026-11-16.** The four listed risks are resolved:
+   all routed in-scope GET/HEAD requests check state-changing path patterns;
+   form grants bind method, origin, path/query, document navigation, and a
+   unique submitted marker; WebSocket mocks have no upstream connection and
+   are closed page-side with coverage on Playwright 1.48.0 and 1.65.2; storage
+   cookies/localStorage are filtered by explicit origin/host without a PSL
+   suffix approximation. Loopback Chromium tests exercise unsolicited GET
+   blocking and canary-bearing GET/POST form submissions; unit cases cover
+   invalid grant and storage inputs. No new browser checklist item was added.
 
 ## Standing constraints (don't re-introduce)
 - Preserve the active-testing doctrine: for explicitly authorized, in-scope
@@ -729,12 +734,12 @@ browser `--active`, or `--submit-forms` behavior.
   observation. Keep explicit gates for destructive or state-changing actions
   where they are documented, and do not add a new gate that disables the
   requested probe by default.
-- Bootstrap must install and verify required managed tools when they are
-  missing. Do not let a task proceed when its required stack remains
-  unavailable: use strict or narrow preflight and stop dependent work on
-  failure. Installation behavior is covered by mocks where this host already
-  has the tools; the clean-host package-manager paths remain an open validation
-  item.
+- Bootstrap checks every tool it currently manages on each run, automatically
+  installs missing managed tools, and verifies availability before work starts.
+  Strict or narrow preflight stops dependent work when any required tool is
+  still unavailable. Missing-tool installer, verification, and PATH-refresh
+  behavior is covered with regression mocks; the Windows PowerShell interpreter
+  command is `python3`. Amass stays outside managed tools under item 5.
 - HTTPS verified by default; `CATUS_INSECURE_TLS=1` is the only opt-out.
 - Cross-origin redirects (incl. HTTP→HTTPS) are blocked by design — pass the
   final authorized origin when canonicalization crosses origins.

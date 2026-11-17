@@ -234,15 +234,42 @@ def assess_impact(finding):
 
 def generate_finding_report(finding, index):
     """Generate a detailed report for a single finding."""
-    finding_type = finding.get("type", "unknown")
+    if not isinstance(finding, dict):
+        raise ValueError("each finding must be a JSON object")
+
+    raw_type = finding.get("type", "unknown")
+    finding_type = raw_type if isinstance(raw_type, str) and raw_type else "unknown"
     base_type = finding_type.removesuffix("_candidate")
     owasp_key = FINDING_TO_OWASP.get(finding_type, FINDING_TO_OWASP.get(base_type, "API8"))
     owasp = OWASP_API_TOP10.get(owasp_key, OWASP_API_TOP10["API8"])
+    raw_severity = finding.get("severity", "medium")
+    severity = raw_severity.casefold() if isinstance(raw_severity, str) else "medium"
+    if severity not in {"critical", "high", "medium", "low", "info"}:
+        severity = "medium"
+
+    def report_text(value, default="N/A"):
+        if isinstance(value, str):
+            return value
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return str(value)
+        return default
+
+    url = report_text(finding.get("url"))
+    method = report_text(finding.get("method"))
+    path = report_text(finding.get("path"))
+    normalized_finding = dict(finding)
+    normalized_finding.update({
+        "type": finding_type,
+        "severity": severity,
+        "url": url,
+        "method": method,
+        "path": path,
+    })
 
     report = {
         "finding_id": f"F-{index:03d}",
-        "title": f"{finding_type.replace('_', ' ').title()} - {finding.get('url', 'N/A')}",
-        "severity": finding.get("severity", "medium"),
+        "title": f"{finding_type.replace('_', ' ').title()} - {url}",
+        "severity": severity,
         "type": finding_type,
         "owasp_mapping": {
             "id": owasp["id"],
@@ -250,16 +277,16 @@ def generate_finding_report(finding, index):
             "description": owasp["description"],
         },
         "affected_endpoint": {
-            "url": finding.get("url", "N/A"),
-            "method": finding.get("method", "N/A"),
-            "path": finding.get("path", "N/A"),
+            "url": url,
+            "method": method,
+            "path": path,
         },
         "details": {
             k: v for k, v in finding.items()
             if k not in ("type", "severity", "url", "method", "path")
         },
-        "curl_command": build_curl_command(finding),
-        "impact": assess_impact(finding),
+        "curl_command": build_curl_command(normalized_finding),
+        "impact": assess_impact(normalized_finding),
         "remediation": REMEDIATIONS.get(
             finding_type,
             REMEDIATIONS.get(base_type, "Review and fix the identified vulnerability. Implement proper input validation and access controls."),
@@ -269,30 +296,63 @@ def generate_finding_report(finding, index):
     return report
 
 
+def _findings_from_data(data, source):
+    """Normalize the supported single, aggregate, and list JSON shapes."""
+    if isinstance(data, list):
+        findings = data
+    elif isinstance(data, dict):
+        if "findings" in data:
+            findings = data["findings"]
+            if not isinstance(findings, list):
+                warn(f"Skipping {source}: 'findings' must be a JSON array")
+                return []
+        elif isinstance(data.get("type"), str):
+            findings = [data]
+        else:
+            warn(f"Skipping {source}: expected a finding object or 'findings' array")
+            return []
+    else:
+        warn(f"Skipping {source}: expected a JSON object or array")
+        return []
+
+    valid_findings = [item for item in findings if isinstance(item, dict)]
+    if len(valid_findings) != len(findings):
+        warn(f"Skipping {len(findings) - len(valid_findings)} non-object finding(s) in {source}")
+    return valid_findings
+
+
 def load_findings_from_dir(findings_dir):
-    """Load findings from all JSON files in a directory."""
+    """Load finding objects from a JSON file or every JSON file in a directory."""
     all_findings = []
 
     if not os.path.isdir(findings_dir):
         # Treat as a single file
         if os.path.isfile(findings_dir):
-            with open(findings_dir) as f:
-                data = json.load(f)
-            return data.get("findings", [data] if "type" in data else [])
+            try:
+                with open(findings_dir, encoding="utf-8") as f:
+                    return _findings_from_data(json.load(f), findings_dir)
+            except (json.JSONDecodeError, OSError, UnicodeError, RecursionError) as exc:
+                warn(f"Failed to load {findings_dir}: {exc}")
         return []
 
-    for filename in sorted(os.listdir(findings_dir)):
-        if not filename.endswith(".json"):
+    try:
+        filenames = sorted(os.listdir(findings_dir))
+    except OSError as exc:
+        warn(f"Failed to list {findings_dir}: {exc}")
+        return []
+
+    for filename in filenames:
+        if not filename.lower().endswith(".json"):
             continue
         filepath = os.path.join(findings_dir, filename)
         try:
-            with open(filepath) as f:
+            with open(filepath, encoding="utf-8") as f:
                 data = json.load(f)
-            findings = data.get("findings", [])
+            findings = _findings_from_data(data, filename)
             if findings:
                 log(f"Loaded {len(findings)} findings from {filename}")
                 all_findings.extend(findings)
-        except (json.JSONDecodeError, IOError) as e:
+        except (json.JSONDecodeError, OSError, UnicodeError, RecursionError) as e:
             warn(f"Failed to load {filename}: {e}")
 
     return all_findings

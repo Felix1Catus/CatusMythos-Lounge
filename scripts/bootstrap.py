@@ -30,9 +30,10 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 
-# User-scoped Go tools used by recon-dominator. amass remains explicitly
-# optional/manual until its current v5 CLI and JSON-output behavior are checked
-# against this repository's v4-style wrapper.
+# User-scoped Go tools used by recon-dominator. Amass remains manual: v5 removed
+# enum's v4-style file output, and the documented database-readback CLI moved
+# across v5.x releases. Do not manage it until the installed CLI has been
+# checked directly and both wordlist brute forcing and structured output work.
 GO_TOOLS = {
     "subfinder": "github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest",
     "httpx": "github.com/projectdiscovery/httpx/cmd/httpx@latest",
@@ -40,7 +41,20 @@ GO_TOOLS = {
     "naabu": "github.com/projectdiscovery/naabu/v2/cmd/naabu@latest",
 }
 MANUAL_OPTIONAL_TOOLS = {
-    "amass": "v5 CLI and JSON-output compatibility must be verified before bootstrap manages installs",
+    "amass": (
+        "Deferred; do not add to GO_TOOLS yet. Amass v5 dropped enum's one-shot "
+        "-o/-json output for a local-database model; Oct 2025 docs pointed to "
+        "amass subs -names/-ip/-summary for plain-text readback, but that CLI "
+        "surface moved again and the cited subs command was later removed in a "
+        "v5.x point release. The Apr 2026 v5.1.1/develop issue also reports "
+        "-brute/-w wordlists parsed into config but unused by the engine; this "
+        "is an open maintainer question, not an acknowledged/fixed bug. Unblock "
+        "only after checking the actually installed `amass --help` and "
+        "`amass enum --help`, proving a wordlist run visibly emits guesses, "
+        "and proving a reliable structured-output path exists. Treat those "
+        "help outputs and a disposable owned-domain fixture as ground truth, "
+        "not articles."
+    ),
 }
 
 # Allowlisted system tools used by the skills. Package names and executable

@@ -178,8 +178,13 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/bootstrap.py" --require-python requests
 
 If a Windows install adds a new directory to PATH, restart the parent
 PowerShell/terminal or desktop host, then Claude Code, and repeat the preflight
-before starting dependent checks. `amass` remains optional until its current
-CLI and JSON-output behavior are verified against this repo's v4-style wrapper.
+before starting dependent checks. `amass` remains manual and is not in
+`GO_TOOLS`: v5 removed `enum`'s one-shot `-o`/`-json` output, and its
+database-readback CLI and wordlist brute-force behavior have shifted between
+v5.x releases. The bootstrap note records the exact reported behaviors and the
+unblock test: inspect the installed `amass --help` and `amass enum --help`,
+prove wordlist guesses on an owned-domain fixture, and prove structured output
+works before managing it automatically.
 
 HTTPS certificate verification is enabled by default. For an authorized
 target with a self-signed certificate, set `CATUS_INSECURE_TLS=1` in the

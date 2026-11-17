@@ -331,6 +331,15 @@ def test_race_condition(url, extra_headers=None, count=20, workers=20, is_financ
     response-count difference is only a candidate, and persistence and
     business impact need controlled read-back.
     """
+    # Validate both phases before the sequential baseline touches the target.
+    # Otherwise an invalid worker count would fail only after sending `count`
+    # active requests.
+    if isinstance(count, bool) or not isinstance(count, int) \
+            or not 1 <= count <= MAX_RATE_LIMIT_REQUESTS:
+        raise ValueError(f"count must be between 1 and {MAX_RATE_LIMIT_REQUESTS}")
+    if isinstance(workers, bool) or not isinstance(workers, int) \
+            or not 1 <= workers <= MAX_RATE_LIMIT_WORKERS:
+        raise ValueError(f"workers must be between 1 and {MAX_RATE_LIMIT_WORKERS}")
     log(f"Running race-condition baseline-vs-burst comparator on {url}...")
     findings = []
 

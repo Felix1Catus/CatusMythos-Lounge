@@ -206,7 +206,11 @@ class BootstrapRuntimeTests(unittest.TestCase):
 
     def test_amass_is_explicitly_deferred_from_automated_installs(self):
         self.assertNotIn("amass", bootstrap.GO_TOOLS)
-        self.assertIn("JSON-output compatibility", bootstrap.MANUAL_OPTIONAL_TOOLS["amass"])
+        note = bootstrap.MANUAL_OPTIONAL_TOOLS["amass"]
+        self.assertIn("amass subs -names/-ip/-summary", note)
+        self.assertIn("-brute/-w", note)
+        self.assertIn("amass --help", note)
+        self.assertIn("structured-output path", note)
 
     @patch.object(bootstrap, "_add_go_bin_to_process_path")
     @patch.object(bootstrap, "_available_commands", return_value=[])
