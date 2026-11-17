@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "enabled": false,
+  "push": false,
+  "worker_timeout": 900,
+  "check_timeout": 300,
+  "lease_seconds": 120,
+  "max_repairs": 2,
+  "claude_max_budget_usd": 2,
+  "models": {},
+  "checks": [
+    ["python3", "-m", "pytest", "-q"],
+    ["python3", "-m", "ruff", "check", "."],
+    ["python3", "-m", "compileall", "-q", "."],
+    ["python3", "scripts/check_common_sync.py"],
+    ["python3", "scripts/check_skill_cli_docs.py"],
+    ["git", "diff", "--check"]
+  ]
+}

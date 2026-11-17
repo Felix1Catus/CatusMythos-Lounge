@@ -65,3 +65,21 @@ See `tools/agent-bridge/README.md` for `ask_codex` -- a tool Claude can
 call directly (via the OpenAI API) that doesn't need this manual relay,
 when a quick synchronous question is enough and you don't need the actual
 Codex app's own session/context.
+
+## Shared unattended supervisor (v1)
+
+The Markdown files above remain append-only human coordination history. For
+approved unattended coding tasks, use `tools/agent-supervisor/supervisor.py`.
+Its authoritative queue/events and generated `mailbox.md` live under the Git
+common directory's `agent-coordination/` folder, so every linked worktree sees
+the same state without committing/pulling mailbox edits to deliver messages.
+
+Run `python3 tools/agent-supervisor/supervisor.py --repo <checkout> status` or
+`mailbox` to inspect shared state. Generated transcripts do not replace either
+historical inbox. See [supervisor setup](../tools/agent-supervisor/README.md)
+for explicit task approval, isolated worktrees, opposite-model review,
+validation/push gates, stop/recovery, limits, and permission behavior.
+
+The CLI-based supervisor is now the unattended route. The earlier manual relay
+instructions remain useful for these interactive desktop sessions; a CLI worker
+is a separate session and does not inherit this chat's hidden state.
