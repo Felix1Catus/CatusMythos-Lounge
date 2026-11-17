@@ -6,20 +6,17 @@ doesn't mistake uneven coverage for uniform coverage.
 
 ## Current state
 
-- Latest code pass: `7f26773c848cf6ebcedc7adf046b79fb17d386fe`
-  (`Add state-aware API race checks`), following
-  `b8abc54830bbdab2ce712b6260a021395caaf46f`
-  (`Probe query cache-key behavior safely`) and
-  `c484a2834893ea7fd7af645bb9a91bd7816ad052`
-  (`Improve API rate and coupon evidence`), rate-limit hardening
-  `a75e337cd2cb1a025cec5d7abc35f401ce646c74`, and shared API response
-  sanitizing `5d6e6b36947adfb6144eb98004227297daf805d6`.
-- API-breaker now has **77 tests + 26 subtests**; cache auditor has **12 tests +
-  23 subtests**; the full suite passes **555 tests + 68 subtests**. Ruff,
-  compileall, shared-helper sync, CLI docs (**10 / 95 / 58**), and diff checks
-  pass. Loopback fixtures exercise rate-limit header/GraphQL probes, query
-  cache replay, and idempotent versus excess business-logic race state changes.
-  No live external API was contacted.
+- Latest scoped closeout code commit: `6f8c4af3646043294682520d9ca551560a01f928`
+  (`Close scoped audit checklist and verify regressions`), after the two local
+  API-race commits `7f26773c848cf6ebcedc7adf046b79fb17d386fe` and
+  `f5bff3d96aa53ac32693fdcca3983107bf01c459`. All three are pushed to `main`.
+- API-breaker now has **82 tests + 29 subtests**; cache auditor has **12 tests +
+  23 subtests**. The exact final full-suite run passed **553 tests** on Python
+  3.14.8 with Playwright 1.65.2 / Chromium. Playwright 1.48.0 / Python 3.13.17
+  loopback checks passed separately. Ruff, compileall, helper sync, CLI docs
+  (**10 / 95 / 58**), and `git diff --check` passed. The prior 555+68 figure is
+  retained only as a historical checkpoint; this exact checkout's final run
+  reported 553 tests. No live external target was contacted.
 - Rate-limit imports now include same-origin-filtered OpenAPI records and
   api-discovery's URL-keyed GraphQL map. Duplicate rotating XFF evidence is
   fixed. Race, path-mutation, IP-header, and GraphQL responses without
@@ -750,3 +747,27 @@ browser `--active`, or `--submit-forms` behavior.
 Windows details to preserve: use `python3` for the interpreter command in
 PowerShell; keep `hooks/hooks.json` LF-only; and reference the actual
 `hooks/hooks.json` path in plugin metadata and bootstrap checks.
+
+## Final closeout entry — 2026-11-16
+
+The six-item closeout checklist above was re-read top to bottom after the
+changes. Every item is marked closed, and the section contains no indefinite
+status wording. The scope stayed on those six items; other skills recorded as
+deepened or doc-only were not reopened.
+
+- Code, regression, and audit documentation commit
+  `6f8c4af3646043294682520d9ca551560a01f928` was pushed to `origin/main` after
+  the prior local API-race commits `7f26773c848cf6ebcedc7adf046b79fb17d386fe`
+  and `f5bff3d96aa53ac32693fdcca3983107bf01c459`.
+- Verification: 553 full-suite tests passed; the focused API-breaker matrix
+  passed 82 tests + 29 subtests; two Playwright 1.48.0 integration checks
+  passed; Ruff, compileall, shared-helper sync, CLI-docs (10 / 95 / 58), and
+  `git diff --check` passed. The default Playwright 1.65.2 browser fixtures
+  also passed inside the full suite.
+- **Explicit deferrals:** Amass is excluded from managed installation because
+  its v5 CLI/output surface and wordlist behavior require checks against the
+  actually installed version (item 5); no live external-target testing was
+  performed because this repository closeout supplied no named authorized
+  target. These are documented bounds, not active checklist work.
+- The final metadata commit and its `origin/main` verification are recorded by
+  the GitHub `main` tip reported in the session closeout.

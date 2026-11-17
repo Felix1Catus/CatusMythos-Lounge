@@ -634,6 +634,11 @@ The code and regression coverage also exposed one closeout lint defect: a
 repeated WebSocket counter key in the browser page report. The duplicate was
 removed; the retained counter uses the normalized page value.
 
+The code and regression closeout is commit
+`6f8c4af3646043294682520d9ca551560a01f928` (`Close scoped audit checklist and verify
+regressions`) on `main`; the local API-race commits `7f26773` and `f5bff3d` were
+also included in the push.
+
 ### Final verification
 
 - `python3 -m unittest discover -s tests`: **553 tests passed** in 111.068 s.
