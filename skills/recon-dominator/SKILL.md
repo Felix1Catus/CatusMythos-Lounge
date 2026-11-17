@@ -325,3 +325,19 @@ Actions:
 1. Run only Steps 2, 6, 7, 8 (no direct target contact)
 2. Skip active DNS brute, port scanning, tech fingerprinting
 3. Generate report with passive findings only
+
+### Shared target knowledge (opt-in, v1)
+
+With the full plugin checkout installed, fingerprinting can publish observed
+technologies, advertised component versions, and WAF products for later stages:
+
+```bash
+python3 scripts/tech_fingerprint.py --input {hosts_file} --knowledge-db {engagement_db} --engagement {engagement_name}
+```
+
+The database parent directory must already exist. Use one engagement namespace
+and database across the participating commands. No response bodies or headers
+(including cookies) are copied into this store. Fingerprints are observations,
+not proof that a detected component is exploitable. See
+[shared knowledge v1](../../scripts/TARGET_KNOWLEDGE.md) for query usage,
+expiry, isolation, and the three supported integrations.

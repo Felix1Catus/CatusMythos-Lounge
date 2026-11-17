@@ -6,6 +6,7 @@ Author: orizon.one
 """
 
 import argparse
+import importlib.util
 import hashlib
 import json
 import re as _re
@@ -722,7 +723,24 @@ def main():
     parser.add_argument("--input", "-i", required=True, nargs="+",
                         help="JSON files or directories with findings")
     parser.add_argument("--output", "-o", help="Output JSON file")
+    parser.add_argument("--knowledge-db", help="Opt-in shared SQLite target-knowledge file")
+    parser.add_argument("--engagement", help="Required engagement namespace when knowledge is enabled")
+    parser.add_argument("--knowledge-refresh", action="store_true", help="Re-probe rather than reuse previous failed payloads")
     args = parser.parse_args()
+    knowledge = None
+    if args.engagement and not args.knowledge_db:
+        parser.error("--engagement requires --knowledge-db")
+    if args.knowledge_db:
+        module_path = Path(__file__).resolve().parents[3] / "scripts" / "target_knowledge.py"
+        if not module_path.is_file():
+            parser.error("shared knowledge requires the full plugin checkout, including scripts/target_knowledge.py")
+        spec = importlib.util.spec_from_file_location("catus_target_knowledge", module_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        try:
+            knowledge = module.KnowledgeStore(args.knowledge_db, args.engagement, refresh=args.knowledge_refresh)
+        except (ValueError, OSError, module.sqlite3.Error) as exc:
+            parser.error(str(exc))
 
     log("Importing and normalizing findings...")
 
@@ -753,6 +771,17 @@ def main():
         if f["id"] not in seen:
             seen.add(f["id"])
             unique_findings.append(f)
+
+    if knowledge is not None:
+        for finding in unique_findings:
+            if finding.get("url"):
+                try:
+                    observations = knowledge.query(finding["url"])
+                except ValueError:
+                    # Host-only/non-HTTP artifacts have no exact HTTP origin to enrich.
+                    observations = []
+                finding["target_knowledge"] = [row for row in observations
+                                               if row["kind"] != "payload_failure"]
 
     # Stats
     by_severity = {}
