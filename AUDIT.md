@@ -713,3 +713,24 @@ or recurring background service activation occurred. Runtime data is private
 under Git metadata; worktrees are separate. Lifecycle coordination assumes
 trusted repositories and is not hostile-code isolation or a strict Codex cost
 cap. All residual limits are documented in tools/agent-supervisor/README.md.
+
+## 2026-11-17 — Shared-goal live view validation
+
+Added named persistent CLI session streaming, same-goal compact live terminal
+view, goal progress/heartbeat/session UUIDs and guarded native resume commands.
+Historical single-result Claude JSON still parses; streamed structured reviews
+retain exact candidate/base binding. Watch does not mutate task state; demo is
+explicit, read-only, bounded, checks unchanged checkout and obeys stop control.
+No UI automation typed terminal commands or changed app/security settings.
+
+Validation: real Codex+Claude simultaneous read-only demo passed on the shared
+visibility goal. **13 view tests pass**. Baseline full suite **735 tests +122
+subtests** passed; Final focused rerun: **52 passed + 20 subtests passed**. Ruff, compileall, helper sync,
+CLI docs (**10/102/59**) and diff checks pass. Claude review caught two cosmetic
+issues (structured-only result status; marker rewrite flicker), both fixed.
+Independent Claude CLI review approved `f152ba0554a9c72a8892e9f8cf5a73f428a83abf` with no remaining findings.
+
+Task #6–#8 division exists only as private draft specifications, not approved
+queue entries or running jobs. Current project queue remains empty. App tools
+open/read the terminal but cannot input the watch command; the user has the
+one-time paste instruction. No cross-provider native chat UI is claimed.

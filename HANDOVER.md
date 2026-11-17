@@ -1030,3 +1030,33 @@ This is local trusted-repository lifecycle coordination, not a hostile-code
 sandbox, an encrypted log store, or a promise of a Codex USD spending cap.
 Parallel author execution, automatic orphan PID killing, cloud synchronization,
 and hidden-session recovery are not implemented; see the README's limits.
+
+## 2026-11-17 — Shared-goal live session visibility
+
+User chose one Codex desktop terminal view for both providers. Added
+`tools/agent-supervisor/live_view.py` plus `watch`, `sessions` and bounded
+read-only `demo` commands. Claude workers now use named persistent JSONL
+sessions; the backend accepts both historical JSON and streamed result
+envelopes without weakening author/reviewer failure or SHA validation.
+The view groups native Codex/Claude session IDs, roles, heartbeat state,
+messages/tools and task progress under the same goal. Native resume commands
+are emitted only for UUIDs. Heartbeat marker writes are atomic; stale markers
+are shown as unknown. Structured-only reviewer results show completed status.
+
+A real read-only simultaneous demonstration passed for both providers on goal
+`shared-session-visibility`, without modifying the checkout. The app API opened
+the terminal panel but exposes no terminal-input method; user was given the
+one-time `python3 tools/agent-supervisor/supervisor.py watch` paste. No Windows
+terminal UI input automation was used. Watch never launches tasks; Ctrl+C
+closes only the view. Demo obeys the stop switch and bounded model runtime.
+
+Validation: **735 full-suite tests + 122 subtests passed** before final cosmetic
+review fixes; **13 view tests pass** on the fixes. Final focused rerun: **52 passed + 20 subtests passed**.
+Ruff, compileall, common-sync, CLI-doc checker (**10/102/59**) and diff checks
+pass. Independent Claude review identified/fixed the structured-result status
+and atomic-marker display issues. Independent Claude CLI review approved `f152ba0554a9c72a8892e9f8cf5a73f428a83abf` with no remaining findings.
+
+Prepared private, unqueued task drafts under Git-common-dir/agent-coordination/
+drafts: #6 author Claude/reviewer Codex; #7 author Codex/reviewer Claude,
+depending on #6; #8 author Claude/reviewer Codex, depending on #6 and #7.
+V1 still uses one author at a time. None of #6–#8 started in this checkpoint.

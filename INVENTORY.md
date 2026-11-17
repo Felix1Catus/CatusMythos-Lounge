@@ -373,3 +373,21 @@ Independent Claude CLI review approved implementation `ceab93c7421c0423f9af847d4
 CLI sandbox/tool controls; worktrees share the OS user and are not a security
 boundary against hostile executables. Runtime logs/prompts require private
 handling; no model secrets are provisioned or committed by this tool.
+
+## 2026-11-17 addendum — shared-goal session view
+
+`tools/agent-supervisor/live_view.py` provides a read-only compact terminal
+monitor, JSON session listing and explicit bounded simultaneous read-only
+Codex/Claude demonstration. Native UUIDs, provider names, task roles, heartbeats,
+messages/tool activity and goal progress are visible together. Claude JSONL
+streams retain strict result validation and historical JSON compatibility.
+An independent reviewer caught/fixed completed structured-result display and
+non-atomic marker flicker. `tests/test_supervisor_live_view.py`: **13 tests**.
+Full-suite baseline: **735 passed + 122 subtests**; Final focused rerun: **52 passed + 20 subtests passed**.
+Ruff/compileall/common-sync/CLI-docs (**10/102/59**) pass. Independent Claude CLI review approved `f152ba0554a9c72a8892e9f8cf5a73f428a83abf` with no remaining findings.
+
+The user selected Codex desktop terminal visibility; one command paste starts
+watch because app tools expose open/read, not terminal input. The view does not
+embed Claude into Codex's native chat sidebar, approve tasks, or enable parallel
+coding authors. Real two-provider read-only demonstration passed; #6–#8 remain
+unqueued drafts with author/reviewer assignments recorded in HANDOVER.md.
