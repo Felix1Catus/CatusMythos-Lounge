@@ -687,6 +687,44 @@ claim that every behavior is exhaustively validated):**
     call including the baseline fetch, which the fix now correctly
     rejects — the old test's premise was itself accidentally verifying
     the bug, not the feature). No live target contacted.
+- **N-role authorization matrix for authz_tester.py (2026-11-17).** New
+  capability, not a bug fix. `--token`/`--token-b` can only ever test two
+  identities; real RBAC bugs often only show up between a *specific* pair
+  of roles in a larger hierarchy, and the single-token BFLA check has no
+  way to tell "the admin legitimately reaching `/admin`" apart from "a
+  low-priv user escalating to `/admin`" since it doesn't know whether its
+  one token IS the admin. New repeatable `--role NAME:TOKEN` (declared in
+  ascending privilege order, lowest first; an empty TOKEN declares an
+  explicit anonymous role at that position) plus pure `parse_role`/
+  `build_role_matrix` helpers and two new testers:
+  - `test_bola_matrix`: generalizes the original's "User A's objects,
+    tried as User B" to however many named roles are supplied — for every
+    role that can read an object, every OTHER role in the matrix is
+    cross-tested against those same object IDs. A lower-ranked role
+    reading a higher-ranked role's object (a genuine privilege-escalation
+    direction) is marked `critical`; the reverse direction is still a real
+    BOLA bug but a less surprising one, marked `high`. Deliberately scopes
+    to the original's Phase 1+2 (the real cross-identity crossing); Phase
+    3's hardcoded-resource-path probing (which never established
+    ownership either) is not generalized here — left for a follow-up.
+  - `test_bfla_matrix`: probes every role against every admin-pattern
+    path, but — unlike the single-token original — the HIGHEST-ranked
+    (last-declared) role succeeding is treated as expected and not
+    reported; only a lower-ranked role succeeding is a candidate, with
+    severity scaling by rank gap (rank 0, e.g. an explicit anonymous
+    entry, succeeding is the worst case).
+  - `test_bola`/`test_bfla` and `--token`/`--token-b` are completely
+    unchanged — the matrix path only activates when `--role` is actually
+    used (mutually exclusive with `--token`/`--token-b`; needs >= 2 roles).
+  - Added 18 tests to `tests/test_api_breaker.py` (82 -> 100): `parse_role`
+    boundary cases, `build_role_matrix` rank/cookie-isolation, the BOLA
+    cross-role severity-by-direction case and the no-leak/too-few-roles
+    cases, the BFLA top-rank-never-flagged case and the severity-scales-
+    with-rank-gap case across 4 roles, and CLI dispatch/validation
+    (mutual exclusivity, minimum-role-count, `--role` output correctly
+    populating `meta.roles` vs. the unchanged empty-list 2-role mode).
+    Full `test_api_breaker.py`: 100 passed + 29 subtests. Ruff, compileall,
+    and CLI-docs (10/98/59, up from 97/59) pass. No live target contacted.
 
 ## Browser auditor (`webapp-exploit-hunter/scripts/browser_security_auditor.py`)
 The four browser bullets in the closeout checklist were resolved on 2026-11-16:
