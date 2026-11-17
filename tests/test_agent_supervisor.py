@@ -156,6 +156,25 @@ class StoreTests(unittest.TestCase):
             self.store.recover(confirmed=True, retry=claimed['id'])
         self.assertEqual(self.store.tasks()[0]['state'], 'attention')
 
+    def test_operator_can_reconcile_exact_approved_remote_and_unblock_dependencies(self):
+        self.enqueue(task('first'))
+        self.enqueue(task('dependent', ['other.txt'], dependencies=['first']))
+        claimed = self.store.claim(self.owner, 120)
+        candidate = 'a' * 40
+        base = 'b' * 40
+        checkpoint = {'candidate_sha': candidate, 'base_sha': base, 'reviewed_sha': candidate,
+                      'review': {'approved': True, 'candidate_sha': candidate, 'base_sha': base, 'findings': []},
+                      'checks': [{'passed': True}]}
+        self.store.checkpoint(self.owner, claimed, checkpoint, 'attention')
+        with self.assertRaises(ValueError):
+            self.store.reconcile('first', 'wrong', confirmed=True)
+        with self.assertRaises(ValueError):
+            self.store.reconcile('first', candidate)
+        self.store.reconcile('first', candidate, confirmed=True)
+        self.assertEqual(self.store.tasks()[0]['state'], 'done')
+        self.store.acquire_runner('new-runner', 120)
+        self.assertEqual(self.store.claim('new-runner', 120)['id'], 'dependent')
+
     def test_second_runner_is_rejected(self):
         with self.assertRaises(RuntimeError):
             self.store.acquire_runner('other', 120)
@@ -217,6 +236,16 @@ class ProcessTests(unittest.TestCase):
             time.sleep(1.5)
             self.assertFalse(marker.exists())
 
+    def test_failure_diagnostics_are_bounded_and_redacted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / 'failure.log'
+            output.write_text('x' * 20000 + '\nassert expected useful-value\nAuthorization: Bearer private-token\nAPI_KEY=private-key\n')
+            error = str(sup.ProcessFailed('failed', output))
+            self.assertIn('assert expected useful-value', error)
+            self.assertNotIn('private-token', error)
+            self.assertNotIn('private-key', error)
+            self.assertLess(len(error), 8500)
+
     def test_permission_adapters_never_use_bypass_flags(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(sup, 'resolve_cli', side_effect=lambda a: [a]):
             for agent in sup.AGENTS:
@@ -264,6 +293,7 @@ class GitIntegrationTests(unittest.TestCase):
         self.advance_main = False
         self.author_calls = 0
         self.review_prompts = []
+        self.author_prompts = []
         self.lose_ownership = False
 
     def worker_command(self, agent, review, final, config):
@@ -277,10 +307,12 @@ class GitIntegrationTests(unittest.TestCase):
             if self.lose_ownership:
                 raise sup.OwnershipLost('fixture lease lost')
             if self.fail_check:
-                raise sup.ProcessFailed('fixture validation failure')
+                output.write_text('fixture check expected a useful repaired value')
+                raise sup.ProcessFailed('fixture validation failure', output)
             output.write_text('checks passed')
             return 'checks passed'
         if argv[1] == 'author':
+            self.author_prompts.append(prompt)
             self.author_calls += 1
             name = 'unclaimed.txt' if self.outside_file else 'app.txt'
             path = Path(cwd) / name
@@ -398,6 +430,8 @@ class GitIntegrationTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             self.run_task()
         self.assertEqual(self.author_calls, 2)
+        self.assertIn('fixture check expected a useful repaired value', self.author_prompts[1])
+        self.assertIn('BEGIN UNTRUSTED CHECK OUTPUT', self.author_prompts[1])
         self.assertEqual(self.reviews, [])
         self.assertEqual(self.store.tasks()[0]['state'], 'attention')
 

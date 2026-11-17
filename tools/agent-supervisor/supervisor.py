@@ -25,11 +25,35 @@ class OwnershipLost(RuntimeError):
 
 
 class ProcessFailed(RuntimeError):
-    pass
+    def __init__(self, message, log_path=None):
+        self.log_path = log_path
+        detail = bounded_diagnostics(log_path) if log_path is not None else ''
+        super().__init__(message + ('\nBEGIN UNTRUSTED CHECK OUTPUT\n' + detail +
+                                   '\nEND UNTRUSTED CHECK OUTPUT' if detail else ''))
 REVIEW_SCHEMA = {'type': 'object', 'additionalProperties': False,
     'properties': {'approved': {'type': 'boolean'}, 'candidate_sha': {'type': 'string'},
                    'base_sha': {'type': 'string'}, 'findings': {'type': 'array', 'items': {'type': 'string'}}},
     'required': ['approved', 'candidate_sha', 'base_sha', 'findings']}
+
+
+def bounded_diagnostics(log_path):
+    parts = []
+    path = Path(log_path)
+    for label, file in [('stdout', path), ('stderr', path.with_suffix(path.suffix + '.stderr.log'))]:
+        try:
+            with file.open('rb') as stream:
+                stream.seek(0, 2)
+                stream.seek(max(0, stream.tell() - 8192))
+                text = stream.read(8192).decode('utf-8', errors='replace')
+        except OSError:
+            continue
+        text = re.sub(r'(?im)((?:authorization|cookie|set-cookie)\s*[:=]\s*)[^\r\n]+', r'\1[REDACTED]', text)
+        text = re.sub(r'(?i)((?:[A-Z_]*(?:API_KEY|PASSWORD|SECRET|TOKEN))\s*[:=]\s*)[^\s,;]+', r'\1[REDACTED]', text)
+        text = re.sub(r'\bsk-[A-Za-z0-9_-]{10,}\b', '[REDACTED]', text)
+        text = re.sub(r'(https?://)[^/\s@]+@', r'\1[REDACTED]@', text)
+        if text:
+            parts.append(label + ':\n' + text)
+    return '\n'.join(parts)
 
 
 def encoded(value):
@@ -246,6 +270,30 @@ class Store:
                     raise ValueError('only a quarantined task can be retried')
             self.event(db, retry, 'supervisor', 'Operator confirmed old workers stopped; recovered/quarantined state')
 
+    def reconcile(self, task_id, remote_sha, confirmed=False):
+        if not confirmed:
+            raise ValueError('confirm all previous workers stopped before reconciling')
+        with self.db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            row = db.execute('SELECT * FROM tasks WHERE id=?', (task_id,)).fetchone()
+            if not row or row['state'] not in ACTIVE:
+                raise ValueError('only running/quarantined tasks can be reconciled')
+            data = json.loads(row['checkpoint'])
+            candidate = data.get('candidate_sha')
+            review = data.get('review', {})
+            if (not candidate or remote_sha != candidate or data.get('reviewed_sha') != candidate
+                or review.get('approved') is not True or review.get('candidate_sha') != candidate
+                or review.get('base_sha') != data.get('base_sha') or review.get('findings')
+                or not data.get('checks') or not all(check.get('passed') is True for check in data['checks'])):
+                raise ValueError('remote must exactly match the validated, approved candidate')
+            db.execute("UPDATE tasks SET state='attention',fence=fence+1,lease=0 WHERE state='running'")
+            db.execute('UPDATE control SET owner=NULL,lease=0,stopped=0 WHERE id=1')
+            data.update(phase='pushed', progress_percent=100, remote_sha=remote_sha, reconciled_by_operator=True,
+                        push_outcome={'remote_sha': remote_sha, 'applied': True})
+            db.execute("UPDATE tasks SET state='done',owner=NULL,fence=fence+1,lease=0,checkpoint=? WHERE id=?",
+                       (encoded(data), task_id))
+            self.event(db, task_id, 'supervisor', 'Operator verified exact remote candidate; reconciled to done')
+
     def cancel(self, task_id, confirmed=False):
         with self.db() as db:
             db.execute('BEGIN IMMEDIATE')
@@ -366,7 +414,7 @@ def execute(argv, cwd, prompt, output, timeout, heartbeat):
                 time.sleep(0.2)
             heartbeat()
             if process.returncode:
-                raise ProcessFailed('process exited {}; inspect private log {}'.format(process.returncode, output))
+                raise ProcessFailed('process exited {}; inspect private log {}'.format(process.returncode, output), output)
         except BaseException:
             terminate_tree(process)
             metadata['cleanup'] = 'process-tree termination requested; confirm before recovery'
@@ -700,6 +748,7 @@ def main():
     recover = commands.add_parser('recover')
     recover.add_argument('--confirm-workers-stopped', action='store_true')
     recover.add_argument('--retry')
+    recover.add_argument('--mark-pushed', help='Verify remote main equals the approved candidate, then mark done')
     run = commands.add_parser('run')
     run.add_argument('--config', required=True)
     run.add_argument('--execute', action='store_true')
@@ -721,7 +770,15 @@ def main():
         elif args.command in ('stop', 'clear-stop'):
             store.stop(args.command == 'stop')
         elif args.command == 'recover':
-            store.recover(args.confirm_workers_stopped, args.retry)
+            if args.mark_pushed:
+                if args.retry or not args.confirm_workers_stopped:
+                    raise ValueError('--mark-pushed needs confirmed stopped workers and cannot combine with --retry')
+                remote = run_git(args.repo, 'ls-remote', 'origin', 'refs/heads/main').split()
+                if not remote:
+                    raise ValueError('remote main was not found')
+                store.reconcile(args.mark_pushed, remote[0], confirmed=True)
+            else:
+                store.recover(args.confirm_workers_stopped, args.retry)
         elif args.command == 'mailbox':
             destination = args.output or str(store.root / 'mailbox.md')
             store.transcript(destination)

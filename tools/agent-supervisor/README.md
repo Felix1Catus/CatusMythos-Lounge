@@ -86,6 +86,11 @@ integration validation 85%, pushed 100%. Batch percentages average task stages.
 
 ## Author, review, integration
 
+Failed-check feedback includes bounded, best-effort-redacted stdout/stderr tails
+as explicitly untrusted reference data, so authors can repair without needing
+access to private Git-metadata log paths. Raw private logs still need careful
+handling; redaction is not a general secret-detection guarantee.
+
 Authors edit only. The supervisor checks the complete change set against the
 approved file claims, commits as FelixCatus, and runs the configured checks.
 A reviewer gets a separate local clone (with independent Git metadata),
@@ -171,3 +176,32 @@ Offline regression tests use fake model adapters and disposable local Git
 remotes. They prove lifecycle decisions without spending model credits or
 pushing fixture changes to GitHub. Model CLI connectivity and real model output
 must also be smoke-tested separately before relying on unattended operation.
+
+
+## Diagnostics and push reconciliation
+
+Stdout and stderr are separate private files. Failed-check feedback includes
+bounded, best-effort-redacted tails as untrusted data, so an author can repair
+without reading private `.git` paths. Ownership/stop failures are distinct from
+validation failures and never trigger a repair attempt.
+
+Git commands heartbeat and obey the remaining batch deadline. Network Git
+commands use `network_timeout` (default 180 seconds). Git stdin/terminal prompts
+and interactive credential-manager prompts are disabled; SSH defaults to
+BatchMode unless an explicit environment SSH command is already configured.
+The controller checks the committed base-to-candidate diff for whitespace and
+conflict-marker problems, independently of configured check commands.
+
+A failed/ambiguous push triggers remote-SHA inspection. The exact candidate
+means applied; the unchanged base means not applied; any other SHA is treated
+as ambiguous. Already-applied/ambiguous outcomes cannot be blindly retried.
+After checking that prior workers stopped, reconcile an already-applied task:
+
+```powershell
+python3 tools/agent-supervisor/supervisor.py recover --mark-pushed approved-documentation-fix --confirm-workers-stopped
+```
+
+This verifies remote main exactly matches the validated and independently
+approved candidate before marking the task done and releasing dependencies.
+A different/unreviewed remote commit cannot be accepted. Investigate divergent
+remote state manually; do not discard old checkpoints to force a retry.
