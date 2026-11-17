@@ -311,3 +311,30 @@ protocol skills). Cosmetic, but a cleanup pass would make provenance consistent.
 These notes describe where the existing test evidence is narrower. The scoped
 closeout checklist is in `HANDOVER.md`; they do not reopen the other skills or
 authorize a repository-wide restructuring pass.
+
+## 2026-11-17 addendum — shared target knowledge (#5)
+
+New infrastructure: [`scripts/target_knowledge.py`](scripts/target_knowledge.py),
+with [usage and scope](scripts/TARGET_KNOWLEDGE.md). One opt-in SQLite store,
+explicit engagement isolation, exact-origin/resource/context keys, provenance,
+confidence, expiry, process-safe transactions, and a network-free query CLI.
+It is intentionally outside the per-skill `_common.py` vendoring system.
+
+The three integrations are `recon-dominator/tech_fingerprint` (publish stack,
+advertised versions, WAF observations), `webapp-exploit-hunter/sqli_tester`
+(error-based negative-probe reuse and auth/rate/WAF observation context), and
+`vuln-chain-composer/import_findings` (advisory enrichment only). Disabled mode
+preserves the existing CLI behavior without loading shared infrastructure.
+Copied-out skills require the full checkout only when opting in.
+
+Coverage: `tests/test_target_knowledge.py` has **30 tests + 29 subtests**;
+full pytest **667 passed + 102 subtests passed**. Ruff, compileall, CLI docs (**10/101/59**),
+common-sync, and final diff checks passed. Reuse never crosses auth contexts,
+engagements, origins, or the 15-minute negative-observation TTL. Fresh baselines
+are required; error/block/rate-limit responses are not cached as clean misses.
+No bodies, raw auth headers, query values, or raw payload strings are stored
+by integrations. Paths and technology metadata still need private handling.
+
+Not wired in v1: cloud-pivot-finder, api-breaker (Claude owns #4), other
+vulnerability testers/SQLi modes. No automatic new WAF escalation (#6),
+end-to-end exploitation (#7), or semantic severity changes (#8).

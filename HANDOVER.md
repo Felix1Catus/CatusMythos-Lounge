@@ -904,3 +904,43 @@ deepened or doc-only were not reopened.
   target. These are documented bounds, not active checklist work.
 - The final metadata commit and its `origin/main` verification are recorded by
   the GitHub `main` tip reported in the session closeout.
+
+## 2026-11-17 — Improvement #5: shared target knowledge v1 (Codex)
+
+Surveyed the established workflow, mailbox ownership, fingerprint output,
+SQLi baseline/mutation flow, importer normalization, and standalone skill
+loading. Claude's #4 files (`authz_tester.py`, `tests/test_api_breaker.py`)
+were not edited. Tasks #6–#8 were not started.
+
+- New cross-cutting `scripts/target_knowledge.py`: stdlib SQLite, explicit
+  engagement namespace, exact canonical HTTP(S) origins, resource/context
+  keys, source/confidence/timestamps/TTL, query CLI, concurrent transactions,
+  and explicit errors for incompatible/corrupt databases. No global default
+  database or per-skill vendored state module.
+- Exactly three CLI integrations: recon `tech_fingerprint.py` publishes
+  observed stack/versions/WAF; webapp `sqli_tester.py` reuses recent clean
+  error-based payload outcomes for identical baseline/request/auth contexts,
+  records access-denial/rate-limit signals, and exposes recon context;
+  composer `import_findings.py` enriches findings with current observations
+  without changing severity, confidence, or chain capabilities.
+- Failed-payload reuse has a 15-minute TTL and always takes a fresh baseline.
+  No auth denial, HTTP 429, transport/server failure, or WAF block counts as
+  a clean negative. `--knowledge-refresh` bypasses reuse and invalidates an
+  obsolete failure after a changed result. Request headers/query values,
+  baseline bodies, original values and payloads are hashed rather than stored.
+  Public metadata/path information is still engagement-sensitive; the store
+  is local trusted state, not an authorization boundary or encrypted vault.
+- `scripts/TARGET_KNOWLEDGE.md` and the three skill guides document opt-in
+  flags, query examples, standalone behavior, privacy, TTL, and deferrals.
+  New `tests/test_target_knowledge.py`: **30 tests + 29 subtests**, offline,
+  including concurrent processes, namespace/origin/role/expiry boundaries,
+  refresh-positive invalidation, secret exclusion, and all three integrations.
+- Validation: full pytest **667 passed + 102 subtests passed**; Ruff, full compileall,
+  common-sync, CLI-doc checker (**10 skill docs / 101 references / 59 CLIs**),
+  and final diff whitespace checks passed. No live targets were tested.
+
+Deferred deliberately: cloud/API automatic integrations, other SQLi modes
+and other testers, detailed Retry-After/window modeling, event history/purge
+UI, and tasks #6–#8. The generic store API is queryable by these consumers,
+but v1 does not claim they are wired. Technology fingerprints and HTTP status
+signals remain observations; no-new-error is not proof of non-vulnerability.

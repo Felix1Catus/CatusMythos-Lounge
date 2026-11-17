@@ -293,3 +293,17 @@ Actions:
 3. Check for alternative initial access paths
 4. Report: alternative chains exist/don't exist
 5. Recommend which fixes break the most chains
+
+### Shared target knowledge (opt-in, v1)
+
+```bash
+python3 scripts/import_findings.py --input {findings_dir_or_files} --knowledge-db {engagement_db} --engagement {engagement_name}
+```
+
+Requires the full plugin checkout. Each finding with a valid HTTP(S) URL gets
+current exact-origin observations under `target_knowledge`, including source,
+confidence, observation time, and expiry. Payload-failure records are excluded.
+This is context for review; it changes neither severity nor chain capabilities
+and never upgrades a hypothesis to a confirmed finding. Host-only/non-HTTP
+artifacts retain their original behavior and receive no origin context. See
+[shared knowledge v1](../../scripts/TARGET_KNOWLEDGE.md).

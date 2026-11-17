@@ -660,3 +660,27 @@ No repository-wide restructure, live target assessment, or broad tool-version
 pinning was part of this closeout. The Amass unblock evidence remains the
 installed `amass --help` and `amass enum --help`, visible wordlist guesses on an
 owned-domain fixture, and a reliable structured-output path.
+
+## 2026-11-17 — Shared target-knowledge v1 (#5), Codex
+
+Scope: new stdlib shared SQLite infrastructure plus exactly three integration
+points (recon fingerprint publication, error-based SQLi observation reuse,
+composer importer enrichment). Read mailbox and established per-skill workflow
+before editing; Claude's authorization tester and API-breaker test matrix were
+left untouched. No tasks #6–#8, live target traffic, dependency changes, or
+per-skill shared-helper changes.
+
+Evidence: **30 new tests + 29 subtests** exercise pure origin/context functions,
+engagement/origin/path/role separation, expiry boundaries, refresh invalidation,
+negative/error cases, incompatible/corrupt stores, concurrent connections and
+processes, absence of raw secrets in the database, query CLI, and the three
+integrations. full pytest **667 passed + 102 subtests passed**. Ruff, `compileall -q .`,
+common-sync, CLI docs (**10 skill docs / 101 command references / 59 CLIs**),
+and final diff checks passed. Hashes are not encryption; the generic API
+assumes trusted operators and private engagement files. Advertised stack
+versions and auth/rate/WAF signals do not establish exploitability. Failed
+payload reuse is narrowly error-based and expires after 15 minutes.
+
+Follow-up limits are documented in `scripts/TARGET_KNOWLEDGE.md`: cloud/API
+wiring, remaining testers, rate-limit timing models, history/purge UI, and
+other improvement-list tasks remain out of scope.
