@@ -1685,5 +1685,189 @@ class ApiBreakerScopeTests(unittest.TestCase):
         request.assert_not_called()
 
 
+class AuthzMatrixTests(unittest.TestCase):
+    """N-role authorization matrix (--role): the human-pentester practice
+    of testing a full role hierarchy (anonymous, viewer, admin, ...), not
+    just a fixed 2-user pair. test_bola()/test_bfla() and --token/--token-b
+    are completely untouched by this feature -- these tests cover the new
+    parse_role/build_role_matrix/test_bola_matrix/test_bfla_matrix path
+    only, exercised through --role.
+    """
+
+    def test_parse_role_basic(self):
+        self.assertEqual(authz_tester.parse_role("viewer:TOKEN1"), ("viewer", "TOKEN1"))
+
+    def test_parse_role_empty_token_is_explicit_anonymous(self):
+        self.assertEqual(authz_tester.parse_role("anonymous:"), ("anonymous", ""))
+
+    def test_parse_role_rejects_missing_colon(self):
+        with self.assertRaises(argparse.ArgumentTypeError):
+            authz_tester.parse_role("no-colon-here")
+
+    def test_parse_role_rejects_empty_name(self):
+        with self.assertRaises(argparse.ArgumentTypeError):
+            authz_tester.parse_role(":token")
+
+    def test_build_role_matrix_rank_is_declaration_order(self):
+        matrix = authz_tester.build_role_matrix(
+            [("anonymous", ""), ("viewer", "TOK1"), ("admin", "TOK2")])
+        self.assertEqual([r["rank"] for r in matrix], [0, 1, 2])
+        self.assertEqual(matrix[0]["headers"], {})
+        self.assertEqual(matrix[1]["headers"]["Authorization"], "Bearer TOK1")
+
+    def test_build_role_matrix_cookie_isolation(self):
+        matrix = authz_tester.build_role_matrix(
+            [("viewer", "TOK1"), ("admin", "TOK2")],
+            cookies={"viewer": "session=viewer-only"},
+        )
+        self.assertEqual(matrix[0]["headers"]["Cookie"], "session=viewer-only")
+        self.assertNotIn("Cookie", matrix[1]["headers"])  # admin never inherits viewer's cookie
+
+    def test_build_role_matrix_extra_headers_exclude_cookie(self):
+        matrix = authz_tester.build_role_matrix(
+            [("viewer", "TOK1")], extra_headers={"Cookie": "session=shared", "X-Tenant": "acme"})
+        self.assertNotIn("Cookie", matrix[0]["headers"])
+        self.assertEqual(matrix[0]["headers"]["X-Tenant"], "acme")
+
+    def test_bola_matrix_requires_at_least_two_roles(self):
+        matrix = authz_tester.build_role_matrix([("solo", "TOK")])
+        with patch.object(authz_tester, "http_request") as request:
+            findings = authz_tester.test_bola_matrix("https://api.example.test", [], matrix, delay=0)
+        self.assertEqual(findings, [])
+        request.assert_not_called()
+
+    def test_bola_matrix_confirms_cross_role_leak_with_severity(self):
+        matrix = authz_tester.build_role_matrix(
+            [("anonymous", ""), ("viewer", "TOK1"), ("admin", "TOK2")])
+        endpoint = {"url": "https://api.example.test/api/orders/55", "path": "/api/orders/55"}
+
+        def record_request(url, method="GET", headers=None, data=None, timeout=10):
+            auth = (headers or {}).get("Authorization", "")
+            if "TOK1" in auth:  # only the viewer role can read its own order
+                return 200, {}, json.dumps({"id": "55"})
+            if "/orders/55" in url:  # anonymous/admin also see the SAME object back
+                return 200, {}, json.dumps({"id": "55"})
+            return 403, {}, "forbidden"
+
+        with patch.object(authz_tester, "http_request", side_effect=record_request):
+            findings = authz_tester.test_bola_matrix(
+                "https://api.example.test", [endpoint], matrix, delay=0)
+
+        confirmed = [f for f in findings if f["validated"]]
+        self.assertTrue(confirmed)
+        # anonymous (rank 0) reading viewer's (rank 1) object is a privilege
+        # crossing UPWARD -- must be the worst severity.
+        upward = next(f for f in confirmed if f["accessing_role"] == "anonymous" and f["owner_role"] == "viewer")
+        self.assertEqual(upward["severity"], "critical")
+        self.assertEqual(upward["type"], "bola")
+
+    def test_bola_matrix_no_leak_yields_no_findings(self):
+        matrix = authz_tester.build_role_matrix([("viewer", "TOK1"), ("admin", "TOK2")])
+        endpoint = {"url": "https://api.example.test/api/orders/1", "path": "/api/orders/1"}
+
+        with patch.object(authz_tester, "http_request", return_value=(403, {}, "forbidden")):
+            findings = authz_tester.test_bola_matrix(
+                "https://api.example.test", [endpoint], matrix, delay=0)
+        self.assertEqual(findings, [])
+
+    def test_bfla_matrix_top_rank_never_flagged(self):
+        matrix = authz_tester.build_role_matrix(
+            [("anonymous", ""), ("viewer", "TOK1"), ("admin", "TOK2")])
+
+        with patch.object(authz_tester, "http_request", return_value=(200, {}, "panel content")):
+            findings = authz_tester.test_bfla_matrix("https://api.example.test", matrix, delay=0)
+
+        roles_flagged = {f["role"] for f in findings}
+        self.assertNotIn("admin", roles_flagged)
+        self.assertIn("anonymous", roles_flagged)
+        self.assertIn("viewer", roles_flagged)
+
+    def test_bfla_matrix_severity_scales_with_rank_gap(self):
+        matrix = authz_tester.build_role_matrix(
+            [("anonymous", ""), ("viewer", "TOK1"), ("editor", "TOK2"), ("admin", "TOK3")])
+
+        with patch.object(authz_tester, "http_request", return_value=(200, {}, "panel content")):
+            findings = authz_tester.test_bfla_matrix("https://api.example.test", matrix, delay=0)
+
+        by_role = {f["role"]: f["severity"] for f in findings if f["path"] == authz_tester.ADMIN_PATTERNS[0]}
+        self.assertEqual(by_role["anonymous"], "critical")  # rank 0 -- the worst case
+        self.assertEqual(by_role["viewer"], "high")         # gap 2
+        self.assertEqual(by_role["editor"], "medium")        # gap 1 (adjacent to admin)
+        self.assertNotIn("admin", by_role)
+
+    def test_bfla_matrix_empty_roles_yields_no_findings(self):
+        self.assertEqual(authz_tester.test_bfla_matrix("https://api.example.test", [], delay=0), [])
+
+    def test_cli_rejects_role_and_token_together(self):
+        argv = [
+            "authz_tester.py", "--api-base", "https://api.example.test",
+            "--token", "token-a", "--role", "viewer:TOK1", "--role", "admin:TOK2",
+        ]
+        with patch.object(sys, "argv", argv), patch.object(authz_tester, "http_request") as request:
+            with self.assertRaises(SystemExit) as error:
+                authz_tester.main()
+        self.assertEqual(error.exception.code, 2)
+        request.assert_not_called()
+
+    def test_cli_rejects_single_role(self):
+        argv = [
+            "authz_tester.py", "--api-base", "https://api.example.test",
+            "--role", "admin:TOK",
+        ]
+        with patch.object(sys, "argv", argv), patch.object(authz_tester, "http_request") as request:
+            with self.assertRaises(SystemExit) as error:
+                authz_tester.main()
+        self.assertEqual(error.exception.code, 2)
+        request.assert_not_called()
+
+    def test_cli_requires_token_without_role(self):
+        argv = ["authz_tester.py", "--api-base", "https://api.example.test"]
+        with patch.object(sys, "argv", argv), patch.object(authz_tester, "http_request") as request:
+            with self.assertRaises(SystemExit) as error:
+                authz_tester.main()
+        self.assertEqual(error.exception.code, 2)
+        request.assert_not_called()
+
+    def test_cli_role_matrix_dispatches_to_matrix_functions(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "authz.json"
+            argv = [
+                "authz_tester.py", "--api-base", "https://api.example.test",
+                "--role", "anonymous:", "--role", "viewer:TOK1", "--role", "admin:TOK2",
+                "--output", str(output_path),
+            ]
+            with ExitStack() as stack:
+                stack.enter_context(patch.object(sys, "argv", argv))
+                bola_matrix_probe = stack.enter_context(patch.object(
+                    authz_tester, "test_bola_matrix", return_value=[]))
+                bfla_matrix_probe = stack.enter_context(patch.object(
+                    authz_tester, "test_bfla_matrix", return_value=[]))
+                old_bola = stack.enter_context(patch.object(authz_tester, "test_bola"))
+                old_bfla = stack.enter_context(patch.object(authz_tester, "test_bfla"))
+                authz_tester.main()
+
+            bola_matrix_probe.assert_called_once()
+            bfla_matrix_probe.assert_called_once()
+            old_bola.assert_not_called()
+            old_bfla.assert_not_called()
+            written = json.loads(output_path.read_text())
+            self.assertEqual(written["meta"]["roles"], ["anonymous", "viewer", "admin"])
+
+    def test_cli_token_mode_leaves_roles_empty_in_output(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "authz.json"
+            argv = [
+                "authz_tester.py", "--api-base", "https://api.example.test",
+                "--token", "token-a", "--output", str(output_path),
+            ]
+            with ExitStack() as stack:
+                stack.enter_context(patch.object(sys, "argv", argv))
+                stack.enter_context(patch.object(authz_tester, "test_bola", return_value=[]))
+                stack.enter_context(patch.object(authz_tester, "test_bfla", return_value=[]))
+                authz_tester.main()
+            written = json.loads(output_path.read_text())
+            self.assertEqual(written["meta"]["roles"], [])
+
+
 if __name__ == "__main__":
     unittest.main()

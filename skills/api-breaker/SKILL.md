@@ -207,6 +207,29 @@ read-back verifies persisted impact. BFLA status and method-override responses
 are candidates until the returned data or action demonstrates privileged
 impact. Review candidate evidence before treating it as a confirmed finding.
 
+**N-role authorization matrix.** `--token`/`--token-b` test exactly two
+identities. Real RBAC bugs often only show up between a *specific* pair of
+roles in a larger hierarchy, not the two you happened to provision -- use
+repeatable `--role NAME:TOKEN` instead, declared in ascending privilege order
+(lowest first):
+
+```bash
+python3 scripts/authz_tester.py --input {schema_file} --api-base {api_url} \
+  --role anonymous: --role viewer:{viewer_token} --role editor:{editor_token} --role admin:{admin_token}
+```
+
+An empty `TOKEN` (`anonymous:`) declares an explicit anonymous role at that
+position instead of relying on a separate no-auth check. Needs at least 2
+roles; mutually exclusive with `--token`/`--token-b`. For BOLA, every role's
+own objects are cross-tested against every other role (not just a fixed
+pair) -- a lower-ranked role reading a higher-ranked role's object is flagged
+at `critical`. For BFLA, only a role ranked *below* the highest-declared role
+succeeding at an admin-pattern endpoint is reported; the top role reaching
+its own admin surface is expected and not flagged -- the single-token mode
+has no way to make this distinction, since it doesn't know whether its one
+token IS the admin. `--role-cookie NAME:COOKIE` supplies a session cookie for
+one named role; a role never inherits another role's cookie.
+
 ### Step 5: Mass Assignment Testing
 
 ```bash

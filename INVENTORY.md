@@ -144,7 +144,7 @@ specific fixes, test themes, browser limitations, and the latest verification.
   HTTPS-verified default. `workflow_tester.py` is read-only by design (GET
   only) and has no write gate because it never needs one.
 
-### api-breaker — `[82 FOCUSED TESTS; SCOPED CLOSEOUT COMPLETE]`
+### api-breaker — `[100 FOCUSED TESTS; SCOPED CLOSEOUT COMPLETE]`
 - **Use:** API security from domains — discover REST/GraphQL/SOAP, rebuild
   schemas, test BOLA/IDOR, BFLA, mass assignment, JWT, rate-limit bypass, logic.
 - **CLIs (8; `_common.py` and `response_safety.py` are support modules):** `api_discovery`, `schema_builder` (1814 ln),
@@ -181,6 +181,17 @@ specific fixes, test themes, browser limitations, and the latest verification.
   Business-state read-back semantics and broad report input shapes remain
   lightly tested or untested. Response redaction is pattern-based; application-specific
   secrets embedded in arbitrary JSON strings may still escape detection.
+- **N-role authorization matrix (2026-11-17):** `authz_tester.py` previously
+  tested exactly two identities (`--token`/`--token-b`). New repeatable
+  `--role NAME:TOKEN` (declared lowest-privilege first) generalizes BOLA to
+  cross-test every role's objects against every OTHER role (not just a fixed
+  pair), and generalizes BFLA so only a role ranked BELOW the highest-declared
+  role succeeding at a privileged endpoint is reported -- the top role
+  reaching its own admin surface is expected and not flagged, a distinction
+  the single-token mode has no way to make since it can't know whether its
+  one token IS the admin. `test_bola`/`test_bfla` and `--token`/`--token-b`
+  are completely unchanged; the matrix path (`test_bola_matrix`/
+  `test_bfla_matrix`) only activates when `--role` is used. 18 new tests.
 - **Scope controls:** explicit trusted `--api-base` for imported endpoints in
   schema, auth, authz, mass assignment, rate-limit, and business-logic testing;
   off-origin imported endpoints are skipped. `--allow-mutation-write` gates
