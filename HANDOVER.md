@@ -598,6 +598,52 @@ claim that every behavior is exhaustively validated):**
   - Full suite verified: **588 tests + 73 subtests passed** (up from 566 + 73
     before this change); Ruff and compileall clean on the changed files.
     All new target-facing tests are mocked; no live target was contacted.
+- **New capability: multi-step workflow (sequence) testing (2026-11-16, new
+  script `workflow_tester.py`).** Every tester in this skill, before this,
+  probed exactly one endpoint/parameter at a time — nothing built a
+  sequence out of what the crawler already recorded, so a whole bug class
+  (steps reachable out of order: skipping payment in checkout, skipping
+  email verification, reaching a completion page without the prior steps)
+  was structurally invisible to the pipeline. The new script discovers
+  candidate multi-step business flows from `crawler.py`'s own output using
+  two independent, purely-offline signals:
+  - `build_form_chain_graph`/`find_linear_chains`: a form found on page A
+    whose action targets page B (`forms[i]["found_on"]` -> `forms[i]["url"]`)
+    is a real "A leads to B" edge; the graph walker follows only truly
+    linear (unbranching, 2+ step) paths and stops cleanly at a branch point
+    or a cycle.
+  - `group_endpoints_by_step_prefix`: URLs sharing a path prefix recognized
+    as a workflow (checkout/signup/onboarding/register/wizard/setup/verify/
+    activate/enroll/apply/invite), ordered by an explicit step number first
+    (`step2` before `step3`), then a start/mid/review/confirm keyword rank,
+    crawl-discovery order as the final tiebreak. A real ordering bug was
+    caught and fixed during development: the first version made an
+    explicit step number the PRIMARY sort key, so a numberless `start`
+    sorted AFTER a numbered `step2` — keyword rank must dominate, with the
+    number only breaking ties within the same rank.
+  - `test_step_skip` sends exactly ONE GET per step after the first,
+    directly at that step's URL — never a form submission, never
+    progressing or completing the flow itself (this tool needs no write
+    gate; it's read-only by construction). `classify_step_access` treats a
+    redirect to an earlier step/login, a 401/403, or a recognized "complete
+    the prior step"/session-expired phrase as the workflow's own
+    enforcement working (not a finding); an ordinary 200 is reported ONLY
+    as an unverified CANDIDATE (INFO/low confidence, `validated: false`) —
+    the same confirmed-vs-candidate discipline the api-breaker deepening
+    pass established for BOLA/BFLA/JWT (a bare 200 is a lead, never proof
+    the page lacked real state validation).
+  - New `tests/test_workflow_tester.py`: 34 tests covering the step-rank
+    heuristic (including the caught ordering bug), path-prefix grouping
+    (single-match-isn't-a-workflow, non-workflow paths ignored, distinct
+    prefixes not merged), the form-chain graph (self-loops/missing fields
+    ignored, branch points stop the chain, cycles terminate instead of
+    hanging), `discover_workflows`'s dedup when both signals land on the
+    identical sequence, every `classify_step_access` boundary, and
+    `test_step_skip` never probing step 0 and never sending anything but
+    GET. Documented in `skills/webapp-exploit-hunter/SKILL.md` as step 4k.
+    CLI-docs: 10 skill docs / 97 command references / 59 CLIs (up from
+    95/58). No live target was contacted; this is a purely offline/mocked
+    addition like every other script in this skill's test matrix.
 
 ## Browser auditor (`webapp-exploit-hunter/scripts/browser_security_auditor.py`)
 The four browser bullets in the closeout checklist were resolved on 2026-11-16:

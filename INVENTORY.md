@@ -77,10 +77,11 @@ specific fixes, test themes, browser limitations, and the latest verification.
 - **Use:** active web vuln scanning + PoC from domains/URLs — SQLi, XSS, SSRF,
   IDOR, SSTI, auth bypass, upload bypass, race, WAF/rate-limit bypass, LFI/XXE,
   DOM XSS (static + browser), plus browser runtime auditor.
-- **CLIs (15):** `crawler`, `auth_tester`, `sqli_tester`, `xss_tester`,
+- **CLIs (16):** `crawler`, `auth_tester`, `sqli_tester`, `xss_tester`,
   `dom_xss_auditor`, `ssrf_tester`, `ssti_tester`, `idor_tester`, `lfi_tester`,
   `upload_tester` (largest, 1201 ln), `race_tester`, `waf_bypass_tester`,
-  `browser_security_auditor`, `generate_poc`, `vuln_report`. `_common.py` (162).
+  `workflow_tester` (new 2026-11-16), `browser_security_auditor`,
+  `generate_poc`, `vuln_report`. `_common.py` (162).
 - **Deps:** stdlib + playwright (browser auditor only).
 - **Coverage:** `tests/test_webapp_legacy_testers.py` adds an 82-test offline
   matrix for LFI, upload, race, SSRF, SSTI, IDOR, XSS, and WAF-bypass logic;
@@ -104,9 +105,32 @@ specific fixes, test themes, browser limitations, and the latest verification.
   category instead of requiring the operator to pass `--waf-bypass` by hand.
   Every escalated finding is marked (`waf_evasion_used`/`auto_escalated`) so
   a report never silently hides that evasion was needed.
+- **New capability: multi-step workflow (sequence) testing (2026-11-16).**
+  Every other tester above probes one endpoint/parameter at a time; nothing
+  built a sequence out of what the crawler already saw. New
+  `scripts/workflow_tester.py` discovers candidate multi-step business flows
+  (checkout, signup/onboarding, verification wizards) from crawl data via
+  two independent signals — a form-chain graph built from the crawler's own
+  `found_on`/`url` fields (a form on page A targeting page B is a real
+  edge; linear 2+-step chains are candidates), and a path-prefix/keyword
+  grouping (checkout/signup/onboarding/register/wizard/setup/verify/
+  activate/enroll/apply/invite) ordered by explicit step number first, then
+  a start/mid/review/confirm keyword rank, crawl order as the tiebreak. For
+  every step after the first it sends exactly ONE GET directly to that step
+  (never a form submission, never progressing the flow itself) and
+  classifies the response: a redirect to an earlier step/login, a 401/403,
+  or a "complete the prior step"/session-expired message all count as the
+  workflow's own enforcement working; an ordinary 200 is reported ONLY as
+  an unverified candidate (INFO/low confidence) — same confirmed-vs-
+  candidate discipline as api-breaker's BOLA/BFLA/JWT hardening. 34 tests in
+  `tests/test_workflow_tester.py`, including a real step-ordering bug caught
+  during development (keyword rank must be the PRIMARY sort key — a
+  numberless "start" must sort before a numbered "step2", not after it) and
+  the branch-point/cycle termination behavior of the form-chain walker.
 - **Scope controls:** `--active`, `--submit-forms`, `--callback-url`,
   `--allow-destructive-poc`, `--skip-lfi-chains`, `--max-mutations` (sqli);
-  HTTPS-verified default.
+  HTTPS-verified default. `workflow_tester.py` is read-only by design (GET
+  only) and has no write gate because it never needs one.
 
 ### api-breaker — `[82 FOCUSED TESTS; SCOPED CLOSEOUT COMPLETE]`
 - **Use:** API security from domains — discover REST/GraphQL/SOAP, rebuild
