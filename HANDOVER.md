@@ -644,6 +644,49 @@ claim that every behavior is exhaustively validated):**
     CLI-docs: 10 skill docs / 97 command references / 59 CLIs (up from
     95/58). No live target was contacted; this is a purely offline/mocked
     addition like every other script in this skill's test matrix.
+- **Proof-of-impact as the default: baseline-exclusion fixes for
+  ssrf_tester.py and ssti_tester.py (2026-11-16).** Real, pre-existing
+  false-positive bugs, found while generalizing the "a bare pattern match
+  isn't proof until something distinguishes it from the baseline" rule
+  the api-breaker deepening pass established for BOLA/BFLA/JWT (and that
+  `sqli_tester.py`'s `test_error_based` already used for its own
+  `baseline_error_patterns` exclusion):
+  - `ssrf_tester.py`: `SSRF_SUCCESS_PATTERNS["localhost"]` includes a bare
+    `r"<html"`, and `"internal_file"` includes bare `r"PATH="`/
+    `r"HOSTNAME="` — all three match virtually every ordinary, non-
+    vulnerable HTML response. The pattern-match detection path never
+    checked the UNMODIFIED baseline response for the same pattern, so a
+    target with a normal HTML page got "SSRF HIGH/CRITICAL" on nearly
+    every tested parameter regardless of whether anything actually
+    happened. New `detect_ssrf_indicators(body)` returns every pattern
+    hit (not just the first); `test_ssrf` now computes a
+    `baseline_signatures` set once and only counts a `(category,
+    pattern)` pair as evidence when it's absent from that set. Confirmed
+    findings are marked `confirmed_against_baseline: true`.
+  - `ssti_tester.py`: `fingerprint_engine` never fetched a baseline at
+    all — if an engine's expected output (`MATH_MARKER = "49"` for
+    Jinja2's `{{7*7}}`) happened to already appear on the unmodified page
+    for an unrelated reason (a price, an age, a street number), every
+    request was confirmed as CRITICAL SSTI regardless of execution. The
+    module's own `MATH_MARKER` docstring already named this exact risk
+    ("reduce false positives") without anything checking for it. New
+    `_baseline_response()` fetches one baseline per call (GET re-fetches
+    the exact crawled URL unmodified; POST has no preserved original
+    value here, so an inert placeholder is submitted instead) and both
+    the expected-output and engine-error-message checks now require
+    absence from that baseline.
+  - Added 5 tests to `tests/test_webapp_legacy_testers.py` (82 -> 87): the
+    ordinary-HTML-baseline false positive for SSRF now returns `[]`, a
+    genuine new-relative-to-baseline leak still confirms,
+    `detect_ssrf_indicators` returning every category's hit; for SSTI, a
+    page returning the SAME engine error for every request (including
+    baseline) no longer confirms, MATH_MARKER already present on the
+    baseline page no longer confirms, and the existing
+    `test_engine_error_message_also_confirms` was corrected to give a
+    clean baseline (it previously returned the identical error for every
+    call including the baseline fetch, which the fix now correctly
+    rejects — the old test's premise was itself accidentally verifying
+    the bug, not the feature). No live target contacted.
 
 ## Browser auditor (`webapp-exploit-hunter/scripts/browser_security_auditor.py`)
 The four browser bullets in the closeout checklist were resolved on 2026-11-16:

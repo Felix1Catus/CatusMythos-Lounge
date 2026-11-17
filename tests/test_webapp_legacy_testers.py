@@ -268,6 +268,39 @@ class TestSsrf(unittest.TestCase):
             findings = ssrf.test_ssrf("https://t.test/fetch?url=x", "url", delay=0)
         self.assertEqual(findings, [])
 
+    def test_ordinary_html_baseline_is_not_a_false_positive(self):
+        """Regression: SSRF_SUCCESS_PATTERNS["localhost"] includes a bare
+        r"<html" -- present in virtually every real page. Before the fix,
+        EVERY tested parameter against an ordinary site was flagged as
+        SSRF the moment any payload's response (identical to the baseline)
+        was checked, since the pattern-match path never excluded anything
+        already present in the baseline."""
+        def fake(url, method="GET", data=None, headers=None, timeout=10):
+            return 200, {}, "<html><body>Welcome to our ordinary site</body></html>"
+
+        with patched(ssrf, "http_request", fake):
+            findings = ssrf.test_ssrf("https://t.test/fetch?url=x", "url", delay=0)
+        self.assertEqual(findings, [])
+
+    def test_indicator_absent_from_baseline_still_confirms(self):
+        """The fix must not suppress genuine findings -- a leak that is
+        NEW relative to the baseline must still be reported."""
+        def fake(url, method="GET", data=None, headers=None, timeout=10):
+            if "169.254.169.254" in url:
+                return 200, {}, "<html>AccessKeyId leaked here</html>"
+            return 200, {}, "<html>ordinary baseline page</html>"
+
+        with patched(ssrf, "http_request", fake):
+            findings = ssrf.test_ssrf("https://t.test/fetch?url=x", "url", delay=0)
+        self.assertTrue(findings)
+        self.assertTrue(findings[0]["confirmed_against_baseline"])
+
+    def test_detect_ssrf_indicators_returns_every_hit(self):
+        hits = ssrf.detect_ssrf_indicators("AccessKeyId and also <html> present")
+        categories = {h["category"] for h in hits}
+        self.assertIn("cloud_metadata", categories)
+        self.assertIn("localhost", categories)
+
 
 # ---------------------------------------------------------------------------
 # ssti_tester
@@ -297,12 +330,43 @@ class TestSsti(unittest.TestCase):
         self.assertEqual(findings[0]["severity"], "CRITICAL")
 
     def test_engine_error_message_also_confirms(self):
+        # Baseline (the plain, unmodified GET -- queried exactly once, with
+        # the URL untouched) must be clean; only a payload-bearing request
+        # returns the engine error, so the finding reflects something the
+        # PAYLOAD caused, not a page that always shows this error.
+        target = "https://t.test/?q=1"
+
+        def fake(url, method="GET", data=None, headers=None, timeout=10):
+            if url == target:
+                return 200, {}, "<html>ordinary baseline page</html>"
+            return 500, {}, "jinja2.exceptions.TemplateSyntaxError: unexpected char"
+
+        with patched(ssti, "http_request", fake):
+            findings = ssti.fingerprint_engine(target, "q", delay=0)
+        self.assertTrue(findings)
+
+    def test_error_already_in_baseline_is_not_confirmed(self):
+        """Regression for the fix: a page that returns the SAME engine
+        error for every request (including the unmodified baseline) must
+        NOT be reported -- nothing distinguishes the payload's effect from
+        the page's own static behavior."""
         def fake(url, method="GET", data=None, headers=None, timeout=10):
             return 500, {}, "jinja2.exceptions.TemplateSyntaxError: unexpected char"
 
         with patched(ssti, "http_request", fake):
             findings = ssti.fingerprint_engine("https://t.test/?q=1", "q", delay=0)
-        self.assertTrue(findings)
+        self.assertEqual(findings, [])
+
+    def test_expected_output_already_on_baseline_page_not_confirmed(self):
+        """Regression for the fix: MATH_MARKER "49" (the {{7*7}} expected
+        output) appearing on the UNMODIFIED page for an unrelated reason
+        (a price, an age) must not be reported as SSTI."""
+        def fake(url, method="GET", data=None, headers=None, timeout=10):
+            return 200, {}, "<html>Price: $49.99 today only</html>"
+
+        with patched(ssti, "http_request", fake):
+            findings = ssti.fingerprint_engine("https://t.test/?q=1", "q", delay=0)
+        self.assertEqual(findings, [])
 
     def test_polyglot_no_signal(self):
         # Body deliberately avoids every engine-name substring ("erb" hides

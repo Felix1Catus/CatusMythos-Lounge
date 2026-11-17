@@ -35,7 +35,7 @@ checked by `tests/test_plugin_bootstrap_hook.py` and the same matrix.
 
 | Coverage | Skills |
 |---|---|
-| Broad script-level regression matrices | `recon-dominator` (59), `cloud-pivot-finder` (38), `attack-path-architect` (28), `16-ai-llm-security` (87), `03-exploit-development` (14), `vuln-chain-composer` (63), legacy `webapp-exploit-hunter` testers (82) |
+| Broad script-level regression matrices | `recon-dominator` (59), `cloud-pivot-finder` (38), `attack-path-architect` (28), `16-ai-llm-security` (87), `03-exploit-development` (14), `vuln-chain-composer` (63), legacy `webapp-exploit-hunter` testers (87) |
 | Focused or partial coverage | `api-breaker` (focused scope/discovery/business-logic/GraphQL/BOLA/BFLA/auth-analyzer/rate-limit/report regressions); `webapp-exploit-hunter` browser/crawler/DOM and selected CLI paths; `web-cache-auditor` (12 focused tests for its script) |
 | Plugin infrastructure | `tests/test_bootstrap.py` (30): parsing, install command construction, retry/cache validation, browser setup, PATH readiness, and nonzero preflight gates |
 | No scripts (manual methodology) | `web-protocol-auditor` |
@@ -83,7 +83,7 @@ specific fixes, test themes, browser limitations, and the latest verification.
   `workflow_tester` (new 2026-11-16), `browser_security_auditor`,
   `generate_poc`, `vuln_report`. `_common.py` (162).
 - **Deps:** stdlib + playwright (browser auditor only).
-- **Coverage:** `tests/test_webapp_legacy_testers.py` adds an 82-test offline
+- **Coverage:** `tests/test_webapp_legacy_testers.py` adds an 87-test offline
   matrix for LFI, upload, race, SSRF, SSTI, IDOR, XSS, and WAF-bypass logic;
   network calls are mocked. Browser auditor has pure-function and local
   Playwright/Chromium integration coverage; DOM reviewer, crawler, redirect
@@ -127,6 +127,18 @@ specific fixes, test themes, browser limitations, and the latest verification.
   during development (keyword rank must be the PRIMARY sort key — a
   numberless "start" must sort before a numbered "step2", not after it) and
   the branch-point/cycle termination behavior of the form-chain walker.
+- **Baseline-exclusion false-positive fixes (2026-11-16): ssrf_tester.py,
+  ssti_tester.py.** Real bugs, not just hardening — `ssrf_tester.py`'s
+  `SSRF_SUCCESS_PATTERNS["localhost"]` included a bare `r"<html"` (matches
+  virtually every HTML page) with no check against the baseline response,
+  so nearly every tested parameter on an ordinary site was flagged SSRF
+  HIGH/CRITICAL regardless of whether anything happened; `ssti_tester.py`'s
+  `fingerprint_engine` never fetched a baseline at all, so an unmodified
+  page that happened to show "49" anywhere (a price, an age) confirmed
+  CRITICAL SSTI on every request. Both now require a match to be absent
+  from the baseline response before confirming — the same technique
+  `sqli_tester.py`'s `test_error_based` already used. 5 new tests (legacy
+  matrix: 82 -> 87).
 - **Scope controls:** `--active`, `--submit-forms`, `--callback-url`,
   `--allow-destructive-poc`, `--skip-lfi-chains`, `--max-mutations` (sqli);
   HTTPS-verified default. `workflow_tester.py` is read-only by design (GET
