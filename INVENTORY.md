@@ -134,7 +134,9 @@ specific fixes, test themes, browser limitations, and the latest verification.
   misuse cases; bounded requests, same-origin routes, separate write consent,
   fixture cleanup declarations, and throttle-stop behavior are enforced.
   Results expose HTTP statuses and assertion outcomes only, and remain
-  unverified observations. Scenario rules/IDs are not inferred or persisted.
+  unverified observations. Explicit JSON-pointer captures can feed later
+  same-run paths, headers, JSON bodies, and cleanup; values remain in memory
+  and are excluded from reports. Scenario rules are not inferred or persisted.
 - **Baseline-exclusion false-positive fixes (2026-11-16): ssrf_tester.py,
   ssti_tester.py.** Real bugs, not just hardening — `ssrf_tester.py`'s
   `SSRF_SUCCESS_PATTERNS["localhost"]` included a bare `r"<html"` (matches

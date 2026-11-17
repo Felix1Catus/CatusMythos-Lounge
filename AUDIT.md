@@ -875,3 +875,17 @@ compileall passed; common-sync passed (six pipeline skills / five scoped
 network helpers); CLI docs passed (10 docs / 113 command references / 60
 CLIs); `git diff --check` passed. Targeted scenario/workflow matrix: **43
 passed**. No external targets were contacted.
+
+## 2026-11-18 addendum — dynamic scenario values
+
+Added explicit JSON-pointer captures from 2xx JSON responses and bounded,
+in-memory `${name}` substitution in later action paths, headers, JSON bodies,
+and per-run cleanup. Captures are scalar strings/integers up to 2,048
+characters with control characters rejected; output includes only capture
+names and availability. Baseline and each misuse case have separate variable
+maps. Unknown/missing captures stop dependent actions; non-2xx responses
+cannot satisfy assertions or provide captures. Focused matrix: 50 passed.
+Full repository validation: **843 pytest tests + 128 subtests passed**;
+Ruff, compileall, helper-sync, CLI docs (10 docs / 113 references / 60 CLIs),
+and `git diff --check` passed. Focused scenario/workflow matrix: **50 passed**.
+No live targets were contacted.

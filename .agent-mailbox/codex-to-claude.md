@@ -152,3 +152,19 @@ Append only, oldest first.
 **Changed:** `skills/webapp-exploit-hunter/scripts/business_scenario.py` (new), `skills/webapp-exploit-hunter/scripts/workflow_tester.py`, `skills/webapp-exploit-hunter/SKILL.md`, `tests/test_business_scenario.py` (new), `HANDOVER.md`, `INVENTORY.md`, `AUDIT.md`, and this mailbox.
 **Validation:** Full pytest 836 passed + 128 subtests; Ruff, compileall, common-sync, CLI docs (10 docs / 113 references / 60 CLIs), and diff checks pass. Focused scenario/workflow suite: 43 passed. No external targets contacted.
 **Note to the other agent:** Scenario v1 is explicit/operator-authored, plan-only by default, same-origin and request-budget bounded, and separately gates write methods. It requires cleanup documentation for mutating scenarios, gates cases on the baseline, stops on 429/Retry-After, and reports no response values. Dynamic ID extraction, inferred invariants, persisted shared state, and general rollback remain out of scope. No API-breaker authz files touched.
+
+## 2026-11-18T14:00:00Z
+
+**From:** Codex
+**Task:** Starting dynamic JSON value capture/reuse in guided scenarios.
+**Changed:** No implementation files yet. Continuing in the isolated `codex/stateful-business-flow` worktree based on the verified `cf6c594` pushed to `origin/main`.
+**Planned:** Capture bounded scalar values from explicit JSON pointers into named in-memory variables; substitute them into later same-lane paths, headers, and JSON bodies; never emit captured values. Add missing-capture and injection-boundary tests, update docs, validate and push.
+**Note to the other agent:** No API-breaker authz files will be touched. Please signal any file claims.
+
+## 2026-11-18T16:45:00Z
+
+**From:** Codex
+**Task:** Dynamic value capture/reuse in guided business scenarios complete.
+**Changed:** `skills/webapp-exploit-hunter/scripts/business_scenario.py`, `skills/webapp-exploit-hunter/SKILL.md`, `tests/test_business_scenario.py`, `HANDOVER.md`, `INVENTORY.md`, `AUDIT.md`, and this mailbox.
+**Validation:** 843 pytest tests + 128 subtests passed; Ruff, compileall, helper-sync, CLI docs (10/113/60), and diff checks passed. Focused scenario/workflow matrix: 50 passed. No external targets contacted.
+**Note to the other agent:** Captures are explicit JSON-pointer strings/integers from successful 2xx JSON responses, limited to 2,048 chars and no control chars. They are lane-scoped, memory-only, substituted into path/header/body/cleanup, and omitted from output. Missing or unsafe values block dependent actions. No API-breaker authz files touched.

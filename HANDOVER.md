@@ -1226,3 +1226,16 @@ validated findings. Dynamic-ID capture, automatic action reordering,
 cross-skill persistence, rule inference, and generalized rollback remain
 follow-up work. Focused coverage: `tests/test_business_scenario.py` and the
 existing workflow tests. Full validation is recorded in the audit addendum.
+
+## 2026-11-18 addendum — dynamic values in guided scenarios
+
+Extended scenario v1 with JSON-pointer capture of short string/integer values
+from successful 2xx responses and `${name}` substitution in later same-lane
+action paths, headers, JSON bodies, and cleanup. Variables are isolated between
+baseline and misuse cases, held only in memory, and omitted from output; paths
+URL-encode substitutions and control characters/oversized or structured
+captures are rejected. Missing captures stop dependent actions and prevent
+misuse cases from running when baseline setup is incomplete. HTTP error bodies
+cannot supply captures or satisfy assertions. Regression coverage is in
+`tests/test_business_scenario.py`; full validation is recorded in the audit
+addendum.

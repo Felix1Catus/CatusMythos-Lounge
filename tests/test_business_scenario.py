@@ -88,6 +88,87 @@ def test_throttle_stops_followup_requests():
     assert len(calls) == 1
 
 
+def dynamic_scenario():
+    lane = [
+        {"method": "POST", "path": "/orders", "body": {"label": "fixture"},
+         "capture": {"name": "order_id", "pointer": "/id"}},
+        {"method": "POST", "path": "/confirm", "headers": {"X-Order": "${order_id}"},
+         "body": {"id": "${order_id}"}},
+        {"method": "GET", "path": "/orders/${order_id}"},
+    ]
+    return {
+        "version": 1, "name": "dynamic-order", "fixture_note": "Disposable local order",
+        "cleanup": [{"method": "DELETE", "path": "/orders/${order_id}"}],
+        "baseline": {"actions": lane, "assertions": [{"pointer": "/state", "equals": "ready"}]},
+        "cases": [{"name": "confirm-order", "actions": lane,
+                   "assertions": [{"pointer": "/state", "equals": "ready"}]}],
+    }
+
+
+def test_captured_json_id_reused_in_path_header_body_and_cleanup_without_reporting_value():
+    calls = []
+
+    def request(url, method, data, headers):
+        calls.append((url, method, data, headers))
+        body = '{"id":"id/secret-42","state":"ready"}' if url.endswith("/orders") and method == "POST" else '{"state":"ready"}'
+        return 200, {}, body
+
+    output = business_scenario.execute_scenario(dynamic_scenario(), "http://localhost", request)
+    serialized = json.dumps(output)
+    assert output["results"][0]["assertions_passed"] is True
+    assert output["results"][1]["assertions_passed"] is True
+    assert ("http://localhost/orders/id%2Fsecret-42", "GET") in [(call[0], call[1]) for call in calls]
+    confirm = next(call for call in calls if call[1] == "POST" and call[0].endswith("/confirm"))
+    assert json.loads(confirm[2]) == {"id": "id/secret-42"}
+    assert confirm[3]["X-Order"] == "id/secret-42"
+    assert any(call[0] == "http://localhost/orders/id%2Fsecret-42" and call[1] == "DELETE" for call in calls)
+    assert "id/secret-42" not in serialized
+    assert output["results"][0]["captures"] == [{"name": "order_id", "available": True}]
+
+
+def test_missing_capture_skips_dependent_steps_and_cases_and_does_not_leak_values():
+    calls = []
+
+    def request(url, method, data, headers):
+        calls.append((url, method))
+        return 200, {}, '{"state":"ready"}'
+
+    output = business_scenario.execute_scenario(dynamic_scenario(), "http://localhost", request)
+    assert calls == [("http://localhost/orders", "POST")]
+    assert output["results"][0]["capture_error"] == "capture unavailable: order_id"
+    assert output["results"][1]["skipped"] == "baseline assertions did not pass"
+
+
+def test_unknown_capture_reference_fails_preflight():
+    scenario = dynamic_scenario()
+    scenario["baseline"]["actions"][0]["path"] = "/orders/${not_captured}"
+    with pytest.raises(business_scenario.ScenarioError, match="uncaptured variable"):
+        business_scenario.plan_scenario(scenario, "http://localhost")
+
+
+def test_http_error_cannot_satisfy_baseline_assertion_or_capture_value():
+    scenario = dynamic_scenario()
+
+    def request(url, method, data, headers):
+        return 500, {}, '{"id":"should-not-capture","state":"ready"}'
+
+    output = business_scenario.execute_scenario(scenario, "http://localhost", request)
+    assert output["results"][0]["assertions_passed"] is False
+    assert output["results"][0]["captures"] == [{"name": "order_id", "available": False}]
+    assert "should-not-capture" not in json.dumps(output)
+
+
+@pytest.mark.parametrize("captured", ["line1\r\nInjected: yes", "x" * 2049, {"id": "object"}])
+def test_rejects_unsafe_or_non_scalar_capture(captured):
+    scenario = dynamic_scenario()
+
+    def request(url, method, data, headers):
+        return 200, {}, json.dumps({"id": captured, "state": "ready"})
+
+    output = business_scenario.execute_scenario(scenario, "http://localhost", request)
+    assert output["results"][0]["captures"] == [{"name": "order_id", "available": False}]
+
+
 def test_loopback_stateful_execution_keeps_assertions_value_free():
     state = {"coupon_count": 0}
 
