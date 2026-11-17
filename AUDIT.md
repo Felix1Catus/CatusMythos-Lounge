@@ -826,3 +826,19 @@ isolation, CLI profile loading, and report output. Ruff, compileall,
 common-sync, CLI-doc checks (**10/105/60**), and diff check passed. Full pytest: **805 passed + 125 subtests passed**; Ruff, compileall, common-sync, CLI-docs
 (**10/105/60**), and final diff checks pass. No external target probes or hosted
 model/API calls.
+
+## 2026-11-17 addendum — shared target-knowledge v2 integrations
+
+Added opt-in, engagement-scoped cache integrations for cloud-provider
+detection and API endpoint discovery. Cloud entries are positive-only,
+provider/service metadata with a one-hour TTL and no resolved IP. API entries
+are positive-only sanitized path metadata with a 15-minute TTL and an auth
+header digest; reused paths are rebuilt under the caller-supplied base URL.
+Both integrations support scoped refresh, and API discovery continues its
+GraphQL/OpenAPI/method/legacy checks on cache hits. See
+`scripts/TARGET_KNOWLEDGE.md` for exact behavior and deferred reuse surfaces.
+
+Evidence at this checkpoint: `tests/test_shared_knowledge_pipeline.py` plus
+`tests/test_target_knowledge.py` passed 41 tests + 29 subtests; full pytest
+passed 816 tests + 125 subtests. Ruff, compileall, helper-sync, CLI docs
+(10/109/60), and `git diff --check` passed. No live target was tested.

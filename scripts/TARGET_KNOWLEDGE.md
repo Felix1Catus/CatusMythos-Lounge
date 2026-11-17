@@ -33,7 +33,7 @@ v1 does not maintain a historical event log. Unknown schema versions or
 unreadable/corrupt databases fail explicitly instead of silently disabling
 coordination or resetting state.
 
-## Three integration points
+## Five integration points
 
 1. `recon-dominator/scripts/tech_fingerprint.py`: publishes technologies,
    advertised component versions, and positive WAF fingerprints (1-hour TTL).
@@ -55,6 +55,22 @@ coordination or resetting state.
    knowledge to normalized findings without re-probing, changing severity,
    adding capabilities, or promoting evidence confidence. Payload-failure
    records are not included. Non-HTTP/host-only findings are left unenriched.
+4. `cloud-pivot-finder/scripts/cloud_detector.py`: caches positive provider
+   observations from CNAME, response-header, and IP-WHOIS evidence for one
+   hour. It stores provider/service labels only, never resolved IP addresses.
+   No-provider results are not cached. Reuse marks the result and leaves the
+   IP field unknown because resolution was skipped. `--knowledge-refresh`
+   deletes the exact host's prior provider observation before re-running
+   detection.
+5. `api-breaker/scripts/api_discovery.py`: caches a positive, sanitized
+   endpoint inventory for 15 minutes, partitioned by exact origin, base path,
+   engagement, and a digest of request headers. The cache omits response
+   bodies, raw headers, query values, and endpoint URLs (paths are rebuilt
+   against the operator-supplied base URL). A cache hit skips only repeated
+   common-path and same-origin JavaScript discovery; GraphQL, OpenAPI, method,
+   and legacy-version checks still run. Empty results are never cached.
+   `--knowledge-refresh` deletes only that origin/base-path/auth-context
+   inventory before fresh endpoint discovery.
 
 Auth/rate observations expire after 15 minutes and store only status/path.
 They do not establish the user's role, prove authentication is required, infer
@@ -72,7 +88,8 @@ store.observe("https://app.example.test", "technology", "verified-component",
 observations = store.query("https://app.example.test", kind="technology")
 ```
 
-Kinds are `technology`, `waf`, `auth`, `rate_limit`, and `payload_failure`.
+Kinds are `technology`, `waf`, `auth`, `rate_limit`, `payload_failure`,
+`cloud_provider`, and `api_inventory`.
 Confidence is `observed`, `confirmed`, or `hypothesis`; provenance is retained.
 Only intentionally selected non-secret metadata belongs in `observe()`.
 
@@ -89,10 +106,11 @@ who can read the same database file. Only trusted operators/processes should
 write facts. There is no remote synchronization, encryption, purge/history UI,
 export of secrets, or target authorization granted by the store.
 
-Deliberately deferred: wiring cloud-pivot-finder and api-breaker; all other
-SQLi modes and the other vulnerability testers; a role-aware auth model;
+Deliberately deferred: other SQLi modes and the other vulnerability testers;
+a role-aware auth model;
 Retry-After/reset-window modeling; active WAF auto-escalation (#6); executable
 end-to-end chains (#7); business-context severity (#8); cross-origin inference;
-a central decision-making orchestrator. Claude owns #4's authorization matrix.
-The database is queryable by these future consumers already, but v1 does not
-claim they have automatic integrations.
+a central decision-making orchestrator. The API inventory is endpoint
+discovery metadata, not permission to skip vulnerability-specific tests; cloud
+and API caches remain optional and have short TTLs. #4's N-role matrix and
+these five explicit knowledge integrations are now in the main pipeline.

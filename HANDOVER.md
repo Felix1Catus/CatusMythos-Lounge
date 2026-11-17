@@ -1017,11 +1017,36 @@ were not edited. Tasks #6–#8 were not started.
   common-sync, CLI-doc checker (**10 skill docs / 101 references / 59 CLIs**),
   and final diff whitespace checks passed. No live targets were tested.
 
-Deferred deliberately: cloud/API automatic integrations, other SQLi modes
-and other testers, detailed Retry-After/window modeling, event history/purge
-UI, and tasks #6–#8. The generic store API is queryable by these consumers,
-but v1 does not claim they are wired. Technology fingerprints and HTTP status
-signals remain observations; no-new-error is not proof of non-vulnerability.
+Deferred in v1: cloud/API automatic integrations, other SQLi modes and other
+testers, detailed Retry-After/window modeling, event history/purge UI, and
+tasks #6–#8. Subsequent addenda below record follow-up integrations and tasks.
+Technology fingerprints and HTTP status signals remain observations;
+no-new-error is not proof of non-vulnerability.
+
+## 2026-11-17 — Shared target knowledge v2 integrations (Codex)
+
+Extended the v1 store with `cloud_provider` and `api_inventory` kinds plus
+scoped `KnowledgeStore.forget()` for explicit refreshes. `cloud_detector.py`
+optionally reuses positive provider observations for one hour; it stores
+provider/service labels, not resolved IPs, and marks reused hosts with IP
+unknown. `api_discovery.py` optionally reuses sanitized positive endpoint
+inventory for 15 minutes, scoped by engagement, exact origin/base path, and a
+digest of request headers. A hit skips only common-path and same-origin JS
+discovery; GraphQL/OpenAPI/method/legacy checks still execute. Empty results
+are never cached. Both integrations are disabled unless DB and engagement are
+explicitly supplied; refresh deletes only the selected observation and runs
+fresh discovery.
+
+`tests/test_shared_knowledge_pipeline.py` adds helper, engagement/context/TTL,
+refresh, sanitization, and CLI reuse/refresh coverage. API cache entries omit
+endpoint URLs, query values, response bodies, and raw headers; cloud entries
+omit IP addresses. Deliberately deferred: other cloud/API stages, reuse of API
+inventory by vulnerability-specific tests, automatic auth-role inference,
+shared state for remaining scripts, event history/purge UI, and remote
+knowledge synchronization. Focused tests passed **41 tests + 29 subtests**;
+full pytest passed **816 tests + 125 subtests**. Ruff, compileall,
+`check_common_sync.py`, `check_skill_cli_docs.py` (**10 docs / 109 references /
+60 CLIs**), and final diff checks pass. No live targets were tested.
 
 ## 2026-11-17 — Unattended Claude/Codex supervisor v1
 

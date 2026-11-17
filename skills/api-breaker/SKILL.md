@@ -22,6 +22,22 @@ CRITICAL: Only test APIs you have explicit authorization to test.
 python3 scripts/api_discovery.py --domain {target_domain}
 ```
 
+For an explicitly selected engagement, reuse a fresh positive endpoint inventory
+and skip only the repeated common-path/JavaScript discovery phase:
+
+```bash
+python3 scripts/api_discovery.py --domain {target_domain} --knowledge-db {engagement_db} --engagement {engagement_name}
+python3 scripts/api_discovery.py --domain {target_domain} --knowledge-db {engagement_db} --engagement {engagement_name} --knowledge-refresh
+```
+
+The inventory expires after 15 minutes and is scoped to the exact API base
+path plus a hash of the request headers; raw auth values are not stored. It
+contains endpoint path/type/status metadata, never response bodies, raw
+headers, or query values. GraphQL, OpenAPI, method, and legacy-version checks
+still run on each invocation. Empty discovery is not cached. Use
+`--knowledge-refresh` to discard the scoped inventory and probe discovery paths
+again. See [shared target knowledge](../../scripts/TARGET_KNOWLEDGE.md).
+
 Discovery methods:
 1. **Path fuzzing**: /api/, /v1/, /v2/, /graphql, /rest/, /swagger.json, /openapi.json, /api-docs
 2. **JavaScript analysis**: Fetch up to 20 same-origin script files from the target page and parse them for hardcoded API endpoints, base URLs, fetch/axios calls; off-origin scripts are skipped

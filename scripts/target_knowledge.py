@@ -10,7 +10,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import urlsplit
 
-KINDS = ('technology', 'waf', 'auth', 'rate_limit', 'payload_failure')
+KINDS = ('technology', 'waf', 'auth', 'rate_limit', 'payload_failure', 'cloud_provider', 'api_inventory')
 CONFIDENCES = ('observed', 'confirmed', 'hypothesis')
 
 
@@ -110,6 +110,20 @@ class KnowledgeStore:
             rows = db.execute('SELECT * FROM observations WHERE ' + ' AND '.join(conditions)
                               + ' ORDER BY kind, resource, fact_key, context', values).fetchall()
         return [dict(dict(row), value=json.loads(row['value'])) for row in rows]
+
+    def forget(self, url, kind, key=None, context=None, resource=None):
+        """Delete selected observations for an explicitly refreshed target."""
+        if kind not in KINDS:
+            raise ValueError('unsupported knowledge kind')
+        conditions = ['engagement = ?', 'origin = ?', 'kind = ?']
+        values = [self.engagement, canonical_origin(url), kind]
+        for column, value in [('fact_key', key), ('context', context), ('resource', resource)]:
+            if value is not None:
+                conditions.append(column + ' = ?')
+                values.append(value)
+        with self.connection() as db:
+            cursor = db.execute('DELETE FROM observations WHERE ' + ' AND '.join(conditions), values)
+            return cursor.rowcount
 
     def record_fingerprint(self, result):
         details = result.get('details', {})

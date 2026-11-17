@@ -6,6 +6,7 @@ Author: orizon.one
 """
 
 import argparse
+import importlib.util
 import json
 import re
 import socket
@@ -13,11 +14,12 @@ import subprocess
 import os
 import ssl
 import urllib.request
+import urllib.parse
 from pathlib import Path
 from datetime import datetime, timezone
 
 
-from _common import log, scoped_urlopen, success
+from _common import log, scoped_urlopen, success, warn
 # Cloud service CNAME patterns
 CNAME_PATTERNS = {
     "AWS S3": [r"\.s3[-.].*\.amazonaws\.com", r"\.s3\.amazonaws\.com"],
@@ -56,6 +58,52 @@ HEADER_PATTERNS = {
     "Fastly": ["x-fastly-", "fastly", "x-served-by"],
     "Akamai": ["x-akamai-", "akamai"],
 }
+CLOUD_PROVIDER_TTL = 3600
+
+
+def _knowledge_target(hostname):
+    """Build a credential-free origin for a hostname without probing it."""
+    value = str(hostname).strip().strip(".")
+    if not value or any(char in value for char in "/?#@"):
+        raise ValueError("cloud knowledge requires a hostname, not a URL or path")
+    rendered = f"[{value}]" if ":" in value and not value.startswith("[") else value
+    return f"https://{rendered}/"
+
+
+def _cloud_observation(result):
+    """Return positive provider data only; omit IPs and all request/response material."""
+    providers = result.get("providers_detected", [])
+    if not isinstance(providers, list):
+        return None
+    providers = sorted({str(provider)[:120] for provider in providers if isinstance(provider, str) and provider.strip()})
+    if not providers:
+        return None
+    services = []
+    for item in result.get("cloud_services", []):
+        if not isinstance(item, dict):
+            continue
+        safe = {key: str(item[key])[:300] for key in ("type", "hostname", "cname", "service", "provider", "header_match")
+                if isinstance(item.get(key), str)}
+        if safe:
+            services.append(safe)
+    return {"providers_detected": providers, "cloud_services": services}
+
+
+def _restore_cloud_observation(hostname, value):
+    """Rehydrate a cached positive provider result without implying a fresh IP lookup."""
+    if not isinstance(value, dict):
+        return None
+    providers = value.get("providers_detected")
+    services = value.get("cloud_services")
+    if not isinstance(providers, list) or not providers or not isinstance(services, list):
+        return None
+    return {
+        "hostname": hostname,
+        "ip": None,
+        "cloud_services": services,
+        "providers_detected": providers,
+        "knowledge_reused": True,
+    }
 
 
 def resolve_cname(hostname):
@@ -321,7 +369,30 @@ def main():
     parser.add_argument("--input", "-i", help="File with hostnames (one per line) or recon JSON")
     parser.add_argument("--output", "-o", help="Output JSON file")
     parser.add_argument("--threads", type=int, default=10)
+    parser.add_argument("--knowledge-db", help="Opt-in shared SQLite target-knowledge file")
+    parser.add_argument("--engagement", help="Required engagement namespace when knowledge is enabled")
+    parser.add_argument("--knowledge-refresh", action="store_true", help="Force fresh DNS/header/WHOIS detection")
     args = parser.parse_args()
+    if args.engagement and not args.knowledge_db:
+        parser.error("--engagement requires --knowledge-db")
+    if args.knowledge_db and not args.engagement:
+        parser.error("--knowledge-db requires --engagement")
+    if args.knowledge_refresh and not args.knowledge_db:
+        parser.error("--knowledge-refresh requires --knowledge-db")
+
+    knowledge = None
+    if args.knowledge_db:
+        module_path = Path(__file__).resolve().parents[3] / "scripts" / "target_knowledge.py"
+        if not module_path.is_file():
+            parser.error("shared knowledge requires the full plugin checkout, including scripts/target_knowledge.py")
+        spec = importlib.util.spec_from_file_location("catus_target_knowledge", module_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        try:
+            knowledge = module.KnowledgeStore(args.knowledge_db, args.engagement,
+                                              refresh=args.knowledge_refresh)
+        except (ValueError, OSError, module.sqlite3.Error) as exc:
+            parser.error(str(exc))
 
     log("Starting cloud provider detection...")
 
@@ -352,17 +423,48 @@ def main():
 
     results = []
     provider_summary = {}
+    hosts_to_scan = []
+
+    for host in hosts:
+        target = None
+        if knowledge is not None:
+            try:
+                target = _knowledge_target(host)
+            except ValueError:
+                target = None
+            if target and args.knowledge_refresh:
+                knowledge.forget(target, "cloud_provider", "provider-detection", resource="/")
+            if target and not args.knowledge_refresh:
+                cached = knowledge.query(target, kind="cloud_provider", key="provider-detection", resource="/")
+                if cached:
+                    restored = _restore_cloud_observation(host, cached[-1].get("value"))
+                    if restored:
+                        results.append(restored)
+                        continue
+        hosts_to_scan.append(host)
 
     import concurrent.futures
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.threads) as executor:
-        futures = {executor.submit(analyze_host, host): host for host in hosts}
+        futures = {executor.submit(analyze_host, host): host for host in hosts_to_scan}
         for future in concurrent.futures.as_completed(futures):
             result = future.result()
             results.append(result)
-            for provider in result["providers_detected"]:
-                provider_summary[provider] = provider_summary.get(provider, 0) + 1
+            if knowledge is not None:
+                try:
+                    target = _knowledge_target(result["hostname"])
+                    observation = _cloud_observation(result)
+                    if observation:
+                        knowledge.observe(target, "cloud_provider", "provider-detection", observation,
+                                          "cloud-pivot-finder/cloud_detector", confidence="observed",
+                                          ttl=CLOUD_PROVIDER_TTL, resource="/")
+                except (ValueError, OSError, module.sqlite3.Error):
+                    warn(f"Could not save cloud-provider knowledge for {result['hostname']}")
             if result["providers_detected"]:
                 success(f"{result['hostname']}: {', '.join(result['providers_detected'])}")
+
+    for result in results:
+        for provider in result["providers_detected"]:
+            provider_summary[provider] = provider_summary.get(provider, 0) + 1
 
     output = {
         "meta": {
@@ -370,6 +472,7 @@ def main():
             "type": "cloud_detection",
             "tool": "cloud-pivot-finder by orizon.one",
             "hosts_analyzed": len(hosts),
+            "knowledge_reused_hosts": sum(1 for result in results if result.get("knowledge_reused")),
         },
         "provider_summary": provider_summary,
         "results": results,

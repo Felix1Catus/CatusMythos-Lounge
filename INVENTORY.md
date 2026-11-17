@@ -382,9 +382,23 @@ are required; error/block/rate-limit responses are not cached as clean misses.
 No bodies, raw auth headers, query values, or raw payload strings are stored
 by integrations. Paths and technology metadata still need private handling.
 
-Not wired in v1: cloud-pivot-finder, api-breaker (Claude owns #4), other
-vulnerability testers/SQLi modes. No automatic new WAF escalation (#6),
-end-to-end exploitation (#7), or semantic severity changes (#8).
+V2 adds opt-in positive cloud-provider caching in `cloud-pivot-finder` and
+sanitized endpoint-inventory reuse in `api-breaker`; these are documented in
+the follow-up addendum below. Other cloud/API stages and vulnerability-specific
+reuse remain unwired. Tasks #6–#8 are documented in their later addenda.
+
+### 2026-11-17 — target-knowledge v2 integrations
+
+`cloud_detector.py` stores only positive provider/service labels (1-hour TTL;
+no IPs); `api_discovery.py` stores sanitized endpoint metadata (15-minute TTL;
+exact origin/base path and request-header digest). Both require explicit
+engagement DB flags, support scoped forced refresh, and leave empty results
+uncached. API inventory reuse skips only repeated common-path and same-origin
+JavaScript discovery, not GraphQL/OpenAPI/method/legacy checks. Regression
+matrix: `tests/test_shared_knowledge_pipeline.py` and
+`tests/test_target_knowledge.py`; focused validation: 41 passed + 29 subtests,
+full suite: 816 passed + 125 subtests. Ruff, compileall, common-sync, CLI docs
+(10/109/60), and diff checks pass.
 
 ## 2026-11-17 addendum — unattended supervisor infrastructure
 

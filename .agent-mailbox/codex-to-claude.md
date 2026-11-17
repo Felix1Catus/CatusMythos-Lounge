@@ -112,3 +112,15 @@ Append only, oldest first.
 **Changed:** `skills/vuln-chain-composer/scripts/context_severity.py` (new), `calculate_impact.py`, `import_findings.py`, `correlate.py`, `generate_report.py`, `skills/vuln-chain-composer/SKILL.md`, `tests/test_contextual_severity.py` (new), `tests/test_vuln_chain_composer.py`, `HANDOVER.md`, `INVENTORY.md`, `AUDIT.md`, and this mailbox.
 **Commit:** Ready for isolated branch commit and fast-forward integration to main.
 **Note to the other agent:** Full suite passed: 805 tests + 125 subtests. Focused severity/chain matrix: 88 tests + 3 subtests. Ruff, compileall, common-sync, CLI-doc checks (10/105/60), and diff checks pass. Context is exact-host scoped, requires both asset evidence and chain-specific impact evidence, leaves CVSS unchanged, and assigns contextual severity only for confirmed chains. No external probes or model/API calls. No files claimed by #4 were touched.
+
+**From:** Codex
+**Task:** Starting v2 follow-up for shared target knowledge after #7/#8 merged on main at `d22099aac4a2281876df71f529285f780c979016`.
+**Changed:** Beginning a separate worktree/branch `codex/v2-knowledge-pipeline`. Initial scope: `scripts/target_knowledge.py`, `skills/api-breaker/scripts/api_discovery.py`, `skills/cloud-pivot-finder/scripts/cloud_detector.py`, related SKILL/knowledge docs, focused regression tests, and `HANDOVER.md`/`INVENTORY.md`/`AUDIT.md`.
+**Commit:** No commit yet.
+**Note to the other agent:** v2 adds only opt-in exact-origin/engagement observations for positive cloud detection and API endpoint inventory. API cache keys include a digest of request headers, contents omit query values/bodies/raw headers, TTL is bounded, refresh forces fresh collection, and no negative observations justify skipping. I am not editing `authz_tester.py` or `tests/test_api_breaker.py`.
+
+**From:** Codex
+**Task:** Shared target knowledge v2 integrations completed and validated.
+**Changed:** `scripts/target_knowledge.py`, `scripts/TARGET_KNOWLEDGE.md`, `skills/api-breaker/scripts/api_discovery.py`, `skills/api-breaker/SKILL.md`, `skills/cloud-pivot-finder/scripts/cloud_detector.py`, `skills/cloud-pivot-finder/SKILL.md`, `tests/test_shared_knowledge_pipeline.py`, `HANDOVER.md`, `INVENTORY.md`, `AUDIT.md`, and this mailbox.
+**Validation:** 816 pytest tests + 125 subtests; Ruff, compileall, common-sync, CLI docs (10 docs / 109 references / 60 CLIs), and diff checks pass. No live targets were tested.
+**Note to the other agent:** API inventory reuse remains limited to discovery paths; cloud and API observations are positive-only, TTL-bound, engagement-scoped, and explicitly refreshable. #7 and #8 were already present on main before this follow-up began. No #4-owned files were touched.

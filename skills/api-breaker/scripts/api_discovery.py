@@ -6,6 +6,7 @@ Author: orizon.one
 """
 
 import argparse
+import importlib.util
 import json
 import re
 import urllib.request
@@ -13,6 +14,7 @@ import urllib.parse
 import concurrent.futures
 from html.parser import HTMLParser
 from datetime import datetime, timezone
+from pathlib import Path
 
 
 from _common import http_request, log, same_origin_url, success, vuln, warn
@@ -95,6 +97,59 @@ WAYBACK_VERSION_TOKEN_RE = re.compile(r'/v\d+(?:/|$)|/\d{4}[.\-]\d{1,2}(?:/|$)',
 # this bounds total request volume against a single target regardless of
 # how many version-token-bearing endpoints were discovered.
 MAX_LEGACY_BYPASS_CHECKS = 5
+API_INVENTORY_TTL = 900
+
+
+def _cacheable_api_inventory(discovered):
+    """Select metadata safe to cache; never persist query values or bodies."""
+    inventory = []
+    for item in discovered:
+        try:
+            parsed = urllib.parse.urlsplit(str(item.get("url", "")))
+            status = int(item.get("status", 0))
+            response_length = max(0, int(item.get("response_length", 0)))
+        except (TypeError, ValueError):
+            return None
+        path = str(item.get("path", ""))
+        if parsed.query or parsed.username or parsed.password or not path.startswith("/") or "?" in path:
+            return None
+        if parsed.path != path:
+            return None
+        methods = item.get("methods_tested", [])
+        methods = methods[:8] if isinstance(methods, list) else []
+        version_headers = item.get("version_headers", {})
+        version_headers = ({str(key)[:100]: str(value)[:200] for key, value in version_headers.items()}
+                           if isinstance(version_headers, dict) else {})
+        inventory.append({
+            "path": path,
+            "status": status,
+            "content_type": str(item.get("content_type", ""))[:200],
+            "api_type": str(item.get("api_type", "unknown"))[:80],
+            "response_length": response_length,
+            "auth_required": bool(item.get("auth_required", False)),
+            "methods_tested": [str(method)[:16] for method in methods],
+            "version_headers": version_headers,
+        })
+    encoded = json.dumps(inventory, sort_keys=True, allow_nan=False)
+    return inventory if inventory and len(encoded.encode("utf-8")) <= 65536 else None
+
+
+def _restore_api_inventory(base_url, inventory):
+    """Reconstruct endpoint URLs from the trusted base and sanitized paths."""
+    restored = []
+    if not isinstance(inventory, list) or len(inventory) > 1000:
+        return restored
+    for item in inventory:
+        if not isinstance(item, dict):
+            continue
+        path = item.get("path")
+        if not isinstance(path, str) or not path.startswith("/") or "?" in path or "#" in path:
+            continue
+        url = same_origin_url(base_url, path)
+        if not url:
+            continue
+        restored.append({**item, "url": url})
+    return restored
 
 
 class _ScriptSrcParser(HTMLParser):
@@ -631,10 +686,19 @@ def main():
     parser.add_argument("--cookie", help="Session cookie")
     parser.add_argument("--token", help="Auth token (Bearer)")
     parser.add_argument("--threads", type=int, default=15, help="Concurrent threads")
+    parser.add_argument("--knowledge-db", help="Opt-in shared SQLite target-knowledge file")
+    parser.add_argument("--engagement", help="Required engagement namespace when knowledge is enabled")
+    parser.add_argument("--knowledge-refresh", action="store_true", help="Force fresh endpoint discovery and replace the cached inventory")
     args = parser.parse_args()
 
     if not 1 <= args.threads <= 50:
         parser.error("--threads must be between 1 and 50")
+    if args.engagement and not args.knowledge_db:
+        parser.error("--engagement requires --knowledge-db")
+    if args.knowledge_db and not args.engagement:
+        parser.error("--knowledge-db requires --engagement")
+    if args.knowledge_refresh and not args.knowledge_db:
+        parser.error("--knowledge-refresh requires --knowledge-db")
 
     domain_input = args.domain.strip()
     if "://" in domain_input and not domain_input.lower().startswith(("http://", "https://")):
@@ -647,6 +711,7 @@ def main():
     if not base_url:
         parser.error("--domain must resolve to a credential-free absolute HTTP(S) origin")
     domain = urllib.parse.urlsplit(base_url).hostname or "unknown"
+    api_resource = urllib.parse.urlsplit(base_url).path or "/"
 
     log(f"Starting API discovery on: {domain}")
 
@@ -656,34 +721,74 @@ def main():
     if args.token:
         extra_headers["Authorization"] = args.token if " " in args.token else f"Bearer {args.token}"
 
-    # Phase 1: Fuzz API paths
-    log(f"Fuzzing {len(API_PATHS)} common API paths...")
+    knowledge = None
+    knowledge_module = None
+    knowledge_context = ""
+    knowledge_reused = False
     discovered = []
+    if args.knowledge_db:
+        module_path = Path(__file__).resolve().parents[3] / "scripts" / "target_knowledge.py"
+        if not module_path.is_file():
+            parser.error("shared knowledge requires the full plugin checkout, including scripts/target_knowledge.py")
+        spec = importlib.util.spec_from_file_location("catus_target_knowledge", module_path)
+        knowledge_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(knowledge_module)
+        try:
+            knowledge = knowledge_module.KnowledgeStore(
+                args.knowledge_db, args.engagement, refresh=args.knowledge_refresh
+            )
+        except (ValueError, OSError, knowledge_module.sqlite3.Error) as exc:
+            parser.error(str(exc))
+        knowledge_context = knowledge_module.digest(extra_headers)
+        if args.knowledge_refresh:
+            knowledge.forget(base_url, "api_inventory", "discovered-endpoints",
+                            context=knowledge_context, resource=api_resource)
+        else:
+            cached = knowledge.query(base_url, kind="api_inventory", key="discovered-endpoints",
+                                     context=knowledge_context, resource=api_resource)
+            if cached:
+                discovered = _restore_api_inventory(base_url, cached[-1].get("value"))
+                knowledge_reused = bool(discovered)
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=args.threads) as executor:
-        futures = {
-            executor.submit(probe_path, base_url, path, extra_headers): path
-            for path in API_PATHS
-        }
-        for future in concurrent.futures.as_completed(futures):
-            result = future.result()
-            if result:
+    # Phase 1: Fuzz API paths and analyze same-origin JavaScript unless a
+    # fresh, exact-origin/auth-context inventory is explicitly available.
+    js_paths = []
+    script_urls = []
+    if knowledge_reused:
+        log(f"Reusing {len(discovered)} fresh API endpoint observations for this origin/auth context")
+    else:
+        log(f"Fuzzing {len(API_PATHS)} common API paths...")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=args.threads) as executor:
+            futures = {
+                executor.submit(probe_path, base_url, path, extra_headers): path
+                for path in API_PATHS
+            }
+            for future in concurrent.futures.as_completed(futures):
+                result = future.result()
+                if result:
+                    discovered.append(result)
+                    success(f"Found: {result['path']} ({result['status']}, {result['api_type']})")
+
+        # Keep authenticated headers on the trusted origin only.
+        log("Analyzing same-origin JavaScript for API endpoints...")
+        script_urls = discover_script_urls(base_url, extra_headers)
+        js_paths = discover_from_js(base_url, script_urls, extra_headers)
+        known_urls = {entry["url"] for entry in discovered}
+        for path in js_paths:
+            result = probe_path(base_url, path, extra_headers)
+            if result and result["url"] not in known_urls:
                 discovered.append(result)
-                success(f"Found: {result['path']} ({result['status']}, {result['api_type']})")
+                known_urls.add(result["url"])
+                success(f"Found from JavaScript: {result['path']} ({result['status']}, {result['api_type']})")
 
-    # Phase 1b: Same-origin JavaScript analysis. The implementation stays
-    # origin-scoped so authenticated headers are never sent to CDN or other
-    # off-origin script URLs found in the page.
-    log("Analyzing same-origin JavaScript for API endpoints...")
-    script_urls = discover_script_urls(base_url, extra_headers)
-    js_paths = discover_from_js(base_url, script_urls, extra_headers)
-    known_urls = {entry["url"] for entry in discovered}
-    for path in js_paths:
-        result = probe_path(base_url, path, extra_headers)
-        if result and result["url"] not in known_urls:
-            discovered.append(result)
-            known_urls.add(result["url"])
-            success(f"Found from JavaScript: {result['path']} ({result['status']}, {result['api_type']})")
+        if knowledge is not None:
+            safe_inventory = _cacheable_api_inventory(discovered)
+            if safe_inventory:
+                knowledge.observe(
+                    base_url, "api_inventory", "discovered-endpoints", safe_inventory,
+                    "api-breaker/api_discovery", confidence="observed", ttl=API_INVENTORY_TTL,
+                    context=knowledge_context, resource=api_resource,
+                )
 
     # Phase 2: Test GraphQL endpoints
     graphql_results = {}
@@ -721,12 +826,13 @@ def main():
         "meta": {
             "domain": domain,
             "base_url": base_url,
+            "knowledge_reused_api_inventory": knowledge_reused,
             "timestamp": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
             "type": "api_discovery",
             "tool": "api-breaker by orizon.one",
         },
         "stats": {
-            "paths_tested": len(API_PATHS) + len(js_paths),
+            "paths_tested": 0 if knowledge_reused else len(API_PATHS) + len(js_paths),
             "js_scripts_analyzed": len(script_urls),
             "js_endpoints_probed": len(js_paths),
             "apis_found": len(discovered),

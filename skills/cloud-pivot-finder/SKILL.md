@@ -33,6 +33,21 @@ new PATH entry, restart the terminal/Claude host and repeat preflight.
 python3 scripts/cloud_detector.py --domain {target_domain}
 ```
 
+Cloud provider detection can optionally reuse a fresh positive result from the
+shared engagement store:
+
+```bash
+python3 scripts/cloud_detector.py --domain {target_domain} --knowledge-db {engagement_db} --engagement {engagement_name}
+python3 scripts/cloud_detector.py --domain {target_domain} --knowledge-db {engagement_db} --engagement {engagement_name} --knowledge-refresh
+```
+
+Positive CNAME/header/WHOIS provider observations expire after one hour and
+are scoped to the exact hostname origin. No-provider results are not cached.
+Cached results identify reused data and leave the IP field unknown because
+address resolution is not repeated. Use `--knowledge-refresh` to clear the
+cached provider result and rerun DNS, headers, and WHOIS. See [shared target
+knowledge](../../scripts/TARGET_KNOWLEDGE.md).
+
 Identify cloud hosting:
 1. **IP range analysis**: Match IPs against AWS, GCP, Azure published IP ranges
 2. **DNS analysis**: CNAME patterns (*.amazonaws.com, *.googleusercontent.com, *.azurewebsites.net)
