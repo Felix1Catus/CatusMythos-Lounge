@@ -734,3 +734,51 @@ Task #6–#8 division exists only as private draft specifications, not approved
 queue entries or running jobs. Current project queue remains empty. App tools
 open/read the terminal but cannot input the watch command; the user has the
 one-time paste instruction. No cross-provider native chat UI is claimed.
+
+## 2026-11-17 — Supervised improvement #6: automatic bounded WAF escalation
+
+New `skills/webapp-exploit-hunter/scripts/_waf_escalation.py`. Closes the gap
+the earlier 2026-11-16 adaptive-WAF-evasion pass left open: that pass added
+same-payload mutation retries inside sqli_tester.py/xss_tester.py, but left
+the separate `waf_bypass_tester.py` differential-technique CLI entirely
+manual, requiring an operator to notice a block and run it by hand against
+the same target/parameter.
+
+`classify_block(status, body, headers)` distinguishes rate limiting
+(429, `Retry-After`, "too many requests"/"throttle"/"quota exceeded" body
+phrasing) from attack filtering (403/406, or a WAF/CDN block-page body
+signature), with rate limiting taking precedence when a response matches
+both. Only `attack_filter` is escalation-worthy. `run_bounded_escalation()`
+runs a fixed, hardcoded, two-sub-test sequence (parameter pollution, then a
+single-step inspection-size-limit probe) against waf_bypass_tester.py's own
+functions, capped by an explicit `budget` it never exceeds — it drops the
+second sub-test rather than truncating the first when budget is tight.
+`EscalationTracker` records (url, param) pairs already escalated so a run
+never re-escalates the same pair. The call graph is one-directional
+(`sqli_tester.py`/`xss_tester.py` -> `_waf_escalation.py` ->
+`waf_bypass_tester.py`; the latter is never imported back), guarded by a
+static source-scan regression against future recursion. Escalated findings
+are waf_bypass_tester's own differential findings (so still real, not
+fabricated here), tagged `origin: "auto_waf_escalation"` and explicitly
+noted as WAF-bypass evidence rather than SQLi/XSS confirmation — the
+pre-existing confirmed-vs-candidate discipline is preserved, not loosened.
+
+Both testers' escalation is OFF by default at the function level
+(`waf_escalation_budget=0`); only their CLIs enable it by default via
+`--waf-escalation-budget` (default 4, 0 disables), so every pre-existing
+direct/library caller and test is unaffected. Existing adaptive-mutation
+behavior (sqli's keyword-case/inline-comment/whitespace mutation retries,
+xss's in-category `waf_bypass` auto-escalation) is unchanged.
+
+Review follow-ups: response headers now reach `classify_block()`, preventing
+403 responses with `Retry-After` from being treated as attack filtering.
+Both callers forward auth headers into the differential tests; those tests
+are limited to GET query parameters, so POST/body probes do not switch
+methods implicitly. `tests/test_waf_auto_escalation.py` now has **43 tests**;
+combined with the **87** tests in `test_webapp_legacy_testers.py`, the
+focused set passes **130 tests**. A loopback HTTP fixture exercises the real
+lazy-loaded WAF tester for both differential probes and verifies the four
+request cap. Final validation: **780 tests + 122 subtests passed**; Ruff,
+compileall, common-helper sync, and CLI-doc checks (**10/102/59**) pass. The
+only real HTTP traffic is to the localhost fixture; no external targets were
+contacted. No commit or push was made.

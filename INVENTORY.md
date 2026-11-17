@@ -81,7 +81,8 @@ specific fixes, test themes, browser limitations, and the latest verification.
   `dom_xss_auditor`, `ssrf_tester`, `ssti_tester`, `idor_tester`, `lfi_tester`,
   `upload_tester` (largest, 1201 ln), `race_tester`, `waf_bypass_tester`,
   `workflow_tester` (new 2026-11-16), `browser_security_auditor`,
-  `generate_poc`, `vuln_report`. `_common.py` (162).
+  `generate_poc`, `vuln_report`. `_common.py` (162); new support module
+  `_waf_escalation.py` (2026-11-17, not a CLI — see below).
 - **Deps:** stdlib + playwright (browser auditor only).
 - **Coverage:** `tests/test_webapp_legacy_testers.py` adds an 87-test offline
   matrix for LFI, upload, race, SSRF, SSTI, IDOR, XSS, and WAF-bypass logic;
@@ -139,6 +140,29 @@ specific fixes, test themes, browser limitations, and the latest verification.
   from the baseline response before confirming — the same technique
   `sqli_tester.py`'s `test_error_based` already used. 5 new tests (legacy
   matrix: 82 -> 87).
+- **Automatic bounded WAF escalation (2026-11-17, supervised improvement
+  #6; new `_waf_escalation.py`).** `sqli_tester.test_error_based` and
+  `xss_tester.test_xss_payloads` previously left an operator to notice a
+  block and separately run `waf_bypass_tester.py` by hand. Now, when every
+  payload (plus its mutation retries / in-category bypass attempts) for a
+  parameter is blocked by what `classify_block()` identifies as attack
+  filtering specifically — never bare rate limiting (429/Retry-After/"too
+  many requests") — and nothing is confirmed, both auto-invoke a small,
+  fixed, budget-capped subset of `waf_bypass_tester.py`'s own differential
+  tests (parameter pollution, then one inspection-size-limit step)
+  in-process, via `--waf-escalation-budget` (default 4, 0 disables). A
+  shared `EscalationTracker` stops the same (url, param) escalating twice
+  per run; the call graph is one-directional (never imported back by
+  `waf_bypass_tester.py`, locked by a source-scan regression). Escalated
+  findings are tagged `origin: "auto_waf_escalation"` and explicitly noted
+  as WAF-bypass evidence, not SQLi/XSS confirmation. Off by default at the
+  function level, so pre-existing callers/tests are unaffected; existing
+  mutation-retry and in-category bypass behavior is unchanged. Auto escalation
+  is limited to GET query parameters, forwards authorization headers, and
+  honors rate-limit/Retry-After classification. New
+  `tests/test_waf_auto_escalation.py`: 43 tests, including a loopback-only
+  integration through the real lazy-loaded `waf_bypass_tester` module; no
+  external targets are contacted.
 - **Scope controls:** `--active`, `--submit-forms`, `--callback-url`,
   `--allow-destructive-poc`, `--skip-lfi-chains`, `--max-mutations` (sqli);
   HTTPS-verified default. `workflow_tester.py` is read-only by design (GET

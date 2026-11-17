@@ -4,6 +4,46 @@ Living status note for the ongoing CatusMythos-Lounge improvement work. Keep it
 current; it records what has and has **not** been deeply reviewed so later work
 doesn't mistake uneven coverage for uniform coverage.
 
+## 2026-11-17 addendum — supervised improvement #6: automatic bounded WAF escalation
+
+New `skills/webapp-exploit-hunter/scripts/_waf_escalation.py`. Previously, an
+operator had to notice sqli_tester.py/xss_tester.py hit a WAF block and
+separately run `waf_bypass_tester.py` by hand. Both testers now auto-invoke a
+small, fixed, budget-capped subset of waf_bypass_tester's own differential
+tests (parameter pollution, then a single-step inspection-size-limit probe)
+in-process, but only when a response classifies as **attack filtering**
+(403/406, WAF/CDN block-page body) with nothing confirmed yet — never on
+bare **rate limiting** (429/Retry-After/"too many requests"), which
+`classify_block()` distinguishes explicitly. `--waf-escalation-budget`
+(default 4, 0 disables) bounds the extra requests; a shared
+`EscalationTracker` stops the same (url, param) pair from escalating twice
+in one run. The call graph is strictly one-directional
+(sqli/xss -> `_waf_escalation` -> `waf_bypass_tester`; the latter does not
+import the former) so there is no recursive escalation loop — locked by a
+static source-scan regression. Escalated findings are waf_bypass_tester's
+own (still-differential, so still real) findings, tagged
+`origin: "auto_waf_escalation"`, and explicitly noted as evidence the WAF
+can be bypassed, not confirmation of the SQLi/XSS itself. The feature is
+OFF by default at the function level (`waf_escalation_budget=0`), so every
+pre-existing caller/test is unaffected; only the CLIs enable it by default.
+Existing adaptive-mutation behavior (sqli's keyword-mutation retries, xss's
+in-category `waf_bypass` auto-escalation) is unchanged.
+
+New `tests/test_waf_auto_escalation.py` (43 tests): block/rate-limit
+classification including Retry-After precedence, the hard request budget,
+finding metadata, tracker deduplication, and a static recursion guard.
+Tester integrations cover SQLi/XSS escalation and the no-escalation cases
+for rate limits, confirmed findings, disabled budgets, duplicate targets,
+and non-GET requests. Auth headers are retained during escalation. A
+loopback-only HTTP fixture exercises the real lazy-loaded
+`waf_bypass_tester.py` functions and verifies the four-request cap. The
+focused pair `tests/test_waf_auto_escalation.py` +
+`tests/test_webapp_legacy_testers.py` passes **130 tests**; full pytest passes
+**780 tests + 122 subtests**. Ruff, compileall, `check_common_sync.py`, and
+`check_skill_cli_docs.py` (**10 docs / 102 references / 59 CLIs**) pass.
+`git diff --check` remains the last pre-commit check. No external targets
+were contacted; real HTTP traffic is confined to the localhost fixture.
+
 ## Current state
 
 - Latest scoped closeout code commit: `6f8c4af3646043294682520d9ca551560a01f928`
