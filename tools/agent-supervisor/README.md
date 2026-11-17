@@ -11,7 +11,10 @@ Tasks #6–#8 are not queued by installing or running this tool.
 
 `git rev-parse --git-common-dir` identifies shared repository metadata even
 from linked worktrees. Runtime state lives in `agent-coordination/` below that
-directory: `coordination.sqlite`, `mailbox.md`, and per-attempt `runs/` folders.
+directory: `coordination.sqlite`, `mailbox.md`, and per-attempt `runs/` logs.
+Worker/integration worktrees live in a sibling `.agent-supervisor-<repository-hash>/`
+directory beside the common repository, outside `.git`; Claude appropriately
+blocks file edits under Git metadata. Worktree paths are checkpointed.
 All worktrees query the same queue. This is separate from #5's target knowledge.
 
 SQLite transactions atomically record immutable approved task specs, their
@@ -85,8 +88,12 @@ integration validation 85%, pushed 100%. Batch percentages average task stages.
 
 Authors edit only. The supervisor checks the complete change set against the
 approved file claims, commits as FelixCatus, and runs the configured checks.
-A reviewer receives the exact base/candidate SHAs, the complete bounded diff,
-and supervisor-recorded validation results. Reviews must return strict JSON
+A reviewer gets a separate local clone (with independent Git metadata),
+the exact base/candidate SHAs, the complete bounded binary-capable diff,
+and supervisor-recorded validation results. Review diffs are never filtered
+by case-sensitive pathspecs; file claims are checked before and after commit
+to catch hook-added files. The committed base-to-candidate diff also gets an
+explicit whitespace/conflict-marker check. Reviews must return strict JSON
 with `approved`, `candidate_sha`, `base_sha`, and a string-array `findings`.
 A bare model claim or stale SHA cannot approve integration. Unresolved findings
 or failed validation trigger bounded author repair; changed candidates get
@@ -125,7 +132,9 @@ python3 tools/agent-supervisor/supervisor.py cancel --task approved-documentatio
 
 Heartbeat/stop checks run while CLI/check subprocesses execute. Timeouts and
 stop requests terminate process groups on POSIX and request process-tree
-termination on Windows. Windows workers additionally join kill-on-close Job
+termination on Windows. POSIX session groups are cleaned even after a
+successful parent exit. Stdout and stderr are captured separately so CLI
+warnings cannot corrupt structured JSON results. Windows workers additionally join kill-on-close Job
 Objects, so attached descendants are cleaned up when the supervisor exits.
 Assignment is immediately after process launch, not an OS security sandbox
 against an intentionally escaping program. Runtime `.process.json` files

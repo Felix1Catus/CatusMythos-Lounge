@@ -4,6 +4,7 @@ import json
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -146,6 +147,15 @@ class StoreTests(unittest.TestCase):
         self.store.checkpoint(self.owner, claimed, {'phase': 'reviewing'})
         self.assertEqual(self.store.tasks()[0]['checkpoint']['progress_percent'], 65)
 
+    def test_ambiguous_push_cannot_be_blindly_retried(self):
+        self.enqueue()
+        claimed = self.store.claim(self.owner, 120)
+        self.store.checkpoint(self.owner, claimed, {'phase': 'needs-attention', 'push_attempted': True,
+            'push_outcome': {'applied': None}}, 'attention')
+        with self.assertRaisesRegex(ValueError, 'push may already be applied'):
+            self.store.recover(confirmed=True, retry=claimed['id'])
+        self.assertEqual(self.store.tasks()[0]['state'], 'attention')
+
     def test_second_runner_is_rejected(self):
         with self.assertRaises(RuntimeError):
             self.store.acquire_runner('other', 120)
@@ -188,6 +198,25 @@ class ProcessTests(unittest.TestCase):
                 with self.subTest(change=change), self.assertRaises(ValueError):
                     sup.parse_review('codex', '', final, 'candidate', 'base')
 
+    def test_stdout_and_stderr_stay_separate_for_json_parsing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / 'json.log'
+            result = sup.execute([sys.executable, '-c',
+                'import sys; print("warning",file=sys.stderr); print("{}")'],
+                directory, None, output, 10, lambda: None)
+            self.assertEqual(json.loads(result), {})
+            self.assertIn('warning', output.with_suffix('.log.stderr.log').read_text())
+
+    def test_successful_parent_does_not_leave_background_descendant(self):
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / 'orphan-wrote.txt'
+            child = 'import time; from pathlib import Path; time.sleep(1); Path(' + repr(str(marker)) + ').write_text("orphan")'
+            parent = 'import subprocess,sys; subprocess.Popen([sys.executable,"-c",' + repr(child) + '])'
+            sup.execute([sys.executable, '-c', parent], directory, None,
+                        Path(directory) / 'parent.log', 10, lambda: None)
+            time.sleep(1.5)
+            self.assertFalse(marker.exists())
+
     def test_permission_adapters_never_use_bypass_flags(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(sup, 'resolve_cli', side_effect=lambda a: [a]):
             for agent in sup.AGENTS:
@@ -219,7 +248,7 @@ class GitIntegrationTests(unittest.TestCase):
         sup.run_git(self.repo, 'config', 'user.name', 'Fixture')
         sup.run_git(self.repo, 'config', 'user.email', 'fixture@example.invalid')
         sup.run_git(self.repo, 'config', 'core.autocrlf', 'false')
-        (self.repo / 'app.txt').write_text('baseline\n')
+        (self.repo / 'app.txt').write_bytes(b'baseline\n')
         sup.run_git(self.repo, 'add', 'app.txt')
         sup.run_git(self.repo, 'commit', '-m', 'fixture baseline')
         sup.run_git(self.repo, 'remote', 'add', 'origin', str(self.remote))
@@ -234,6 +263,8 @@ class GitIntegrationTests(unittest.TestCase):
         self.fail_check = False
         self.advance_main = False
         self.author_calls = 0
+        self.review_prompts = []
+        self.lose_ownership = False
 
     def worker_command(self, agent, review, final, config):
         return [agent, 'review' if review else 'author', str(final)]
@@ -243,17 +274,20 @@ class GitIntegrationTests(unittest.TestCase):
         output = Path(output)
         output.parent.mkdir(parents=True, exist_ok=True)
         if argv[0] not in sup.AGENTS:
+            if self.lose_ownership:
+                raise sup.OwnershipLost('fixture lease lost')
             if self.fail_check:
-                raise RuntimeError('fixture validation failure')
+                raise sup.ProcessFailed('fixture validation failure')
             output.write_text('checks passed')
             return 'checks passed'
         if argv[1] == 'author':
             self.author_calls += 1
             name = 'unclaimed.txt' if self.outside_file else 'app.txt'
             path = Path(cwd) / name
-            path.write_text(path.read_text() + 'improved\n' if path.exists() else 'outside\n')
+            path.write_bytes((path.read_text() + 'improved\n' if path.exists() else 'outside\n').encode())
             output.write_text(json.dumps({'is_error': False}))
             return output.read_text()
+        self.review_prompts.append(prompt)
         candidate = sup.run_git(cwd, 'rev-parse', 'HEAD')
         base = self.initial
         # All task candidates must expose their exact base in the review prompt.
@@ -275,8 +309,8 @@ class GitIntegrationTests(unittest.TestCase):
         output.write_text(text)
         return text
 
-    def run_task(self, push=True):
-        self.store.enqueue(task(), approved=True)
+    def run_task(self, push=True, spec=None):
+        self.store.enqueue(spec or task(), approved=True)
         engine = sup.Supervisor(self.repo, self.config, self.store, runner=self.runner)
         with patch.object(sup, 'worker_command', side_effect=self.worker_command):
             return engine.run(execute_tasks=True, push=push, max_seconds=60)
@@ -290,12 +324,66 @@ class GitIntegrationTests(unittest.TestCase):
         self.assertEqual(sup.run_git(self.repo, 'rev-parse', 'HEAD'), self.initial)
         self.assertEqual((self.repo / 'app.txt').read_text(), 'baseline\n')
 
+    def test_commit_hook_cannot_smuggle_unclaimed_file_into_candidate(self):
+        hooks = self.base / 'hooks'
+        hooks.mkdir()
+        hook = hooks / 'pre-commit'
+        hook.write_text('#!/bin/sh\necho hook-added > injected.txt\ngit add -- injected.txt\n', encoding='utf-8')
+        hook.chmod(0o755)
+        sup.run_git(self.repo, 'config', 'core.hooksPath', str(hooks))
+        with self.assertRaisesRegex(RuntimeError, 'unclaimed file'):
+            self.run_task()
+        self.assertEqual(self.reviews, [])
+        self.assertEqual(self.store.tasks()[0]['state'], 'attention')
+
+    def test_worker_worktree_is_outside_git_metadata(self):
+        self.run_task()
+        worktree = Path(self.store.tasks()[0]['checkpoint']['worktree'])
+        self.assertNotIn('.git', worktree.parts)
+        self.assertNotIn(self.store.root, worktree.parents)
+
     def test_opposite_model_review_and_bounded_repair(self):
         self.reject_first = True
         self.assertEqual(self.run_task(), 1)
         self.assertEqual(self.author_calls, 2)
         self.assertNotEqual(self.reviews[0]['candidate_sha'], self.reviews[1]['candidate_sha'])
         self.assertEqual(self.store.tasks()[0]['checkpoint']['reviewer'], 'claude')
+
+    def test_full_diff_is_reviewed_even_when_claim_uses_different_case(self):
+        self.assertEqual(self.run_task(spec=task(files=['APP.TXT'])), 1)
+        self.assertIn('+improved', self.review_prompts[0])
+
+    def test_ownership_loss_during_validation_never_starts_a_repair(self):
+        self.lose_ownership = True
+        with self.assertRaises(sup.OwnershipLost):
+            self.run_task()
+        self.assertEqual(self.author_calls, 1)
+        self.assertEqual(self.reviews, [])
+
+    def test_lost_push_acknowledgement_reconciles_exact_remote_sha(self):
+        original = sup.run_git
+        def lose_ack(repo, *args, **kwargs):
+            result = original(repo, *args, **kwargs)
+            if args[0] == 'push':
+                raise sup.ProcessFailed('push acknowledgement lost')
+            return result
+        with patch.object(sup, 'run_git', side_effect=lose_ack):
+            self.assertEqual(self.run_task(), 1)
+        record = self.store.tasks()[0]
+        self.assertEqual(record['state'], 'done')
+        self.assertTrue(record['checkpoint']['push_outcome']['applied'])
+
+    def test_committed_whitespace_error_blocks_review(self):
+        original_runner = self.runner
+        def trailing_space(argv, cwd, prompt, output, timeout, heartbeat):
+            result = original_runner(argv, cwd, prompt, output, timeout, heartbeat)
+            if argv[0] in sup.AGENTS and argv[1] == 'author':
+                (Path(cwd) / 'app.txt').write_bytes(b'baseline\ntrailing-space \n')
+            return result
+        self.runner = trailing_space
+        with self.assertRaises(sup.ProcessFailed):
+            self.run_task()
+        self.assertEqual(self.reviews, [])
 
     def test_unclaimed_changes_are_quarantined_before_commit_or_push(self):
         self.outside_file = True

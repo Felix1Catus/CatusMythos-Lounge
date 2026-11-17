@@ -4,6 +4,7 @@
   "push": false,
   "worker_timeout": 900,
   "check_timeout": 300,
+  "network_timeout": 180,
   "lease_seconds": 120,
   "max_repairs": 2,
   "claude_max_budget_usd": 2,
