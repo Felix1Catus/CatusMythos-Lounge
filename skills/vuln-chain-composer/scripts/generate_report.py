@@ -219,26 +219,49 @@ def generate_hackerone_report(chain, poc_data=None):
 
     justification = impact_analysis.get("justification", description)
 
+    original = chain.get("original_correlation", {})
+    confidence = chain.get("confidence", original.get("confidence", "unconfirmed"))
+    confidence_note = chain.get("confidence_note", original.get("confidence_note", ""))
+    confirmed = confidence == "confirmed"
+    confidence_notice = "**Chain status:** " + ("Confirmed" if confirmed else "Unconfirmed")
+    if confidence_note:
+        confidence_notice += "\n\n" + confidence_note
+    if confirmed:
+        summary_claim = (
+            f"This vulnerability chain combines {len(supporting) + 1} individual finding(s) "
+            f"to achieve {severity}-severity impact."
+        )
+        scenario_status = "The chain is marked confirmed in the supplied evidence."
+    else:
+        summary_claim = (
+            "This is an investigation lead. The proposed connection and combined impact "
+            "have not been demonstrated; any severity shown is provisional."
+        )
+        scenario_status = "This hypothetical scenario requires verification before it can be reported as demonstrated impact."
+        justification = "Potential impact if the chain is verified:\n\n" + justification
+
     report = f"""## {chain_name}
 
 **Severity:** {severity} (CVSS {cvss_score})
 **CVSS Vector:** `{cvss_vector}`
 
+{confidence_notice}
+
 ## Summary
 
 {description}
 
-This vulnerability chain combines {len(supporting) + 1} individual finding(s) to achieve {severity}-severity impact. The chain amplifies the impact of each individual vulnerability beyond its standalone severity rating.
+{summary_claim}
 
 ## Affected Assets
 
 {chr(10).join(f"- `{asset}`" for asset in sorted(affected_assets)) if affected_assets else "- See steps to reproduce for target details"}
 
-## Steps to Reproduce
+## {"Steps to Reproduce" if confirmed else "Proposed Verification Steps"}
 
 {chr(10).join(steps_text) if steps_text else "1. See detailed chain phases in the attached report"}
 
-## Proof of Concept
+## {"Proof of Concept" if confirmed else "Unverified PoC Material"}
 
 {poc_section}
 
@@ -246,7 +269,7 @@ This vulnerability chain combines {len(supporting) + 1} individual finding(s) to
 
 {justification}
 
-**Business Impact:**
+**{"Business Impact" if confirmed else "Potential Business Impact (unverified)"}:**
 - Confidentiality: {_impact_detail(chain, "C")}
 - Integrity: {_impact_detail(chain, "I")}
 - Availability: {_impact_detail(chain, "A")}
@@ -257,9 +280,9 @@ An attacker could exploit this vulnerability chain as follows:
 
 1. **Initial Access:** Exploit {primary.get('type', 'the primary vulnerability')} on `{primary.get('domain', primary.get('url', 'the target'))}`
 2. **Escalation:** Leverage gained access/data to exploit supporting vulnerabilities across the target's infrastructure
-3. **Impact:** Achieve {severity.lower()}-severity impact as described above
+3. **Impact:** {"Achieve" if confirmed else "Verify whether the chain could achieve"} {severity.lower()}-severity impact as described above
 
-This is a realistic attack scenario that could be executed by a motivated attacker with network access to the target.
+{scenario_status}
 
 ## Chain Visualization
 

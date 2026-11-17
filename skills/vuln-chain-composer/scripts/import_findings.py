@@ -6,6 +6,7 @@ Author: orizon.one
 """
 
 import argparse
+import hashlib
 import json
 import re as _re
 from pathlib import Path
@@ -131,7 +132,7 @@ def _derive_category(vuln_type):
 def normalize_finding(finding, source_tool):
     """Normalize a finding to common format."""
     vuln_type = finding.get("type", "unknown")
-    param = finding.get("param", finding.get("parameter", ""))
+    param = finding.get("param", finding.get("parameter", finding.get("field", "")))
     url = finding.get("url", finding.get("target", ""))
 
     # Extract domain from URL
@@ -163,8 +164,13 @@ def normalize_finding(finding, source_tool):
             owasp = mapping
             break
 
+    from urllib.parse import urldefrag
+    method = str(finding.get("method", "GET")).upper()
+    identity = json.dumps([vuln_type, urldefrag(url)[0], method, param], ensure_ascii=True)
+    identity_hash = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+    id_prefix = _re.sub(r"[^A-Za-z0-9_-]", "_", vuln_type)[:30]
     normalized = {
-        "id": f"{vuln_type}_{domain}_{param}".replace(".", "_").replace("/", "_")[:100],
+        "id": f"{id_prefix}_{identity_hash}",
         "type": vuln_type,
         "category": _derive_category(vuln_type),
         "severity": severity,
@@ -173,7 +179,7 @@ def normalize_finding(finding, source_tool):
         "domain": domain,
         "url": url,
         "parameter": param,
-        "method": finding.get("method", "GET"),
+        "method": method,
         "payload": finding.get("payload", ""),
         "evidence": finding.get("evidence", ""),
         "poc_curl": finding.get("poc_curl", ""),
@@ -199,7 +205,10 @@ def normalize_finding(finding, source_tool):
     # against every OTHER finding's requires over this same vocabulary --
     # A enables X, B requires X => A->B is a candidate chain, found by
     # graph matching rather than needing a named template per pair.
-    if "sqli" in vuln_type:
+    if finding.get("validated") is False or "candidate" in vuln_type.lower():
+        # Unverified probes must not become capabilities in downstream chains.
+        normalized["chainable_as"] = []
+    elif "sqli" in vuln_type:
         normalized["chainable_as"] = ["data_access", "credential_theft", "rce_potential"]
     elif "xss" in vuln_type and (
         finding.get("validated") is False

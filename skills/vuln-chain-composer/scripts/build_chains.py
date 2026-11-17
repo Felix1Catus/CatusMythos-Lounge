@@ -358,6 +358,8 @@ def build_detailed_chain(chain):
         "chain_id": f"chain_{primary.get('id', 'unknown')}_{chain.get('name', '').lower().replace(' ', '_')[:30]}",
         "name": chain.get("name", "Unknown Chain"),
         "description": chain.get("description", ""),
+        "confidence": chain.get("confidence", "unconfirmed"),
+        "confidence_note": chain.get("confidence_note", ""),
         "overall_severity": chain.get("overall_severity", "HIGH"),
         "impact_amplification": chain.get("impact_amplification", ""),
         "total_steps": step_num,
