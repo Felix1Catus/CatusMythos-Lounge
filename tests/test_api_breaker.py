@@ -798,13 +798,163 @@ class ApiBreakerScopeTests(unittest.TestCase):
         self.assertTrue(all(f["severity"] == "INFO" and not f["validated"] for f in findings))
 
     def test_race_2xx_count_is_candidate_without_state_baseline(self):
-        with patch.object(logic_tester, "http_request", return_value=(200, {}, '{}')):
+        with patch.object(logic_tester, "http_request", return_value=(200, {}, '{}')) as request:
             findings = logic_tester.test_race_condition(
                 "https://api.example.test/redeem", "POST", {}, delay=0
             )
         self.assertEqual(len(findings), 3)
         self.assertTrue(all(f["type"] == "race_condition_candidate" for f in findings))
         self.assertTrue(all(f["severity"] == "INFO" and not f["validated"] for f in findings))
+        self.assertTrue(all("no sequential baseline" in f["evidence"] for f in findings))
+        self.assertEqual(request.call_count, 30)
+
+    def test_numeric_json_pointer_handles_escaping_and_rejects_invalid_values(self):
+        self.assertEqual(
+            logic_tester._numeric_json_pointer(
+                '{"data":{"credits":3},"items":[{"count":1},{"count":2}]}',
+                "/items/1/count",
+            ),
+            2.0,
+        )
+        self.assertEqual(
+            logic_tester._numeric_json_pointer('{"a/b":{"~key":4}}', "/a~1b/~0key"),
+            4.0,
+        )
+        self.assertIsNone(logic_tester._numeric_json_pointer('{"value":true}', "/value"))
+        self.assertIsNone(logic_tester._numeric_json_pointer('{"value":1}', "/value~2"))
+        self.assertIsNone(logic_tester._numeric_json_pointer('{"value":1}', "/missing"))
+        self.assertIsNone(logic_tester._numeric_json_pointer('{"value":NaN}', "/value"))
+        self.assertIsNone(logic_tester._numeric_json_pointer('{"value":Infinity}', "/value"))
+        deeply_nested = "[" * 1500 + "1" + "]" * 1500
+        self.assertIsNone(logic_tester._numeric_json_pointer(deeply_nested, ""))
+
+    def test_race_request_budget_is_shared_across_calls(self):
+        budget = logic_tester.RequestBudget(12)
+        with patch.object(logic_tester, "http_request", return_value=(200, {}, "{}")) as request:
+            first = logic_tester.test_race_condition(
+                "https://api.example.test/redeem", "POST", {}, request_budget=budget
+            )
+            second = logic_tester.test_race_condition(
+                "https://api.example.test/payments", "POST", {}, request_budget=budget
+            )
+
+        self.assertEqual(len(first), 1)
+        self.assertEqual(second, [])
+        self.assertEqual(budget.used, 10)
+        self.assertEqual(request.call_count, 10)
+
+    def test_race_state_readback_suppresses_2xx_without_duplicate_side_effect(self):
+        state = {"count": 0}
+        seen_payloads = set()
+        request_methods = []
+        lock = threading.Lock()
+
+        class FixtureHandler(BaseHTTPRequestHandler):
+            def _send(self, status, document):
+                body = json.dumps(document).encode("utf-8")
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_GET(self):
+                with lock:
+                    request_methods.append(self.command)
+                    count = state["count"]
+                self._send(200, {"count": count})
+
+            def do_POST(self):
+                body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+                with lock:
+                    request_methods.append(self.command)
+                    if body not in seen_payloads:
+                        seen_payloads.add(body)
+                        state["count"] += 1
+                self._send(200, {"ok": True})
+
+            def log_message(self, _format, *_args):
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), FixtureHandler)
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        base_url = f"http://127.0.0.1:{server.server_port}"
+        budget = logic_tester.RequestBudget(42)
+        try:
+            findings = logic_tester.test_race_condition(
+                f"{base_url}/redeem",
+                "POST",
+                {},
+                state_readback_url=f"{base_url}/state",
+                state_json_pointer="/count",
+                request_budget=budget,
+            )
+        finally:
+            server.shutdown()
+            server.server_close()
+            worker.join(timeout=2)
+
+        self.assertEqual(findings, [])
+        self.assertEqual(budget.used, 42)
+        self.assertEqual(request_methods.count("POST"), 33)
+        self.assertEqual(request_methods.count("GET"), 9)
+
+    def test_race_state_readback_finds_excess_counter_change_over_sequential_control(self):
+        state = {"count": 0}
+        request_methods = []
+        lock = threading.Lock()
+
+        class FixtureHandler(BaseHTTPRequestHandler):
+            def _send(self, status, document):
+                body = json.dumps(document).encode("utf-8")
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_GET(self):
+                with lock:
+                    request_methods.append(self.command)
+                    count = state["count"]
+                self._send(200, {"count": count})
+
+            def do_POST(self):
+                self.rfile.read(int(self.headers.get("Content-Length", "0")))
+                with lock:
+                    request_methods.append(self.command)
+                    state["count"] += 1
+                self._send(200, {"ok": True})
+
+            def log_message(self, _format, *_args):
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), FixtureHandler)
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        base_url = f"http://127.0.0.1:{server.server_port}"
+        budget = logic_tester.RequestBudget(42)
+        try:
+            findings = logic_tester.test_race_condition(
+                f"{base_url}/redeem",
+                "POST",
+                {},
+                state_readback_url=f"{base_url}/state",
+                state_json_pointer="/count",
+                request_budget=budget,
+            )
+        finally:
+            server.shutdown()
+            server.server_close()
+            worker.join(timeout=2)
+
+        self.assertEqual(len(findings), 3)
+        self.assertTrue(all(f["state_effect_multiple"] == 10.0 for f in findings))
+        self.assertTrue(all("sequential control" in f["evidence"] for f in findings))
+        self.assertEqual(budget.used, 42)
+        self.assertEqual(request_methods.count("POST"), 33)
+        self.assertEqual(request_methods.count("GET"), 9)
 
     def test_privilege_field_echo_must_match_the_injected_value(self):
         with patch.object(logic_tester, "http_request", return_value=(200, {}, '{"role": "user"}')):
@@ -1135,6 +1285,25 @@ class ApiBreakerScopeTests(unittest.TestCase):
                 "--output", str(output_path),
             ]
             with patch.object(sys, "argv", argv), patch.object(logic_tester, "http_request") as request:
+                with self.assertRaises(SystemExit) as error:
+                    logic_tester.main()
+
+        self.assertEqual(error.exception.code, 2)
+        request.assert_not_called()
+
+    def test_logic_cli_rejects_off_origin_race_readback_before_requests(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "findings.json"
+            argv = [
+                "logic_tester.py",
+                "--api-base", "https://api.example.test",
+                "--race-state-url", "https://attacker.invalid/state",
+                "--race-state-json-pointer", "/count",
+                "--output", str(output_path),
+            ]
+            with patch.object(sys, "argv", argv), patch.object(
+                logic_tester, "http_request"
+            ) as request:
                 with self.assertRaises(SystemExit) as error:
                     logic_tester.main()
 

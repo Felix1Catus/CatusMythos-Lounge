@@ -290,14 +290,35 @@ breaker depth techniques/rate_limit_versioning.md):
 python3 scripts/logic_tester.py --input {schema_file} --api-base {api_url} --token {token}
 ```
 
+For a target with a known, authorized single-use test object and a read-only
+same-origin state endpoint, add
+`--race-state-url {state_url} --race-state-json-pointer /data/count`. The
+pointer should identify a finite numeric value expected to change once for the
+sequential control action. The script compares that one-request control with
+the concurrent burst and only reports an excess state-change candidate when
+the selected counter changes more than it did for the control. It does not
+include the counter's raw value in findings. Choosing this mode sends one
+additional sequential mutation per race payload; use disposable test data.
+Choose a read-only GET route deliberately: HTTP GET is not guaranteed to be
+side-effect-free.
+
+`--race-request-budget` caps all race payload, sequential-control, and
+read-back requests across the run (default and maximum: 840). The existing
+three race payload cases and ten-request concurrent burst remain active by
+default. If no comparable state baseline is available, multiple 2xx responses
+remain INFO candidates only. The thread-pool burst is concurrent but does not
+provide HTTP/2 single-packet synchronization; a negative result does not rule
+out narrower timing windows. See
+`research_notes/API breaker depth techniques/business_logic_races.md`.
+
 `logic_tester.py` requires an explicit trusted `--api-base` and skips imported
 off-origin endpoints. It actively sends price, quantity, privilege, coupon,
 negative-amount, and concurrent race payloads using POST/PUT/PATCH. Use only
 with explicit authorization and target-approved test accounts/data; the
 script does not add a second write opt-in, so these probes run when selected.
-Response echoes, successful negative-value requests, and multiple concurrent
-2xx responses remain low-confidence candidates. Coupon-stacking candidates
-now require a JSON response with at least two entries in an explicit
+Response echoes and successful negative-value requests remain low-confidence
+candidates. Coupon-stacking candidates now require a JSON response with at
+least two entries in an explicit
 applied-coupon/discount collection; a generic success message or echo of the
 submitted `coupons` field is not stack evidence. Verify the calculated total
 and persisted state against a safe baseline before reporting impact. This

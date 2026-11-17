@@ -20,6 +20,39 @@ from response_safety import safe_response_preview
 
 
 MUTATING_METHODS = {"POST", "PUT", "PATCH"}
+RACE_REQUESTS_PER_CASE = 10
+RACE_MAX_REQUEST_BUDGET = 840
+RACE_ACCEPTED_STATUSES = {200, 201, 202}
+
+
+class RequestBudget:
+    """Bound race-payload, control, and state-readback requests for one run."""
+
+    def __init__(self, limit):
+        self.limit = limit
+        self.used = 0
+        self._warned = False
+
+    @property
+    def remaining(self):
+        return self.limit - self.used
+
+    def can_consume(self, amount):
+        return amount <= self.remaining
+
+    def consume(self, amount=1):
+        if not self.can_consume(amount):
+            return False
+        self.used += amount
+        return True
+
+    def warn_exhausted(self):
+        if not self._warned:
+            warn(
+                f"Race request budget exhausted after {self.used}/{self.limit} "
+                "requests; remaining race cases were skipped."
+            )
+            self._warned = True
 
 
 def _explicit_applied_coupon_collection(body):
@@ -199,6 +232,72 @@ def _matching_json_fields(body, payload):
     return matches
 
 
+def _json_pointer_tokens(pointer):
+    """Parse an RFC 6901 JSON Pointer, returning None when it is malformed."""
+    if pointer == "":
+        return []
+    if not isinstance(pointer, str) or not pointer.startswith("/"):
+        return None
+
+    tokens = []
+    for raw_token in pointer[1:].split("/"):
+        decoded = []
+        index = 0
+        while index < len(raw_token):
+            char = raw_token[index]
+            if char != "~":
+                decoded.append(char)
+                index += 1
+                continue
+            if index + 1 >= len(raw_token) or raw_token[index + 1] not in "01":
+                return None
+            decoded.append("~" if raw_token[index + 1] == "0" else "/")
+            index += 2
+        tokens.append("".join(decoded))
+    return tokens
+
+
+def _numeric_json_pointer(body, pointer):
+    """Read a finite numeric JSON value without accepting booleans as numbers."""
+    tokens = _json_pointer_tokens(pointer)
+    if tokens is None:
+        return None
+    try:
+        value = json.loads(body)
+        for token in tokens:
+            if isinstance(value, dict):
+                if token not in value:
+                    return None
+                value = value[token]
+            elif isinstance(value, list) and token.isascii() and token.isdecimal():
+                if token != "0" and token.startswith("0"):
+                    return None
+                position = int(token)
+                if position >= len(value):
+                    return None
+                value = value[position]
+            else:
+                return None
+    except (json.JSONDecodeError, TypeError, ValueError, IndexError, RecursionError):
+        return None
+
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    try:
+        return float(value) if math.isfinite(value) else None
+    except (OverflowError, TypeError, ValueError):
+        return None
+
+
+def _read_race_state(state_url, headers, pointer, request_budget=None):
+    if request_budget is not None and not request_budget.consume():
+        return None
+    status, _, body = http_request(state_url, method="GET", headers=headers)
+    if status != 200:
+        return None
+    return _numeric_json_pointer(body, pointer)
+
+
 def test_price_manipulation(url, method, auth_headers, delay=0):
     """Test price manipulation on e-commerce endpoints."""
     log(f"Testing price manipulation: {url}")
@@ -346,10 +445,29 @@ def test_coupon_stacking(url, method, auth_headers, delay=0):
     return findings
 
 
-def test_race_condition(url, method, auth_headers, delay=0):
-    """Test double spending / race conditions via concurrent requests."""
+def test_race_condition(
+    url,
+    method,
+    auth_headers,
+    delay=0,
+    state_readback_url=None,
+    state_json_pointer=None,
+    request_budget=None,
+):
+    """Compare a sequential control with a bounded concurrent request burst.
+
+    Supplying a read-back URL and numeric JSON Pointer adds a sequential
+    one-request control and state comparison for each payload. These controls
+    are active writes; the caller must use a disposable, authorized test
+    object and a read-only same-origin state endpoint.
+    """
     log(f"Testing race conditions: {url}")
     findings = []
+
+    if (state_readback_url is None) != (state_json_pointer is None):
+        raise ValueError("state read-back URL and JSON Pointer must be provided together")
+    if state_json_pointer is not None and _json_pointer_tokens(state_json_pointer) is None:
+        raise ValueError("state JSON Pointer is malformed")
 
     headers = dict(auth_headers)
     headers["Content-Type"] = "application/json"
@@ -362,36 +480,145 @@ def test_race_condition(url, method, auth_headers, delay=0):
     ]
 
     for test in test_payloads:
+        # A state-aware case can use one pre-read, one sequential write, one
+        # post-control read, ten concurrent writes, and one final read.
+        case_budget = RACE_REQUESTS_PER_CASE + (4 if state_readback_url else 0)
+        if request_budget is not None and not request_budget.can_consume(case_budget):
+            request_budget.warn_exhausted()
+            break
+
         data = json.dumps(test["payload"])
         success_count = 0
+        baseline_status = None
+        baseline_delta = None
+        baseline_state_observed = False
+        control_state = None
+        before_state = None
 
+        if state_readback_url:
+            before_state = _read_race_state(
+                state_readback_url, auth_headers, state_json_pointer, request_budget
+            )
+            if before_state is not None:
+                if request_budget is None or request_budget.consume():
+                    baseline_status, _, _ = http_request(
+                        url, method=method, headers=headers, data=data
+                    )
+                    control_state = _read_race_state(
+                        state_readback_url, auth_headers, state_json_pointer,
+                        request_budget,
+                    )
+                    if (
+                        baseline_status in RACE_ACCEPTED_STATUSES
+                        and control_state is not None
+                    ):
+                        baseline_delta = control_state - before_state
+                        baseline_state_observed = True
+
+        if request_budget is not None and not request_budget.consume(
+            RACE_REQUESTS_PER_CASE
+        ):
+            request_budget.warn_exhausted()
+            break
         with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
             futures = []
-            for _ in range(10):
+            for _ in range(RACE_REQUESTS_PER_CASE):
                 futures.append(
                     executor.submit(http_request, url, method, headers, data)
                 )
 
             for future in concurrent.futures.as_completed(futures):
-                status, _, body = future.result()
-                if status in (200, 201):
+                try:
+                    status, _, _ = future.result()
+                except Exception:
+                    status = 0
+                if status in RACE_ACCEPTED_STATUSES:
                     success_count += 1
 
-        if success_count > 1:
-            warn(f"Race condition candidate: {success_count}/10 requests returned 2xx ({test['name']}); verify duplicate side effects")
-            findings.append({
-                "type": "race_condition_candidate",
-                "severity": "INFO",
-                "confidence": "low",
-                "validated": False,
-                "evidence": "Multiple concurrent requests returned 2xx; a sequential baseline and duplicate state change are unverified.",
-                "test_name": test["name"],
-                "url": url,
-                "method": method,
-                "concurrent_requests": 10,
-                "successful_requests": success_count,
-                "description": f"{success_count} of 10 identical concurrent requests succeeded",
-            })
+        concurrent_state = None
+        if state_readback_url:
+            concurrent_state = _read_race_state(
+                state_readback_url, auth_headers, state_json_pointer, request_budget
+            )
+
+        if state_readback_url and baseline_state_observed and baseline_delta == 0:
+            warn(
+                f"Race state baseline did not change for {test['name']}; "
+                "check whether the selected pointer tracks this action."
+            )
+            continue
+
+        comparable_state = (
+            baseline_status in RACE_ACCEPTED_STATUSES
+            and baseline_delta is not None
+            and baseline_delta != 0
+            and control_state is not None
+            and concurrent_state is not None
+        )
+        state_effect_multiple = None
+        if comparable_state:
+            concurrent_delta = concurrent_state - control_state
+            state_effect_multiple = concurrent_delta / baseline_delta
+            if not math.isfinite(state_effect_multiple):
+                state_effect_multiple = None
+                comparable_state = False
+
+        if comparable_state:
+            # A valid one-request baseline lets the operator-provided numeric
+            # state indicator distinguish 2xx response echoes from an excess
+            # side effect. If the state changed no more than once, suppress it.
+            if (
+                success_count <= 1
+                or state_effect_multiple is None
+                or state_effect_multiple <= 1.000001
+            ):
+                continue
+            evidence = (
+                "The configured numeric state read-back changed more than the "
+                "one-request sequential control after the concurrent burst. "
+                "Confirm that the measured state transition should occur only once."
+            )
+        else:
+            if success_count <= 1:
+                continue
+            if state_readback_url:
+                evidence = (
+                    "Multiple concurrent requests returned 2xx, but the configured "
+                    "sequential baseline and numeric state read-back were not "
+                    "comparable; duplicate side effects remain unverified."
+                )
+            else:
+                evidence = (
+                    "Multiple concurrent requests returned 2xx; no sequential "
+                    "baseline or state read-back was supplied, so duplicate side "
+                    "effects remain unverified."
+                )
+
+        warn(
+            f"Race condition candidate: {success_count}/{RACE_REQUESTS_PER_CASE} "
+            f"requests returned 2xx ({test['name']}); review state evidence"
+        )
+        finding = {
+            "type": "race_condition_candidate",
+            "severity": "INFO",
+            "confidence": "low",
+            "validated": False,
+            "evidence": evidence,
+            "test_name": test["name"],
+            "url": url,
+            "method": method,
+            "concurrent_requests": RACE_REQUESTS_PER_CASE,
+            "successful_requests": success_count,
+            "description": (
+                f"{success_count} of {RACE_REQUESTS_PER_CASE} identical "
+                "concurrent requests succeeded"
+            ),
+        }
+        if baseline_status is not None:
+            finding["sequential_baseline_status"] = baseline_status
+        if state_effect_multiple is not None:
+            finding["state_effect_multiple"] = round(state_effect_multiple, 4)
+        findings.append(finding)
 
     return findings
 
@@ -494,14 +721,56 @@ def main():
                         help="Trusted API base URL; imported endpoint metadata is never trusted as scope")
     parser.add_argument("--endpoint", help="Specific endpoint to test")
     parser.add_argument("--delay", type=float, default=0, help="Delay between requests (seconds)")
+    parser.add_argument(
+        "--race-request-budget",
+        type=int,
+        default=RACE_MAX_REQUEST_BUDGET,
+        help=(
+            "Maximum race payload, sequential-control, and state-readback "
+            f"requests across this run (10-{RACE_MAX_REQUEST_BUDGET}; default: "
+            f"{RACE_MAX_REQUEST_BUDGET})"
+        ),
+    )
+    parser.add_argument(
+        "--race-state-url",
+        help="Optional same-origin read-only GET URL for race state verification",
+    )
+    parser.add_argument(
+        "--race-state-json-pointer",
+        help=(
+            "RFC 6901 pointer to a finite numeric state counter; use with "
+            "--race-state-url to compare one sequential control with the burst"
+        ),
+    )
     args = parser.parse_args()
 
     if not math.isfinite(args.delay) or args.delay < 0 or args.delay > 60:
         parser.error("--delay must be between 0 and 60 seconds")
+    if not RACE_REQUESTS_PER_CASE <= args.race_request_budget <= RACE_MAX_REQUEST_BUDGET:
+        parser.error(
+            f"--race-request-budget must be between {RACE_REQUESTS_PER_CASE} "
+            f"and {RACE_MAX_REQUEST_BUDGET}"
+        )
+    if (args.race_state_url is None) != (args.race_state_json_pointer is None):
+        parser.error("--race-state-url and --race-state-json-pointer must be used together")
 
     base_url = same_origin_url(args.api_base, args.api_base)
     if not base_url:
         parser.error("--api-base must be a credential-free absolute HTTP(S) URL")
+
+    state_readback_url = None
+    if args.race_state_url is not None:
+        if not args.race_state_url:
+            parser.error("--race-state-url must not be empty")
+        state_readback_url = same_origin_url(base_url, args.race_state_url)
+        if not state_readback_url:
+            parser.error("--race-state-url must remain on the trusted --api-base origin")
+        if _json_pointer_tokens(args.race_state_json_pointer) is None:
+            parser.error("--race-state-json-pointer must be a valid RFC 6901 JSON Pointer")
+        if args.race_request_budget < RACE_REQUESTS_PER_CASE + 4:
+            parser.error(
+                "--race-request-budget must be at least 14 when state verification is enabled"
+            )
 
     auth_headers = {}
     if args.cookie:
@@ -541,6 +810,7 @@ def main():
             log(f"  {category}: {len(eps)} endpoints")
 
     all_findings = []
+    race_request_budget = RequestBudget(args.race_request_budget)
 
     # E-commerce tests
     for ep in classified["ecommerce"][:10] if not args.endpoint else []:
@@ -550,7 +820,12 @@ def main():
         all_findings.extend(test_price_manipulation(url, method, auth_headers, args.delay))
         all_findings.extend(test_quantity_overflow(url, method, auth_headers, args.delay))
         all_findings.extend(test_coupon_stacking(url, method, auth_headers, args.delay))
-        all_findings.extend(test_race_condition(url, method, auth_headers, args.delay))
+        all_findings.extend(test_race_condition(
+            url, method, auth_headers, args.delay,
+            state_readback_url=state_readback_url,
+            state_json_pointer=args.race_state_json_pointer,
+            request_budget=race_request_budget,
+        ))
 
     # Financial tests
     for ep in classified["financial"][:10] if not args.endpoint else []:
@@ -558,7 +833,12 @@ def main():
         method = ep["method"]
 
         all_findings.extend(test_negative_amounts(url, method, auth_headers, args.delay))
-        all_findings.extend(test_race_condition(url, method, auth_headers, args.delay))
+        all_findings.extend(test_race_condition(
+            url, method, auth_headers, args.delay,
+            state_readback_url=state_readback_url,
+            state_json_pointer=args.race_state_json_pointer,
+            request_budget=race_request_budget,
+        ))
 
     # User management tests
     for ep in classified["user_management"][:10] if not args.endpoint else []:
@@ -575,7 +855,12 @@ def main():
         all_findings.extend(test_quantity_overflow(url, "POST", auth_headers, args.delay))
         all_findings.extend(test_coupon_stacking(url, "POST", auth_headers, args.delay))
         all_findings.extend(test_negative_amounts(url, "POST", auth_headers, args.delay))
-        all_findings.extend(test_race_condition(url, "POST", auth_headers, args.delay))
+        all_findings.extend(test_race_condition(
+            url, "POST", auth_headers, args.delay,
+            state_readback_url=state_readback_url,
+            state_json_pointer=args.race_state_json_pointer,
+            request_budget=race_request_budget,
+        ))
         all_findings.extend(test_privilege_escalation(url, "PUT", auth_headers, args.delay))
 
     # Deduplicate findings by (type, url, test_name)
@@ -608,6 +893,8 @@ def main():
             "ecommerce_endpoints": len(classified["ecommerce"]),
             "financial_endpoints": len(classified["financial"]),
             "user_mgmt_endpoints": len(classified["user_management"]),
+            "race_requests_attempted": race_request_budget.used,
+            "race_request_budget": race_request_budget.limit,
         },
         "classified_endpoints": {k: len(v) for k, v in classified.items()},
         "findings": all_findings,
