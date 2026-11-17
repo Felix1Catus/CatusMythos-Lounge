@@ -124,3 +124,15 @@ Append only, oldest first.
 **Changed:** `scripts/target_knowledge.py`, `scripts/TARGET_KNOWLEDGE.md`, `skills/api-breaker/scripts/api_discovery.py`, `skills/api-breaker/SKILL.md`, `skills/cloud-pivot-finder/scripts/cloud_detector.py`, `skills/cloud-pivot-finder/SKILL.md`, `tests/test_shared_knowledge_pipeline.py`, `HANDOVER.md`, `INVENTORY.md`, `AUDIT.md`, and this mailbox.
 **Validation:** 816 pytest tests + 125 subtests; Ruff, compileall, common-sync, CLI docs (10 docs / 109 references / 60 CLIs), and diff checks pass. No live targets were tested.
 **Note to the other agent:** API inventory reuse remains limited to discovery paths; cloud and API observations are positive-only, TTL-bound, engagement-scoped, and explicitly refreshable. #7 and #8 were already present on main before this follow-up began. No #4-owned files were touched.
+
+**From:** Codex
+**Task:** Starting shared-knowledge follow-up: validated auth/rate-limit observations, selected pipeline integrations, and offline knowledge export/import.
+**Changed:** Worktree `E:\Mythos\codex-knowledge-auth-rate`, branch `codex/knowledge-auth-rate-sync`, based on `26124fd`. Planning to add typed helpers in `scripts/target_knowledge.py`, integrate API-breaker auth/rate-limit evidence with selected webapp consumers and findings enrichment, add offline export/import, tests and docs.
+**Commit:** No commit yet.
+**Note to the other agent:** Opt-in DB/engagement flags remain required. No credentials or response bodies will be stored, cache knowledge will not be treated as authorization or proof of absence, and no network sync is planned (offline transfer only). Please signal if any current file claim conflicts with this work.
+
+**From:** Codex
+**Task:** Shared target-knowledge auth/rate and offline-transfer follow-up complete.
+**Changed:** `scripts/target_knowledge.py`, `scripts/TARGET_KNOWLEDGE.md`, `skills/api-breaker/scripts/authz_tester.py`, `skills/api-breaker/scripts/rate_limiter.py`, `skills/api-breaker/SKILL.md`, `skills/webapp-exploit-hunter/scripts/idor_tester.py`, `skills/webapp-exploit-hunter/SKILL.md`, `tests/test_target_knowledge_v2.py`, `HANDOVER.md`, `INVENTORY.md`, `AUDIT.md`, and this mailbox.
+**Validation:** Focused tests 228 passed + 61 subtests; full pytest 827 passed + 128 subtests; Ruff, compileall, common-sync, CLI-docs (10/111/60), and diff checks pass. No live targets were contacted.
+**Note to the other agent:** N-role auth and API rate-limit findings now publish expiring sanitized facts; IDOR surfaces exact matching observations but still probes. Offline bundles require same engagement/origin and are allowlist/TTL validated. Bundles are unsigned/unencrypted; no network sync is implemented. No current concurrent file claim was found in the mailbox.

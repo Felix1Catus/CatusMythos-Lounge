@@ -842,3 +842,18 @@ Evidence at this checkpoint: `tests/test_shared_knowledge_pipeline.py` plus
 `tests/test_target_knowledge.py` passed 41 tests + 29 subtests; full pytest
 passed 816 tests + 125 subtests. Ruff, compileall, helper-sync, CLI docs
 (10/109/60), and `git diff --check` passed. No live target was tested.
+
+## 2026-11-17 addendum — shared knowledge auth/rate and offline transfer
+
+Implemented structured, expiring auth and rate-limit observations. The N-role
+API authorization matrix and API rate-limit tester publish observations;
+IDOR consumes only fresh exact-resource facts matching its auth-header digest
+for report context and still executes the selected probes. Finding import
+remains advisory and does not alter severity/confidence. Offline bundles are
+versioned, origin/engagement-bound, size/row/TTL-bounded, allowlist-sanitized,
+and preserve original expiry/provenance. Stale imports cannot replace newer
+records. Bundles are unsigned and unencrypted and should move only through
+trusted storage. No network sync service/client was added and no live target
+was contacted. Focused regression matrix: **228 passed + 61 subtests**; full
+pytest: **827 passed + 128 subtests**. Ruff, compileall, common-sync, CLI docs
+(10/111/60), and final diff checks pass.

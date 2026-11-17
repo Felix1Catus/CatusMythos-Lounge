@@ -6,6 +6,7 @@ Author: orizon.one
 """
 
 import argparse
+import importlib.util
 import json
 import math
 import re
@@ -13,6 +14,7 @@ import time
 import urllib.request
 import urllib.parse
 from datetime import datetime, timezone
+from pathlib import Path
 
 
 from _common import http_request, log, same_origin_url, success, vuln, warn
@@ -180,7 +182,7 @@ def build_role_matrix(roles, extra_headers=None, cookies=None):
     return matrix
 
 
-def test_bola_matrix(base_url, endpoints, roles, delay=0, allow_mutation_write=False):
+def test_bola_matrix(base_url, endpoints, roles, delay=0, allow_mutation_write=False, knowledge=None):
     """N-role generalization of test_bola(): for every role that can
     itself read an object (the "source" role for that object), test
     EVERY OTHER role in the matrix against those same object IDs -- a
@@ -226,6 +228,9 @@ def test_bola_matrix(base_url, endpoints, roles, delay=0, allow_mutation_write=F
 
         for source in roles:
             status_src, _, body_src = http_request(probe_url, headers=source["headers"])
+            if knowledge is not None:
+                knowledge.record_auth_outcome(probe_url, source["name"], status_src, source["headers"],
+                                              "api-breaker/authz_tester", resource=path)
             if delay:
                 time.sleep(delay)
             if status_src != 200:
@@ -254,6 +259,10 @@ def test_bola_matrix(base_url, endpoints, roles, delay=0, allow_mutation_write=F
                             break
                         status_other, _, body_other = http_request(
                             id_url, method=method, headers=other["headers"])
+                        if knowledge is not None:
+                            knowledge.record_auth_outcome(id_url, other["name"], status_other,
+                                                         other["headers"], "api-breaker/authz_tester",
+                                                         resource=path)
                         if delay:
                             time.sleep(delay)
                         tested += 1
@@ -293,7 +302,7 @@ def test_bola_matrix(base_url, endpoints, roles, delay=0, allow_mutation_write=F
     return findings
 
 
-def test_bfla_matrix(base_url, roles, delay=0, allow_mutation_write=False):
+def test_bfla_matrix(base_url, roles, delay=0, allow_mutation_write=False, knowledge=None):
     """N-role generalization of test_bfla(): probes every role against
     every admin/privileged path, but -- unlike the single-token original,
     which has no way to know whether its one token IS the admin -- an
@@ -327,6 +336,9 @@ def test_bfla_matrix(base_url, roles, delay=0, allow_mutation_write=False):
 
                 status, _resp_headers, body = http_request(
                     url, method=method, headers=req_headers, data=data)
+                if knowledge is not None:
+                    knowledge.record_auth_outcome(url, role["name"], status, role["headers"],
+                                                  "api-breaker/authz_tester")
                 if delay:
                     time.sleep(delay)
 
@@ -626,6 +638,8 @@ def main():
              "role's cookie.",
     )
     parser.add_argument("--api-base", required=True, help="Trusted API base URL for endpoint scoping")
+    parser.add_argument("--knowledge-db", help="Opt-in shared SQLite target-knowledge file")
+    parser.add_argument("--engagement", help="Required engagement namespace when knowledge is enabled")
     parser.add_argument("--delay", type=parse_delay, default=0,
                         help="Delay between requests (0-60 seconds)")
     parser.add_argument(
@@ -634,6 +648,23 @@ def main():
         help="Enable POST/PUT/PATCH/DELETE authorization probes that can change target state",
     )
     args = parser.parse_args()
+
+    if args.knowledge_db and not args.engagement:
+        parser.error("--knowledge-db requires --engagement")
+    if args.engagement and not args.knowledge_db:
+        parser.error("--engagement requires --knowledge-db")
+    knowledge = None
+    if args.knowledge_db:
+        module_path = Path(__file__).resolve().parents[3] / "scripts" / "target_knowledge.py"
+        if not module_path.is_file():
+            parser.error("shared knowledge requires the full plugin checkout, including scripts/target_knowledge.py")
+        spec = importlib.util.spec_from_file_location("catus_target_knowledge", module_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        try:
+            knowledge = module.KnowledgeStore(args.knowledge_db, args.engagement)
+        except (ValueError, OSError, module.sqlite3.Error) as exc:
+            parser.error(str(exc))
 
     if args.role and (args.token or args.token_b):
         parser.error("--role and --token/--token-b are mutually exclusive -- use one mode or the other")
@@ -688,10 +719,12 @@ def main():
         all_findings.extend(test_bola_matrix(
             base_url, endpoints, roles, args.delay,
             allow_mutation_write=args.allow_mutation_write,
+            knowledge=knowledge,
         ))
         all_findings.extend(test_bfla_matrix(
             base_url, roles, args.delay,
             allow_mutation_write=args.allow_mutation_write,
+            knowledge=knowledge,
         ))
     else:
         all_findings.extend(test_bola(

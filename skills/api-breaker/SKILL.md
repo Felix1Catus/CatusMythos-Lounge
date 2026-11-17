@@ -246,6 +246,17 @@ has no way to make this distinction, since it doesn't know whether its one
 token IS the admin. `--role-cookie NAME:COOKIE` supplies a session cookie for
 one named role; a role never inherits another role's cookie.
 
+To publish short-lived role/status observations for the same authorized
+engagement, opt in explicitly:
+
+```bash
+python3 scripts/authz_tester.py --input {schema_file} --api-base {api_url} --role viewer:{viewer_token} --role admin:{admin_token} --knowledge-db {engagement_db} --engagement {engagement_name}
+```
+
+Only role labels and response status/outcome are stored; credential headers
+are hashed as context. These observations expire after 15 minutes and do not
+replace authorization probes or establish access-control impact alone.
+
 ### Step 5: Mass Assignment Testing
 
 ```bash
@@ -267,6 +278,12 @@ For each creation/update endpoint:
 ```bash
 python3 scripts/rate_limiter.py --api-base {api_url}
 ```
+
+To publish normalized observations, add `--knowledge-db {engagement_db}
+--engagement {engagement_name}`. This stores bounded status counts and
+allowlisted numeric rate-limit/Retry-After signals, not arbitrary response
+headers or bodies. A fresh rate-limit test still runs every time; observations
+are advisory and expire after 15 minutes.
 
 Use the same explicit `--api-base` with `--input`; imported URLs are scoped to
 that exact origin before credentials or rate-limit probes are sent. The

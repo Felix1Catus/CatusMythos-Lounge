@@ -439,5 +439,20 @@ Ruff/compileall/common-sync/CLI-docs (**10/102/59**) pass. Independent Claude CL
 The user selected Codex desktop terminal visibility; one command paste starts
 watch because app tools expose open/read, not terminal input. The view does not
 embed Claude into Codex's native chat sidebar, approve tasks, or enable parallel
-coding authors. Real two-provider read-only demonstration passed; #6–#8 remain
-unqueued drafts with author/reviewer assignments recorded in HANDOVER.md.
+coding authors. Real two-provider read-only demonstration passed.
+
+## 2026-11-17 addendum — auth/rate context and offline transfer
+
+The shared store now supports role-labeled auth outcomes keyed by request
+header digest and bounded rate-limit observations with normalized Retry-After
+and numeric rate headers. `authz_tester.py` and `rate_limiter.py` publish these
+facts; `idor_tester.py` displays exact endpoint/auth-context matches while
+retaining normal probes. `import_findings.py` continues to include knowledge
+as advisory metadata. `target_knowledge.py --export/--import` provides
+validated offline transfer with same-engagement/origin checks, kind allowlists,
+TTL limits, and newer-local-wins conflict handling. No network sync or
+cryptographic trust mechanism is provided.
+
+Focused regression matrix: **228 passed + 61 subtests**. Full pytest:
+**827 passed + 128 subtests**. Ruff, compileall, common-sync, CLI docs
+(10/111/60), and diff checks pass. No live target was tested.

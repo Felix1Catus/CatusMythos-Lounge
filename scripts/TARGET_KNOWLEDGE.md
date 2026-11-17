@@ -1,4 +1,4 @@
-# Shared target knowledge — v1
+# Shared target knowledge — local v2
 
 `target_knowledge.py` is stdlib-only, cross-cutting infrastructure. It never
 sends network requests or executes probes. SQLite transactions and a 10-second
@@ -33,7 +33,7 @@ v1 does not maintain a historical event log. Unknown schema versions or
 unreadable/corrupt databases fail explicitly instead of silently disabling
 coordination or resetting state.
 
-## Five integration points
+## Eight integration points
 
 1. `recon-dominator/scripts/tech_fingerprint.py`: publishes technologies,
    advertised component versions, and positive WAF fingerprints (1-hour TTL).
@@ -71,10 +71,24 @@ coordination or resetting state.
    and legacy-version checks still run. Empty results are never cached.
    `--knowledge-refresh` deletes only that origin/base-path/auth-context
    inventory before fresh endpoint discovery.
+6. `api-breaker/scripts/authz_tester.py`: stores observed N-role response
+   outcomes per endpoint and role label. Auth headers are hashed as context;
+   credentials and response bodies are not persisted. Status-only evidence
+   does not become a confirmed authorization finding.
+7. `api-breaker/scripts/rate_limiter.py`: stores bounded status counts and
+   normalized rate-limit/Retry-After metadata per endpoint, method, and auth
+   context. It always performs the requested bounded assessment; a cached
+   result never suppresses a fresh rate-limit test.
+8. `webapp-exploit-hunter/scripts/idor_tester.py`: displays fresh matching
+   auth/rate observations in its output as advisory context. It does not skip
+   or alter the requested IDOR probes.
 
-Auth/rate observations expire after 15 minutes and store only status/path.
-They do not establish the user's role, prove authentication is required, infer
-a rate-limit window, or automatically change probing behavior.
+Auth/rate observations expire after 15 minutes. Auth role labels describe only
+the operator-declared test identity; they do not independently establish that
+identity's privileges or prove a global authentication requirement. A rate
+observation records only the bounded test conditions and signals seen; it does
+not infer a complete rate-limit policy/window or automatically change probing
+behavior.
 
 ## Reuse from another pipeline script
 
@@ -93,6 +107,40 @@ Kinds are `technology`, `waf`, `auth`, `rate_limit`, `payload_failure`,
 Confidence is `observed`, `confirmed`, or `hypothesis`; provenance is retained.
 Only intentionally selected non-secret metadata belongs in `observe()`.
 
+## Auth and rate-limit observations
+
+`authz_tester.py` can publish role-labeled endpoint status observations. Role
+labels and status/outcome are retained; Authorization/Cookie/header values are
+only represented by a SHA-256 context digest. A 2xx/401/403 status is an
+observation for that exact role and endpoint, not a general authorization
+conclusion. `rate_limiter.py` stores bounded status counts, method, request
+count, chosen delay, and normalized numeric rate-limit/Retry-After signals.
+Other response headers and bodies are excluded. Both records expire after 15
+minutes. `idor_tester.py` displays only fresh observations matching its exact
+endpoint and auth-header context; it still performs all selected IDOR probes.
+`import_findings.py` can carry these observations as context, with provenance
+and confidence, without changing findings or evidence levels.
+
+## Offline transfer
+
+Transfer facts between isolated machines using a bounded JSON bundle. Export
+and import are local file operations only; there is no network sync client.
+The selected engagement name and exact origin must match on import. Import
+rejects unknown formats, oversized bundles, expired observations, excessive
+TTLs, malformed metadata, and values outside per-kind allowlists. Only
+unexpired supported observations are exported; imported expiry and provenance
+are preserved. Example:
+
+```bash
+python3 scripts/target_knowledge.py --db targets/engagement/knowledge.sqlite --engagement engagement --target https://app.example.test --export targets/engagement/app-knowledge.json
+python3 scripts/target_knowledge.py --db targets/engagement/knowledge.sqlite --engagement engagement --target https://app.example.test --import targets/engagement/app-knowledge.json
+```
+
+Bundles and the local database contain engagement-sensitive target metadata.
+Move them only through trusted, access-controlled storage. Bundles are not
+encrypted or cryptographically signed; do not import files from untrusted
+sources. Import cannot grant target authorization.
+
 ## Data handling and limits
 
 The integrations do not persist response bodies, raw headers, credentials,
@@ -103,14 +151,14 @@ contain sensitive engagement information. Keep the SQLite file private under
 normal filesystem permissions and outside version control. Engagement names
 isolate application queries; they are not a security boundary between users
 who can read the same database file. Only trusted operators/processes should
-write facts. There is no remote synchronization, encryption, purge/history UI,
-export of secrets, or target authorization granted by the store.
+write facts. There is no remote synchronization, encryption, purge/history
+UI, or target authorization granted by the store.
 
 Deliberately deferred: other SQLi modes and the other vulnerability testers;
-a role-aware auth model;
-Retry-After/reset-window modeling; active WAF auto-escalation (#6); executable
+typed policy parsing beyond numeric Retry-After/rate headers; authenticated
+remote sync and key management; active WAF auto-escalation (#6); executable
 end-to-end chains (#7); business-context severity (#8); cross-origin inference;
 a central decision-making orchestrator. The API inventory is endpoint
 discovery metadata, not permission to skip vulnerability-specific tests; cloud
-and API caches remain optional and have short TTLs. #4's N-role matrix and
-these five explicit knowledge integrations are now in the main pipeline.
+and API caches remain optional and have short TTLs. #4's N-role matrix and the
+current knowledge integrations are opt-in and do not skip vulnerability tests.

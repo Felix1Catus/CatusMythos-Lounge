@@ -1182,3 +1182,31 @@ Deliberately out of scope: automatic crawling/classification of application
 purpose, external model/API calls, unsupported context inference from URLs or
 vulnerability types, changing CVSS or the static technical baseline, and
 cross-engagement context sharing.
+
+## 2026-11-17 — Shared target knowledge auth/rate and offline transfer
+
+Expanded `scripts/target_knowledge.py` with role-labeled auth outcome records,
+bounded rate-limit observations (status counts, numeric allowlisted rate
+headers, and normalized Retry-After), and strict offline JSON bundle export /
+import. Bundle import requires the same explicit engagement and exact origin,
+validates each kind against allowlists and TTL ceilings, rejects expired or
+malformed data, preserves provenance and expiry, and will not replace newer
+local observations with older bundle rows. Bundles are local and unsigned;
+transfer them only through trusted storage.
+
+`api-breaker/authz_tester.py` publishes N-role matrix response observations
+with credential headers hashed as context. `rate_limiter.py` publishes
+normalized per-endpoint observations; every requested fresh rate-limit test
+still runs. `webapp-exploit-hunter/idor_tester.py` displays fresh matching
+auth/rate context without skipping probes. Existing finding-import enrichment
+carries matching facts without changing severity or evidence confidence. No
+credential or response-body persistence was added.
+
+New `tests/test_target_knowledge_v2.py` covers bundle boundaries, role/context
+separation, secret exclusion, TTL/origin/engagement checks, stale conflict
+handling, N-role/rate publication, and IDOR context reuse. Network sync,
+encryption, and import from untrusted bundles remain out of scope; offline
+transfer is not an authenticated sync protocol. Validation: full pytest
+**827 passed + 128 subtests**; Ruff, compileall, common-sync, CLI docs
+(**10 docs / 111 references / 60 CLIs**), and final diff checks pass. No live
+targets were tested.

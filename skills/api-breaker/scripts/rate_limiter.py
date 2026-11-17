@@ -6,12 +6,14 @@ Author: orizon.one
 """
 
 import argparse
+import importlib.util
 import json
 import time
 import urllib.parse
 import concurrent.futures
 from datetime import datetime, timezone
 import math
+from pathlib import Path
 
 
 from _common import http_request, log, same_origin_url, success, warn
@@ -830,7 +832,29 @@ def main():
     parser.add_argument("--count", type=int, default=120, help="Number of requests to send (default: 120)")
     parser.add_argument("--concurrent", action="store_true", help="Send requests concurrently")
     parser.add_argument("--delay", type=float, default=0, help="Delay between requests (seconds)")
+    parser.add_argument("--knowledge-db", help="Opt-in shared SQLite target-knowledge file")
+    parser.add_argument("--engagement", help="Required engagement namespace when knowledge is enabled")
+    parser.add_argument("--knowledge-refresh", action="store_true", help="Replace prior rate-limit observations")
     args = parser.parse_args()
+
+    if args.knowledge_db and not args.engagement:
+        parser.error("--knowledge-db requires --engagement")
+    if args.engagement and not args.knowledge_db:
+        parser.error("--engagement requires --knowledge-db")
+    if args.knowledge_refresh and not args.knowledge_db:
+        parser.error("--knowledge-refresh requires --knowledge-db")
+    knowledge = None
+    if args.knowledge_db:
+        module_path = Path(__file__).resolve().parents[3] / "scripts" / "target_knowledge.py"
+        if not module_path.is_file():
+            parser.error("shared knowledge requires the full plugin checkout, including scripts/target_knowledge.py")
+        spec = importlib.util.spec_from_file_location("catus_target_knowledge", module_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        try:
+            knowledge = module.KnowledgeStore(args.knowledge_db, args.engagement)
+        except (ValueError, OSError, module.sqlite3.Error) as exc:
+            parser.error(str(exc))
 
     if not 1 <= args.count <= MAX_RATE_LIMIT_REQUESTS:
         parser.error(f"--count must be between 1 and {MAX_RATE_LIMIT_REQUESTS}")
@@ -885,6 +909,13 @@ def main():
     # Test each endpoint
     for url in endpoints[:15]:
         log(f"\nTesting rate limit: {url}")
+        knowledge_context = None
+        knowledge_path = urllib.parse.urlsplit(url).path or "/"
+        if knowledge is not None:
+            knowledge_context = knowledge.digest({"method": "GET", "headers": extra_headers})
+            if args.knowledge_refresh:
+                knowledge.forget(url, "rate_limit", "behavior:GET", context=knowledge_context,
+                                 resource=knowledge_path)
 
         if args.concurrent:
             results = send_concurrent_requests(url, args.count, extra_headers=extra_headers)
@@ -893,6 +924,15 @@ def main():
 
         results["url"] = url
         endpoint_results.append(results)
+        if knowledge is not None:
+            try:
+                knowledge.record_rate_limit(
+                    url, "GET", results.get("status_codes", {}), results.get("rate_limit_headers", {}),
+                    requests_sent=results.get("total_sent", 0), delay=args.delay,
+                    auth_headers=extra_headers, source="api-breaker/rate_limiter", resource=knowledge_path,
+                )
+            except (ValueError, OSError, module.sqlite3.Error) as exc:
+                warn(f"Could not save rate-limit knowledge for {url}: {exc}")
 
         if results.get("rate_limit_observed") or results.get("rate_limited_at"):
             if results.get("rate_limited_at") is not None:
@@ -995,6 +1035,7 @@ def main():
             "not_rate_limited": no_limit_count,
             "total_findings": len(all_findings),
             "requests_per_endpoint": args.count,
+            "knowledge_enabled": knowledge is not None,
         },
         "endpoint_results": endpoint_results,
         "findings": all_findings,
