@@ -801,3 +801,28 @@ Ruff, compileall, common-sync, CLI-doc checks (**10/104/60**), and final diff
 checks pass. Only loopback HTTP fixture traffic was used. Design limit: this
 executor validates that a redirect and downstream fetch can occur; it does
 not execute arbitrary generated chain steps or imported payloads.
+
+
+## 2026-11-17 addendum — Improvement #8 contextual business severity
+
+Surveyed static severity assignment in `import_findings.py`, technical CVSS
+and chain amplification in `calculate_impact.py`, report rendering, and the
+correlation snapshots. No existing finding field provided a consistent
+business-asset context. Added a narrowly versioned optional asset profile and
+preserved an explicit per-finding `business_context` object through correlation.
+
+`scripts/context_severity.py` validates exact-host context, service purpose,
+business criticality, data sensitivity, affected scope, context evidence, and
+chain-specific impact evidence. It computes a separate contextual tier from
+the highest documented consequence factor. Technical severity/CVSS remain
+unchanged. Only confirmed chains receive an assigned contextual tier; an
+unconfirmed match is potential-only. Reports expose context evidence and note
+that supplied context has not been independently verified.
+
+Focused regression set: **88 passed + 3 subtests**. It covers the same finding
+under public-blog and tenant-payment contexts, source evidence, artifact
+propagation, no-match, unconfirmed gating, malformed profiles, exact-host
+isolation, CLI profile loading, and report output. Ruff, compileall,
+common-sync, CLI-doc checks (**10/105/60**), and diff check passed. Full pytest: **805 passed + 125 subtests passed**; Ruff, compileall, common-sync, CLI-docs
+(**10/105/60**), and final diff checks pass. No external target probes or hosted
+model/API calls.

@@ -35,7 +35,7 @@ checked by `tests/test_plugin_bootstrap_hook.py` and the same matrix.
 
 | Coverage | Skills |
 |---|---|
-| Broad script-level regression matrices | `recon-dominator` (59), `cloud-pivot-finder` (38), `attack-path-architect` (28), `16-ai-llm-security` (87), `03-exploit-development` (14), `vuln-chain-composer` (73), legacy `webapp-exploit-hunter` testers (87) |
+| Broad script-level regression matrices | `recon-dominator` (59), `cloud-pivot-finder` (38), `attack-path-architect` (28), `16-ai-llm-security` (87), `03-exploit-development` (14), `vuln-chain-composer` (88), legacy `webapp-exploit-hunter` testers (87) |
 | Focused or partial coverage | `api-breaker` (focused scope/discovery/business-logic/GraphQL/BOLA/BFLA/auth-analyzer/rate-limit/report regressions); `webapp-exploit-hunter` browser/crawler/DOM and selected CLI paths; `web-cache-auditor` (12 focused tests for its script) |
 | Plugin infrastructure | `tests/test_bootstrap.py` (30): parsing, install command construction, retry/cache validation, browser setup, PATH readiness, and nonzero preflight gates |
 | No scripts (manual methodology) | `web-protocol-auditor` |
@@ -249,16 +249,28 @@ specific fixes, test themes, browser limitations, and the latest verification.
   engagement orchestration remains unverified.
 - **Overlaps:** prioritization/chaining logic overlaps `vuln-chain-composer`.
 
-### vuln-chain-composer — `[73-TEST MATRIX; all 7 original scripts + guarded executor covered]`
+### vuln-chain-composer — `[88-TEST MATRIX; chain pipeline, executor, and context severity covered]`
 - **Use:** correlate findings across domains into multi-step chains, compute
-  chained impact, generate end-to-end PoCs + bug-bounty reports.
-- **CLIs (6 + `_common` 52 ln):** `import_findings` (771 ln), `correlate`,
-  `build_chains`, `calculate_impact`, `generate_chain_poc`, `generate_report`.
-- **Coverage:** `tests/test_vuln_chain_composer.py` covers all seven scripts'
-  key normalization, evidence, chaining, CVSS, PoC, and report logic. It fixes
-  category derivation that suppressed multi-word finding chains. Some generated
-  chain PoCs intentionally contain operator-filled TODO scaffolds; arbitrary
-  chains are not guaranteed to become fully executable reproductions.
+  chained impact, generate guarded PoC previews, and produce bug-bounty reports.
+- **CLIs (7 + pure helper):** `import_findings` (771 ln), `correlate`,
+  `build_chains`, `calculate_impact`, `execute_chain`, `generate_chain_poc`,
+  `generate_report`; `context_severity` is a pure shared helper.
+- **Coverage:** `tests/test_vuln_chain_composer.py` and
+  `tests/test_contextual_severity.py` cover finding normalization, evidence,
+  chaining, technical CVSS, the bounded executor, evidence-linked contextual
+  severity, PoC preview safety, and reporting. Business context is an explicit
+  exact-host asset profile with provenance and chain-specific impact evidence;
+  its separate contextual tier never alters CVSS and is assigned only to
+  confirmed chains. The executor supports only confirmed redirect-allowlist to
+  SSRF chains; other chains remain manual analyses.
+
+Context severity accepts evidence-linked business context from finding
+artifacts or `calculate_impact.py --business-context`. Context is exact-host
+scoped and requires both business-classification evidence and chain-specific
+impact evidence. It is separate from technical CVSS and only assigned on
+confirmed chains; unconfirmed chains receive a potential-only tier. The rubric
+reports the highest documented criticality, sensitivity, or affected-scope
+factor and does not independently verify operator-supplied evidence.
 
 ### 16-ai-llm-security — `[87-TEST MATRIX; all 5 tester scripts covered]`
 - **Use:** LLM/AI app security — prompt injection, jailbreak, OWASP LLM Top 10,

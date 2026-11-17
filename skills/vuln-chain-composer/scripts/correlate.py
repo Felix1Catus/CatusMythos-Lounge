@@ -485,6 +485,20 @@ def find_chains(findings):
     }
     chains.extend(discover_generic_chains(findings, exclude_pairs=already_paired))
 
+    # Carry explicit business-context evidence with the finding snapshots used
+    # by each chain. Keep it separate from type/severity so downstream impact
+    # assessment can report context without changing technical CVSS inputs.
+    findings_by_id = {finding.get("id"): finding for finding in findings}
+    for chain in chains:
+        chain_findings = [chain.get("primary_finding"), *chain.get("supporting_findings", [])]
+        for snapshot in chain_findings:
+            if not isinstance(snapshot, dict):
+                continue
+            source = findings_by_id.get(snapshot.get("id"), {})
+            context = source.get("business_context")
+            if context is not None:
+                snapshot["business_context"] = context
+
     # Sort by severity/impact
     severity_order = {"CRITICAL": 4, "HIGH": 3, "MEDIUM": 2, "LOW": 1, "INFO": 0}
     chains.sort(key=lambda c: severity_order.get(c["overall_severity"], 0), reverse=True)

@@ -198,6 +198,10 @@ def normalize_finding(finding, source_tool):
         "requires": [],
         "raw": finding,
     }
+    # Preserve operator-supplied, evidence-linked application context so the
+    # correlation stage can carry it forward to impact assessment.
+    if "business_context" in finding:
+        normalized["business_context"] = finding["business_context"]
 
     # Determine what this finding ENABLES for a follow-on finding (its
     # contribution to a chain as the earlier step) and what it REQUIRES to

@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 
 
 from _common import cvss_round_up, log, score_to_severity, success, warn
+from context_severity import assess_chain_context, load_context_document
 # CVSS v3.1 metric values
 CVSS_VALUES = {
     "AV": {"N": 0.85, "A": 0.62, "L": 0.55, "P": 0.20},
@@ -196,7 +197,7 @@ def calculate_cvss_score(metrics, scope):
     return cvss_round_up(score)
 
 
-def calculate_chain_cvss(chain):
+def _calculate_technical_chain_cvss(chain):
     """Calculate CVSS for a chain based on its combined impact."""
     chain_name = chain.get("name", "")
 
@@ -281,6 +282,15 @@ def calculate_chain_cvss(chain):
     }
 
 
+def calculate_chain_cvss(chain, business_context=None):
+    """Return technical CVSS plus a separate evidence-linked context assessment."""
+    result = _calculate_technical_chain_cvss(chain)
+    result["business_context"] = assess_chain_context(
+        chain, business_context=business_context, technical_severity=result["severity"]
+    )
+    return result
+
+
 def build_vector(metrics):
     """Build CVSS v3.1 vector string."""
     return (
@@ -293,6 +303,7 @@ def build_vector(metrics):
 def main():
     parser = argparse.ArgumentParser(description="Impact Calculator - orizon.one")
     parser.add_argument("--input", "-i", required=True, help="Chains JSON file (output of build_chains.py or correlate.py)")
+    parser.add_argument("--business-context", help="Optional versioned JSON asset-context file; adds a separate contextual severity, never changes CVSS")
     parser.add_argument("--output", "-o", help="Output JSON file")
     args = parser.parse_args()
 
@@ -300,6 +311,14 @@ def main():
 
     with open(args.input) as f:
         data = json.load(f)
+
+    business_context = None
+    if args.business_context:
+        try:
+            with open(args.business_context, encoding="utf-8") as f:
+                business_context = load_context_document(json.load(f))
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            parser.error(f"invalid business context: {exc}")
 
     chains = data.get("chains", [])
     log(f"Loaded {len(chains)} chains for impact calculation")
@@ -311,7 +330,7 @@ def main():
     recalculated = []
     severity_changes = 0
     for chain in chains:
-        cvss_result = calculate_chain_cvss(chain)
+        cvss_result = calculate_chain_cvss(chain, business_context)
         original_severity = chain.get("overall_severity", chain.get("primary_finding", {}).get("severity", "MEDIUM"))
 
         chain_result = dict(chain)
@@ -349,6 +368,10 @@ def main():
             "severity_amplifications": severity_changes,
             "max_cvss": max_score,
             "avg_cvss": round(avg_score, 1),
+            "contextual_assessments": sum(
+                c["impact_analysis"]["business_context"]["status"] == "matched_confirmed"
+                for c in recalculated
+            ),
         },
         "chains": recalculated,
     }
@@ -363,6 +386,7 @@ def main():
     print(f"{'='*60}")
     print(f"  Chains analyzed        : {len(recalculated)}")
     print(f"  Severity amplifications: {severity_changes}")
+    print(f"  Contextual assessments : {output['meta']['contextual_assessments']}")
     print(f"  Max CVSS score         : {max_score}")
     print(f"  Avg CVSS score         : {round(avg_score, 1)}")
     print(f"\n  By Chain Severity:")
@@ -376,6 +400,11 @@ def main():
         rule_info = f" [matched rule]" if rule else " [heuristic]"
         print(f"    {i+1}. {c.get('name', 'Unknown')} - CVSS {c['cvss_score']} ({c['chain_severity']})")
         print(f"       Vector: {c['cvss_vector']}")
+        context_assessment = c["impact_analysis"]["business_context"]
+        if context_assessment["contextual_severity"]:
+            print(f"       Business context : {context_assessment['contextual_severity']} (separate from CVSS)")
+        elif context_assessment["potential_contextual_severity"]:
+            print(f"       Potential context: {context_assessment['potential_contextual_severity']} (unconfirmed)")
         print(f"       Amplification: {amp}{rule_info}")
     print(f"{'='*60}\n")
 

@@ -1125,3 +1125,35 @@ interaction, imported-payload execution, auth workflows, dynamic cross-host
 state, and chain-specific remediation execution. Validation: **790 tests + 122
 subtests passed**; Ruff, compileall, common-sync, CLI-docs (**10/104/60**), and
 final diff checks pass. Only localhost fixture HTTP requests were sent.
+
+
+## 2026-11-17 addendum — Improvement #8: evidence-linked business context
+
+Added `scripts/context_severity.py`, a pure rubric helper that scores explicit
+asset business context without inspecting vulnerability types or changing
+CVSS. Context can travel on an imported finding's `business_context` object or
+be supplied to `calculate_impact.py --business-context` as a versioned exact-
+host asset profile. `correlate.py` preserves attached context on chain finding
+snapshots; `calculate_impact.py` reports it separately as contextual severity;
+`generate_report.py` renders the technical rating and contextual tier in
+separate fields. The schema requires service name/purpose, classified business
+criticality, data sensitivity and affected scope, evidence for those
+classifications, and chain-specific `impact_evidence`. Reports retain source
+and evidence and state that operator context is not independently verified.
+
+The deterministic rubric uses only the highest documented consequence factor
+(criticality, sensitivity, or affected scope), with a stated rationale. Exact
+host matching prevents context bleed across sibling subdomains. A contextual
+tier is assigned only for a confirmed chain; otherwise a clearly labeled
+potential tier is retained. The existing technical severity, CVSS score,
+vector, and severity mapping remain unchanged. Regression matrix:
+`tests/test_contextual_severity.py` plus `tests/test_vuln_chain_composer.py`.
+Coverage includes public-blog versus tenant-payment context, profile/schema
+boundaries, exact-host isolation, artifact-to-chain propagation, CLI use,
+reporting, and unconfirmed gating. Focused tests: **88 passed + 3 subtests**;
+full pytest: **805 passed + 125 subtests passed**. Ruff, compileall, common-sync, CLI-docs (**10/105/60**), and final diff checks pass.
+
+Deliberately out of scope: automatic crawling/classification of application
+purpose, external model/API calls, unsupported context inference from URLs or
+vulnerability types, changing CVSS or the static technical baseline, and
+cross-engagement context sharing.

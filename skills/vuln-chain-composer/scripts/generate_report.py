@@ -240,10 +240,14 @@ def generate_hackerone_report(chain, poc_data=None):
         scenario_status = "This hypothetical scenario requires verification before it can be reported as demonstrated impact."
         justification = "Potential impact if the chain is verified:\n\n" + justification
 
+    contextual_section = _business_context_section(impact_analysis.get("business_context", {}))
+
     report = f"""## {chain_name}
 
 **Severity:** {severity} (CVSS {cvss_score})
 **CVSS Vector:** `{cvss_vector}`
+
+{contextual_section}
 
 {confidence_notice}
 
@@ -299,6 +303,42 @@ To fully remediate this chain, ALL of the following should be addressed:
 **Note:** Fixing any single vulnerability in the chain may break this specific attack path, but defense-in-depth requires addressing all findings.
 """
     return report
+
+
+def _business_context_section(assessment):
+    """Render business context separately from the technical CVSS rating."""
+    if not isinstance(assessment, dict):
+        return ""
+    status = assessment.get("status")
+    assets = assessment.get("matched_assets", [])
+    if status not in {"matched_confirmed", "matched_unconfirmed"} or not assets:
+        return ""
+    severity_key = "contextual_severity" if status == "matched_confirmed" else "potential_contextual_severity"
+    label = "Contextual severity" if status == "matched_confirmed" else "Potential contextual severity (unconfirmed chain)"
+    lines = [
+        "## Business Context (separate from CVSS)",
+        f"**Technical severity:** {assessment.get('technical_severity', 'UNKNOWN')}",
+        f"**{label}:** {assessment.get(severity_key) or 'Not assigned'}",
+        assessment.get("rationale", ""),
+        "This triage context comes from supplied evidence and has not been independently verified.",
+        "Context evidence:",
+    ]
+    for asset in assets:
+        service = _context_text(asset.get("service_name", "unknown service"))
+        purpose = _context_text(asset.get("purpose", ""))
+        environment = _context_text(asset.get("environment", "unknown"))
+        evidence = _context_text(asset.get("evidence", ""))
+        impact_evidence = _context_text(asset.get("impact_evidence", ""))
+        source = _context_text(asset.get("source", ""))
+        suffix = f" Source: {source}." if source else ""
+        lines.append(f"- `{_context_text(asset.get('host', ''))}` — {service} ({environment}): {purpose}. Context evidence: {evidence}. Demonstrated impact: {impact_evidence}.{suffix}")
+    return "\n".join(lines)
+
+
+def _context_text(value):
+    """Keep artifact-provided context on one safely escaped Markdown line."""
+    text = " ".join(str(value).split())
+    return text.replace("\\", "\\\\").replace("`", "\\`").replace("<", "&lt;").replace(">", "&gt;")
 
 
 def _impact_detail(chain, metric):
@@ -407,11 +447,17 @@ def main():
         chain_name = chain.get("name", f"chain_{i+1}")
         safe_name = chain_name.lower().replace(" ", "_").replace("+", "and").replace("=", "eq")[:50]
         poc_data = poc_map.get(chain_name)
+        impact = chain.get("impact_analysis", {})
+        business = impact.get("business_context", {}) if isinstance(impact, dict) else {}
+        if not isinstance(business, dict):
+            business = {}
 
         entry = {
             "chain_name": chain_name,
             "chain_severity": chain.get("chain_severity", chain.get("overall_severity", "HIGH")),
             "cvss_score": chain.get("cvss_score", "N/A"),
+            "contextual_severity": business.get("contextual_severity"),
+            "potential_contextual_severity": business.get("potential_contextual_severity"),
             "reports": {},
         }
 

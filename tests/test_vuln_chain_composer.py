@@ -18,7 +18,9 @@ and the preserved single-word behavior.
 Also covered: the confirmed/unconfirmed confidence mechanism (an unconfirmed
 category-match chain must NOT be amplified -- the documented CVSS-10.0-on-a-
 username-disclosure false positive), CVSS v3.1 scoring against known vectors,
-generated-PoC shell safety + Python compilability, and the report formatters.
+generated-PoC preview safety + Python compilability, the guarded chain executor,
+and report formatting. Evidence-linked business-context assessment is covered
+in tests/test_contextual_severity.py.
 """
 import ast
 import importlib.util
@@ -141,6 +143,28 @@ class TestNormalizeFinding(unittest.TestCase):
     def test_waf_blocked_blob_adds_requirement(self):
         f = _finding("reflected_xss", evidence="payload blocked by Cloudflare WAF 403")
         self.assertIn("waf_bypass_capable", f["requires"])
+
+    def test_business_context_survives_normalization_and_correlation(self):
+        context = {
+            "service_name": "Tenant payments API",
+            "purpose": "Processes tenant payments",
+            "business_criticality": "critical",
+            "data_sensitivity": "restricted",
+            "affected_scope": "multi_tenant",
+            "evidence": "Payment data inventory",
+            "impact_evidence": "Confirmed SSRF exposed the payment endpoint response.",
+        }
+        redirect = _finding(
+            "open_redirect", url="https://a.test/go", parameter="next",
+            evidence="redirects to https://internal.corp/", business_context=context,
+        )
+        ssrf = _finding(
+            "ssrf", url="https://a.test/fetch", parameter="url",
+            evidence="allowlist permits internal.corp only",
+        )
+        chain = next(c for c in cor.find_chains([redirect, ssrf])
+                     if c.get("shared_capability") == "redirect_into_allowlist")
+        self.assertEqual(chain["supporting_findings"][0]["business_context"], context)
 
 
 class TestLoadFindingsFromFile(unittest.TestCase):

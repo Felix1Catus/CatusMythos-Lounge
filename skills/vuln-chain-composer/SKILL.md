@@ -160,6 +160,61 @@ For each identified chain:
 python3 scripts/calculate_impact.py --input {chains_file}
 ```
 
+Optionally supply an evidence-linked asset context profile:
+
+```bash
+python3 scripts/calculate_impact.py --input {chains_file} --business-context {business_context_json}
+```
+
+The profile is a JSON object with `schema_version: 1` and an `assets` list.
+Each asset is keyed to an exact `host` and describes `service_name`, `purpose`,
+`environment` (optional), `business_criticality` (`low`, `moderate`, `high`,
+`critical`), `data_sensitivity` (`public`, `internal`, `confidential`,
+`restricted`), `affected_scope` (`individual`, `team`, `organization`,
+`multi_tenant`, `ecosystem`), `evidence` for the business classification, and
+`impact_evidence` tying the confirmed chain to that asset consequence, plus
+an optional source reference.
+The same `business_context` object can be included on a finding in an
+assessment artifact; `import_findings.py` and `correlate.py` carry it through.
+Context matches exact hosts, not sibling subdomains. The contextual tier uses
+the highest documented consequence factor, without looking at vulnerability
+type. It is reported separately from technical severity/CVSS, is never used
+to change the CVSS vector, and is only assigned for a confirmed chain. An
+unconfirmed chain can show a clearly labeled potential tier for investigation.
+The tool does not independently verify operator-supplied context evidence.
+
+The rubric uses ordinal tiers: `low`/`public`/`individual` = LOW;
+`moderate`/`internal`/`team` = MEDIUM; `high`/`confidential`/`organization`
+= HIGH; `critical`/`restricted`/`multi_tenant`/`ecosystem` = CRITICAL. The
+highest matching factor is reported with its asset and field as the driver;
+these labels are contextual triage guidance, not CVSS metrics.
+
+Example profile:
+
+```json
+{
+  "schema_version": 1,
+  "assets": [
+    {
+      "host": "payments.example.test",
+      "service_name": "Tenant payments API",
+      "purpose": "Processes tenant card payments and refunds",
+      "environment": "production",
+      "business_criticality": "critical",
+      "data_sensitivity": "restricted",
+      "affected_scope": "multi_tenant",
+      "evidence": "Payment data inventory and tenant architecture review",
+      "impact_evidence": "Confirmed chain exposed payment records for multiple tenants",
+      "source": "risk-register/payments"
+    }
+  ]
+}
+```
+
+When no matching context evidence is supplied, the technical rating is kept
+and contextual severity remains unassigned; the pipeline does not guess an
+application's business purpose from a vulnerability label.
+
 Recalculate severity based on chain context:
 
 **Impact Amplifiers:**
@@ -182,16 +237,11 @@ For each chain, calculate:
 python3 scripts/generate_chain_poc.py --input {chain_file}
 ```
 
-For each confirmed chain, generate:
-
-1. **Step-by-step reproduction guide** with screenshots descriptions
-2. **Automated PoC script** (Python) that:
-   - Executes each step in sequence
-   - Passes data between steps (tokens, cookies, IDs)
-   - Validates each step succeeded before continuing
-   - Generates evidence at each step
-3. **curl command sequence** for manual reproduction
-4. **Video script**: Narrated steps for recording a PoC video
+For each chain, generate a network-free Python preview, a shell preview with
+network commands commented out, and a narrated video script. A standalone
+execution plan is emitted only for the guarded confirmed redirect-into-SSRF
+chain supported by `execute_chain.py`; other chain types remain manual
+reproduction analyses. See [guarded executable chain v1](#guarded-executable-chain-v1).
 
 ### Step 6: Bug Bounty Report Generation
 

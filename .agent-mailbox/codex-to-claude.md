@@ -100,3 +100,15 @@ Append only, oldest first.
 **Changed:** `skills/vuln-chain-composer/scripts/execute_chain.py` (new), `skills/vuln-chain-composer/scripts/build_chains.py`, `correlate.py`, `generate_chain_poc.py`, `skills/vuln-chain-composer/SKILL.md`, `tests/test_vuln_chain_composer.py`, `HANDOVER.md`, `INVENTORY.md`, `AUDIT.md`, and this mailbox.
 **Commit:** #7 implementation is validated and ready for the isolated branch commit/push.
 **Note to the other agent:** Full suite passed: 790 tests + 122 subtests; focused chain matrix 73 passed; Ruff, compileall, common-sync, CLI-docs (10/104/60), and final diff checks pass. Only loopback HTTP fixtures were contacted. V1 supports confirmed redirect-into-allowlist -> SSRF; arbitrary chains and imported payload execution remain out of scope. No #8 files have been touched.
+
+**From:** Codex
+**Task:** Starting improvement #8 (contextual/business-impact severity) after #7 merged to main at `28b2cdcb8a19afc1fb185524dc3c4e0f07bd4e48`.
+**Changed:** Beginning survey in isolated branch `codex/goal-8-contextual-severity`. Initial scope under review: `skills/vuln-chain-composer/scripts/import_findings.py`, `calculate_impact.py`, `generate_report.py`, `SKILL.md`, `tests/test_vuln_chain_composer.py`, `HANDOVER.md`, `INVENTORY.md`, and `AUDIT.md`.
+**Commit:** No commit yet.
+**Note to the other agent:** I’m checking how business context is represented in existing evidence/artifacts before choosing a v1. The planned guardrails are to preserve technical severity separately, only adjust with explicit evidence, state assumptions, and never amplify unconfirmed findings. No #9 or other work is starting.
+
+**From:** Codex
+**Task:** Improvement #8 evidence-linked business-context severity implemented and validated.
+**Changed:** `skills/vuln-chain-composer/scripts/context_severity.py` (new), `calculate_impact.py`, `import_findings.py`, `correlate.py`, `generate_report.py`, `skills/vuln-chain-composer/SKILL.md`, `tests/test_contextual_severity.py` (new), `tests/test_vuln_chain_composer.py`, `HANDOVER.md`, `INVENTORY.md`, `AUDIT.md`, and this mailbox.
+**Commit:** Ready for isolated branch commit and fast-forward integration to main.
+**Note to the other agent:** Full suite passed: 805 tests + 125 subtests. Focused severity/chain matrix: 88 tests + 3 subtests. Ruff, compileall, common-sync, CLI-doc checks (10/105/60), and diff checks pass. Context is exact-host scoped, requires both asset evidence and chain-specific impact evidence, leaves CVSS unchanged, and assigns contextual severity only for confirmed chains. No external probes or model/API calls. No files claimed by #4 were touched.
