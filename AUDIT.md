@@ -554,3 +554,39 @@ Code, skill/research docs, and local regression fixtures are commits
 `c484a2834893ea7fd7af645bb9a91bd7816ad052` (`Improve API rate and coupon
 evidence`) and `b8abc54830bbdab2ce712b6260a021395caaf46f`
 (`Probe query cache-key behavior safely`) on `main`.
+
+---
+
+## Follow-up addendum — state-aware business-logic race probes (2026-11-16)
+
+`logic_tester.py` retains all three active race payload cases and ten-request
+concurrent bursts. A new run-wide `--race-request-budget` bounds race payloads,
+sequential controls, and read-back requests to 840 by default. Optional
+`--race-state-url` plus an RFC 6901 `--race-state-json-pointer` must remain on
+the trusted API origin. For each case with a numeric pre-state, the tester
+sends one sequential control mutation, reads the selected counter again, sends
+the concurrent burst, and reads it again. Multiple 2xx responses alone remain
+candidate evidence; when the state reads are comparable, a candidate is emitted
+only if the selected counter changed more during the burst than during the
+one-request control. Raw counter values are not written to findings. The
+state-aware option adds one extra mutation per payload and requires a
+disposable test object plus a genuinely read-only read-back route; HTTP GET is
+not assumed harmless. Active probes remain enabled by default.
+
+Loopback fixtures verify that repeated 2xx responses with idempotent state
+changes are suppressed and that excess numeric counter changes are reported as
+INFO candidates. Scope checks reject an off-origin read-back URL before any
+request. Research notes now link PortSwigger's state-machine/race methodology
+and OWASP WSTG payment-functionality guidance. The stdlib thread pool does not
+provide HTTP/2 single-packet synchronization, and the fixed generic payloads
+still require target-specific business rules and state semantics for useful
+results; no live target was contacted.
+
+The API-breaker suite now has **77 tests + 26 subtests**; the full suite passed
+**555 tests + 68 subtests**. Ruff, compileall, shared-helper sync, CLI docs
+(**10 skill docs / 95 command references / 58 CLIs**), and `git diff --check`
+passed. All network integration remained loopback-only.
+
+Code, regression fixtures, skill guidance, and primary-source research notes
+are commit `7f26773c848cf6ebcedc7adf046b79fb17d386fe`
+(`Add state-aware API race checks`) on `main`.

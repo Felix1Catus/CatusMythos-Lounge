@@ -38,11 +38,11 @@ checked by `tests/test_plugin_bootstrap_hook.py` and the same matrix.
 | Coverage | Skills |
 |---|---|
 | Broad script-level regression matrices | `recon-dominator` (59), `cloud-pivot-finder` (38), `attack-path-architect` (28), `16-ai-llm-security` (87), `03-exploit-development` (14), `vuln-chain-composer` (63), legacy `webapp-exploit-hunter` testers (60) |
-| Focused or partial coverage | `api-breaker` (72 focused scope/discovery/business-logic/GraphQL/BOLA/BFLA/auth-analyzer/rate-limit regressions); `webapp-exploit-hunter` browser/crawler/DOM and selected CLI paths; `web-cache-auditor` (12 focused tests for its script) |
+| Focused or partial coverage | `api-breaker` (77 focused scope/discovery/business-logic/GraphQL/BOLA/BFLA/auth-analyzer/rate-limit regressions); `webapp-exploit-hunter` browser/crawler/DOM and selected CLI paths; `web-cache-auditor` (12 focused tests for its script) |
 | Plugin infrastructure | `tests/test_bootstrap.py` (30): parsing, install command construction, retry/cache validation, browser setup, PATH readiness, and nonzero preflight gates |
 | No scripts (manual methodology) | `web-protocol-auditor` |
 
-The full suite most recently passed **550 tests plus 68 subtests**. It includes
+The full suite most recently passed **555 tests plus 68 subtests**. It includes
 local-fixture browser integration with Playwright/Chromium, bootstrap
 regressions, and the new API-breaker matrix. The strict bootstrap preflight also
 passed on the current Windows host. Coverage is uneven:
@@ -92,7 +92,7 @@ specific fixes, test themes, browser limitations, and the latest verification.
 - **Scope controls:** `--active`, `--submit-forms`, `--callback-url`,
   `--allow-destructive-poc`, `--skip-lfi-chains`; HTTPS-verified default.
 
-### api-breaker — `[72 FOCUSED REGRESSIONS; STILL PARTIAL]`
+### api-breaker — `[77 FOCUSED REGRESSIONS; STILL PARTIAL]`
 - **Use:** API security from domains — discover REST/GraphQL/SOAP, rebuild
   schemas, test BOLA/IDOR, BFLA, mass assignment, JWT, rate-limit bypass, logic.
 - **CLIs (8; `_common.py` and `response_safety.py` are support modules):** `api_discovery`, `schema_builder` (1814 ln),
@@ -109,7 +109,9 @@ specific fixes, test themes, browser limitations, and the latest verification.
   clean GraphQL batch/alias response validation and candidate report mappings,
   local HTTP rate-limit header/GraphQL fixtures, and a local HTTP BOLA/BFLA
   workflow fixture. Coupon stacking requires a structured applied collection;
-  generic success text or echoed request fields do not qualify. Active
+  generic success text or echoed request fields do not qualify. Race probes
+  have local stateful HTTP fixtures for idempotent and excess-counter-change
+  outcomes, JSON Pointer validation, and same-origin read-back scope. Active
   GraphQL CSRF GET/form submits still require the explicit cookie/canary, and
   mutation writes remain opt-in.
   `tests/test_targeted_audit_fixes.py` covers hostile imports and write gating
@@ -118,11 +120,14 @@ specific fixes, test themes, browser limitations, and the latest verification.
   RS/PS relabel review; GraphQL has offline regressions but no real HTTP
   integration; BOLA/BFLA has local loopback integration but no live API
   integration; rate-limit and batching have loopback fixtures but no live
-  authorized API integration. Race/path/batching responses remain candidates
-  until application-level behavior or persisted state is verified. The generic
-  business-logic race probes still send state-changing concurrent requests
-  without a sequential baseline or read-back. Business-state read-back and
-  broad report input shapes remain lightly tested or untested. Response redaction is pattern-based; application-specific
+  authorized API integration. Without configured state read-back, business
+  race 2xx counts remain candidates. With `--race-state-url` and
+  `--race-state-json-pointer`, each case compares a sequential control with a
+  concurrent burst against a numeric counter. The run-wide
+  `--race-request-budget` includes bursts, controls, and read-backs. This is
+  still generic payload coverage, not target-specific workflow validation.
+  Business-state read-back semantics and broad report input shapes remain
+  lightly tested or untested. Response redaction is pattern-based; application-specific
   secrets embedded in arbitrary JSON strings may still escape detection.
 - **Scope controls:** explicit trusted `--api-base` for imported endpoints in
   schema, auth, authz, mass assignment, rate-limit, and business-logic testing;
@@ -130,7 +135,9 @@ specific fixes, test themes, browser limitations, and the latest verification.
   BOLA/BFLA, GraphQL mutation-BOLA, and mass-assignment writes. GraphQL CSRF
   GET/form mutations require `--cookie` and `--csrf-test-id`. Business-logic
   POST/PUT/PATCH payloads remain active without a new flag when selected.
-  Rate-limit `--count` is bounded to 1–1000 (default 120).
+  Rate-limit `--count` is bounded to 1–1000 (default 120); logic race traffic
+  is capped at 840 requests per run by default, including optional controls and
+  state reads.
 
 ### cloud-pivot-finder — `[38-TEST MATRIX; all 7 scripts covered]`
 - **Use:** map cloud infra from domains; external->internal pivot paths —

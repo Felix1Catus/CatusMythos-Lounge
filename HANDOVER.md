@@ -6,17 +6,20 @@ doesn't mistake uneven coverage for uniform coverage.
 
 ## Current state
 
-- Latest code passes: `b8abc54830bbdab2ce712b6260a021395caaf46f`
+- Latest code pass: `7f26773c848cf6ebcedc7adf046b79fb17d386fe`
+  (`Add state-aware API race checks`), following
+  `b8abc54830bbdab2ce712b6260a021395caaf46f`
   (`Probe query cache-key behavior safely`) and
   `c484a2834893ea7fd7af645bb9a91bd7816ad052`
-  (`Improve API rate and coupon evidence`), following rate-limit hardening
-  `a75e337cd2cb1a025cec5d7abc35f401ce646c74` and shared API response
+  (`Improve API rate and coupon evidence`), rate-limit hardening
+  `a75e337cd2cb1a025cec5d7abc35f401ce646c74`, and shared API response
   sanitizing `5d6e6b36947adfb6144eb98004227297daf805d6`.
-- API-breaker now has **72 tests + 26 subtests**; cache auditor has **12 tests +
-  23 subtests**; the full suite passes **550 tests + 68 subtests**. Ruff,
+- API-breaker now has **77 tests + 26 subtests**; cache auditor has **12 tests +
+  23 subtests**; the full suite passes **555 tests + 68 subtests**. Ruff,
   compileall, shared-helper sync, CLI docs (**10 / 95 / 58**), and diff checks
-  pass. Local HTTP fixtures exercise rate-limit header/GraphQL probes and query
-  cache replay; no live external API was contacted.
+  pass. Loopback fixtures exercise rate-limit header/GraphQL probes, query
+  cache replay, and idempotent versus excess business-logic race state changes.
+  No live external API was contacted.
 - Rate-limit imports now include same-origin-filtered OpenAPI records and
   api-discovery's URL-keyed GraphQL map. Duplicate rotating XFF evidence is
   fixed. Race, path-mutation, IP-header, and GraphQL responses without
@@ -33,6 +36,14 @@ doesn't mistake uneven coverage for uniform coverage.
   controlled business-state read-back. API response redaction remains
   pattern-based and cannot catch every unknown secret embedded in arbitrary
   JSON strings.
+- Business-logic race probes keep all three active payload cases and ten-way
+  concurrent bursts. Optional same-origin state read-back compares each burst
+  with one sequential mutation control using an operator-selected numeric JSON
+  Pointer; the run-wide `--race-request-budget` includes payloads, controls,
+  and reads (840 maximum by default). The sequential control is an additional
+  write, so use a disposable object and a genuinely read-only GET route. Without
+  comparable state, multiple 2xx responses remain INFO candidates. The thread
+  pool is not HTTP/2 single-packet synchronization.
 
 - Previous authz code pass: `585ffa2b38aba78625e83a4eec2af2e1de3637b0`
   (`Sanitize authz evidence and handle deep JSON`). See the shared redaction
@@ -665,7 +676,7 @@ browser `--active`, or `--submit-forms` behavior.
    uploads.
 2. **Inventory structure — coverage refreshed; structural map still needs
    review if skills, CLIs, dependencies, or plugin references move.** Inventory
-   now includes bootstrap behavior and the 72 focused API-breaker regressions.
+   now includes bootstrap behavior and the 77 focused API-breaker regressions.
 3. **Bootstrap + task preflight — implemented; deeper OS-specific install
    validation remains open.** Missing Python dependencies, Chromium, Go, Go
    recon tools, and allowlisted system tools are actively installed through
@@ -693,13 +704,16 @@ browser `--active`, or `--submit-forms` behavior.
    against app-specific data formats. Rate-limit header and GraphQL behavior
    now have loopback integration, but no live authorized API check. Coupon
    stacking rejects generic-success and request-echo signals, while business
-   totals still need controlled read-back. `logic_tester.py` race probes still
-   send ten concurrent state-changing requests for each of three generic
-   payloads without a sequential baseline or state read-back; this remains a
-   high-priority evidence and request-budget review. Keep the active probes,
-   and improve their evidence and bounded-work model rather than converting
-   them to passive-only checks. Continue with business-state read-back and
-   broad report input shapes. Cache query probes use a five-name seed set;
+   totals still need controlled read-back. `logic_tester.py` keeps its three
+   active ten-request race bursts and now has an optional same-origin numeric
+   state read-back: for each payload it compares a sequential control with the
+   concurrent state delta. A run-wide budget caps burst, control, and read-back
+   traffic at 840 attempts by default. Loopback fixtures cover idempotent
+   2xx responses and excess state changes; target-specific workflows and the
+   semantics of an operator-selected read-only GET remain unverified. Keep
+   active probes enabled and improve evidence and bounded work rather than
+   converting them to passive-only checks. Continue with target-specific
+   state verification and broad report input shapes. Cache query probes use a five-name seed set;
    duplicate-key, semicolon, parameter-cloaking, and broader normalization
    cases remain manual. The plugin-wide structural reorganization and shared
    helper consolidation have not been done. Continue the remaining browser
