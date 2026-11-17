@@ -35,7 +35,7 @@ checked by `tests/test_plugin_bootstrap_hook.py` and the same matrix.
 
 | Coverage | Skills |
 |---|---|
-| Broad script-level regression matrices | `recon-dominator` (59), `cloud-pivot-finder` (38), `attack-path-architect` (28), `16-ai-llm-security` (87), `03-exploit-development` (14), `vuln-chain-composer` (63), legacy `webapp-exploit-hunter` testers (87) |
+| Broad script-level regression matrices | `recon-dominator` (59), `cloud-pivot-finder` (38), `attack-path-architect` (28), `16-ai-llm-security` (87), `03-exploit-development` (14), `vuln-chain-composer` (73), legacy `webapp-exploit-hunter` testers (87) |
 | Focused or partial coverage | `api-breaker` (focused scope/discovery/business-logic/GraphQL/BOLA/BFLA/auth-analyzer/rate-limit/report regressions); `webapp-exploit-hunter` browser/crawler/DOM and selected CLI paths; `web-cache-auditor` (12 focused tests for its script) |
 | Plugin infrastructure | `tests/test_bootstrap.py` (30): parsing, install command construction, retry/cache validation, browser setup, PATH readiness, and nonzero preflight gates |
 | No scripts (manual methodology) | `web-protocol-auditor` |
@@ -249,7 +249,7 @@ specific fixes, test themes, browser limitations, and the latest verification.
   engagement orchestration remains unverified.
 - **Overlaps:** prioritization/chaining logic overlaps `vuln-chain-composer`.
 
-### vuln-chain-composer — `[63-TEST MATRIX; all 7 scripts covered]`
+### vuln-chain-composer — `[73-TEST MATRIX; all 7 original scripts + guarded executor covered]`
 - **Use:** correlate findings across domains into multi-step chains, compute
   chained impact, generate end-to-end PoCs + bug-bounty reports.
 - **CLIs (6 + `_common` 52 ln):** `import_findings` (771 ln), `correlate`,

@@ -782,3 +782,22 @@ request cap. Final validation: **780 tests + 122 subtests passed**; Ruff,
 compileall, common-helper sync, and CLI-doc checks (**10/102/59**) pass. The
 only real HTTP traffic is to the localhost fixture; no external targets were
 contacted. No commit or push was made.
+
+
+## 2026-11-17 addendum — Improvement #7 executable chain v1
+
+Surveyed the chain builder, correlation output, and PoC generator. Confirmed
+the generated Python scaffold executed a generic request for every phase
+despite TODO reproduction steps, while the shell sequence ran curl directly.
+Replaced those generated scripts with a non-networking Python preview and
+commented shell command preview. Added a standalone plan and a bounded
+executor for only the confirmed redirect-into-allowlist -> SSRF case.
+
+Evidence: localhost tests exercise two-step success, default dry-run with zero
+requests, redirect Location escape blocking before the second request, failed
+first-step stop, explicit endpoint scope, and invalid/unconfirmed plans.
+Focused matrix: **73 passed**; full pytest: **790 passed + 122 subtests passed**.
+Ruff, compileall, common-sync, CLI-doc checks (**10/104/60**), and final diff
+checks pass. Only loopback HTTP fixture traffic was used. Design limit: this
+executor validates that a redirect and downstream fetch can occur; it does
+not execute arbitrary generated chain steps or imported payloads.

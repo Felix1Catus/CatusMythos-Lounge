@@ -1100,3 +1100,28 @@ Prepared private, unqueued task drafts under Git-common-dir/agent-coordination/
 drafts: #6 author Claude/reviewer Codex; #7 author Codex/reviewer Claude,
 depending on #6; #8 author Claude/reviewer Codex, depending on #6 and #7.
 V1 still uses one author at a time. None of #6–#8 started in this checkpoint.
+
+
+## 2026-11-17 addendum — Improvement #7: guarded executable chain v1
+
+Added `skills/vuln-chain-composer/scripts/execute_chain.py` for one supported
+chain only: confirmed `redirect_into_allowlist` -> SSRF. `build_chains.py`
+emits a plan only when both distinct finding IDs, endpoint URLs, and parameter
+names are present; correlation now preserves those fields. `generate_chain_poc.py`
+creates a network-free Python preview, comments curl commands out of its shell
+preview, and exports the plan JSON. Active execution requires `--execute`,
+explicit source origins and destination origin, a destination URL, and a
+response marker. It sends at most two GETs, disables automatic redirect
+following and ambient proxies, checks Location scope before step two, stops
+on failure, and emits response status/hash and finding provenance without
+bodies or query values.
+
+Regression coverage in `tests/test_vuln_chain_composer.py` now totals 73 tests,
+including localhost success, dry-run zero traffic, redirect-out-of-scope,
+non-redirect stop-on-failure, preflight scope rejection, and malformed or
+unconfirmed plan rejection. No external target was contacted. Deliberately
+deferred: arbitrary chain types, mutations, non-GET actions, browser/user
+interaction, imported-payload execution, auth workflows, dynamic cross-host
+state, and chain-specific remediation execution. Validation: **790 tests + 122
+subtests passed**; Ruff, compileall, common-sync, CLI-docs (**10/104/60**), and
+final diff checks pass. Only localhost fixture HTTP requests were sent.

@@ -645,10 +645,12 @@ def discover_generic_chains(findings, exclude_pairs=None):
                 "shared_capability": capability,
                 "primary_finding": {
                     "id": b["id"], "type": b["type"], "domain": b.get("domain", ""),
-                    "url": b.get("url", ""), "severity": b.get("severity", "MEDIUM"),
+                    "url": b.get("url", ""), "parameter": b.get("parameter", ""),
+                    "severity": b.get("severity", "MEDIUM"),
                 },
                 "supporting_findings": [{
                     "id": a["id"], "type": a["type"], "domain": a.get("domain", ""),
+                    "url": a.get("url", ""), "parameter": a.get("parameter", ""),
                 }],
                 "steps": [
                     f"Exploit {a['type']} on {a.get('domain', '?')} to obtain '{capability.replace('_', ' ')}'",

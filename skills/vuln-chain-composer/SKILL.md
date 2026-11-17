@@ -259,6 +259,40 @@ If some steps in a chain haven't been tested:
 2. Clearly indicate which steps are confirmed vs assumed
 3. Provide testing instructions for unverified steps
 
+### Guarded executable chain v1
+
+`build_chains.py` emits an `execution_plan` only for a **confirmed**
+`redirect_into_allowlist` -> SSRF chain whose two findings have distinct IDs,
+HTTP(S) endpoint URLs without embedded query values, and explicit parameter
+names. Other chains remain analysis/manual reproduction steps. `generate_chain_poc.py`
+creates a Python preview (no network requests), comments network commands out
+of its shell preview, and writes a standalone plan JSON for eligible chains.
+
+The executor supports only this two-request GET sequence. First inspect the
+plan with the default dry-run:
+
+```bash
+python3 scripts/execute_chain.py --plan {execution_plan_json}
+```
+
+Active execution requires explicit source endpoint origins, an explicit
+destination origin and URL, a response marker, and `--execute`. Redirects are
+not followed automatically; the observed Location is checked against the
+destination allowlist before the SSRF endpoint is called. It stops after a
+failed redirect step, caps the sequence at two requests, and writes a
+sanitized status/hash report without response bodies or query values:
+
+```bash
+python3 scripts/execute_chain.py --plan {execution_plan_json} --execute \\
+  --allow-origin https://app.example --allow-destination https://fixture.example \\
+  --destination-url https://fixture.example/known-marker --expect-body expected-marker
+```
+
+Use only with explicit authorization and a target scope that permits these
+requests. V1 deliberately does not execute arbitrary chain types, imported
+payloads, state-changing methods, authentication workflows, browser steps,
+or multi-host chains requiring dynamic user interaction.
+
 ## Examples
 
 ### Example 1: Full Chain Analysis

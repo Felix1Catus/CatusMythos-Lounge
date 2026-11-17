@@ -25,7 +25,10 @@ import importlib.util
 import json
 import sys
 import tempfile
+import threading
 import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlsplit
 from pathlib import Path
 
 
@@ -56,6 +59,7 @@ ci = load_script("vcc_calculate_impact", "calculate_impact.py")
 bc = load_script("vcc_build_chains", "build_chains.py")
 poc = load_script("vcc_generate_chain_poc", "generate_chain_poc.py")
 rep = load_script("vcc_generate_report", "generate_report.py")
+executor = load_script("vcc_execute_chain", "execute_chain.py")
 
 
 def _finding(vuln_type, url="https://a.example.com/p?q=1", severity="MEDIUM", **extra):
@@ -380,6 +384,149 @@ class TestBuildChains(unittest.TestCase):
         # reflected_xss steps mention sending a crafted URL to the victim.
         self.assertTrue(built["requires_user_interaction"])
 
+    def test_execution_plan_is_limited_to_confirmed_addressable_chain(self):
+        chain = {
+            "shared_capability": "redirect_into_allowlist", "confidence": "confirmed",
+            "chain_id": "c1", "primary_finding": {
+                "id": "ssrf-1", "type": "ssrf", "url": "https://app.test/fetch", "parameter": "url",
+            }, "supporting_findings": [{
+                "id": "redirect-1", "type": "open_redirect", "url": "https://app.test/go",
+                "parameter": "next",
+            }],
+        }
+        plan = bc._redirect_ssrf_execution_plan(chain)
+        self.assertEqual(plan["finding_ids"], ["redirect-1", "ssrf-1"])
+        self.assertEqual(plan["redirect"]["url"], "https://app.test/go")
+        chain["confidence"] = "unconfirmed"
+        self.assertIsNone(bc._redirect_ssrf_execution_plan(chain))
+
+
+class TestExecuteChain(unittest.TestCase):
+    def setUp(self):
+        self.requests = []
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(inner):
+                self.requests.append(inner.path)
+                parsed = urlsplit(inner.path)
+                params = parse_qs(parsed.query)
+                if parsed.path == "/go":
+                    inner.send_response(302)
+                    inner.send_header("Location", params.get("next", [""])[0])
+                    inner.end_headers()
+                elif parsed.path == "/fetch":
+                    inner.send_response(200)
+                    inner.end_headers()
+                    inner.wfile.write(b"fixture-marker" if params.get("url") else b"missing-url")
+                else:
+                    inner.send_response(404)
+                    inner.end_headers()
+
+            def log_message(self, *_args):
+                return
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.origin = f"http://127.0.0.1:{self.server.server_port}"
+        self.plan = {
+            "schema_version": 1, "chain_type": "redirect_into_allowlist", "chain_id": "fixture-chain",
+            "confidence": "confirmed", "finding_ids": ["redirect-1", "ssrf-1"],
+            "redirect": {"url": self.origin + "/go", "parameter": "next"},
+            "ssrf": {"url": self.origin + "/fetch", "parameter": "url"},
+        }
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=2)
+
+    def _execute(self, **kwargs):
+        return executor.execute_plan(
+            self.plan, allow_origins=[self.origin], allow_destinations=[self.origin],
+            destination_url=self.origin + "/allowed", expected_body="fixture-marker", **kwargs,
+        )
+
+    def test_dry_run_sends_no_requests(self):
+        report = executor.dry_run(self.plan)
+        self.assertEqual(report["requests_sent"], 0)
+        self.assertEqual(self.requests, [])
+
+    def test_two_step_execution_confirms_chain(self):
+        report = self._execute()
+        self.assertTrue(report["success"])
+        self.assertEqual(report["requests_sent"], 2)
+        self.assertEqual([step["id"] for step in report["steps"]], ["redirect", "ssrf"])
+        self.assertEqual(report["finding_ids"], ["redirect-1", "ssrf-1"])
+
+    def test_non_redirect_response_stops_before_ssrf(self):
+        class FailureHandler(BaseHTTPRequestHandler):
+            def do_GET(inner):
+                self.requests.append(inner.path)
+                inner.send_response(403)
+                inner.end_headers()
+
+            def log_message(self, *_args):
+                return
+
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=2)
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), FailureHandler)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.origin = f"http://127.0.0.1:{self.server.server_port}"
+        self.plan["redirect"]["url"] = self.origin + "/go"
+        self.plan["ssrf"]["url"] = self.origin + "/fetch"
+        report = self._execute()
+        self.assertFalse(report["success"])
+        self.assertEqual(report["requests_sent"], 1)
+        self.assertEqual(len(self.requests), 1)
+        self.assertEqual(report["steps"][0]["status"], 403)
+
+    def test_redirect_out_of_scope_stops_before_ssrf(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=2)
+
+        class OutsideHandler(BaseHTTPRequestHandler):
+            def do_GET(inner):
+                self.requests.append(inner.path)
+                inner.send_response(302)
+                inner.send_header("Location", "https://example.invalid/away")
+                inner.end_headers()
+
+            def log_message(self, *_args):
+                return
+
+        outside = ThreadingHTTPServer(("127.0.0.1", 0), OutsideHandler)
+        self.server = outside
+        self.thread = threading.Thread(target=outside.serve_forever, daemon=True)
+        self.thread.start()
+        self.origin = f"http://127.0.0.1:{outside.server_port}"
+        self.plan["redirect"]["url"] = self.origin + "/go"
+        self.plan["ssrf"]["url"] = self.origin + "/fetch"
+        report = self._execute()
+        self.assertFalse(report["success"])
+        self.assertEqual(report["requests_sent"], 1)
+        self.assertIn("outside explicit", report["stop_reason"])
+
+    def test_scope_rejected_before_any_request(self):
+        with self.assertRaisesRegex(ValueError, "outside the explicit"):
+            executor.execute_plan(
+                self.plan, allow_origins=["https://other.test"], allow_destinations=[self.origin],
+                destination_url=self.origin + "/allowed", expected_body="fixture-marker",
+            )
+        self.assertEqual(self.requests, [])
+
+    def test_unconfirmed_and_malformed_plans_rejected(self):
+        bad = dict(self.plan, confidence="unconfirmed")
+        with self.assertRaisesRegex(ValueError, "only confirmed"):
+            executor.dry_run(bad)
+        bad = dict(self.plan, finding_ids=["same", "same"])
+        with self.assertRaisesRegex(ValueError, "two distinct"):
+            executor.dry_run(bad)
+
 
 # ---------------------------------------------------------------------------
 # generate_chain_poc: shell safety + Python compilability
@@ -413,6 +560,27 @@ class TestGenerateChainPoc(unittest.TestCase):
         }
         src = poc.generate_python_poc(chain)
         ast.parse(src)  # hostile metadata must stay inside repr()'d literals
+
+    def test_generated_python_is_a_network_free_preview(self):
+        src = poc.generate_python_poc({"name": "Preview", "steps": ["step"]})
+        ast.parse(src)
+        self.assertNotIn("http.client", src)
+        self.assertNotIn("make_request", src)
+        self.assertIn("does not send network requests", src)
+
+    def test_generated_shell_sequence_comments_out_requests(self):
+        script = poc.generate_curl_sequence({
+            "name": "preview", "steps": ["request"],
+            "primary_finding": {"type": "ssrf", "url": "https://a.test/x", "parameter": "url"},
+        })
+        self.assertNotRegex(script, r"(?m)^curl\b")
+        self.assertIn("\n# curl", script)
+
+    def test_unsupported_chain_has_no_execution_plan(self):
+        chain = {"confidence": "confirmed", "shared_capability": "credential_theft",
+                 "primary_finding": {"id": "a", "type": "ssrf"},
+                 "supporting_findings": [{"id": "b", "type": "open_redirect"}]}
+        self.assertIsNone(bc._redirect_ssrf_execution_plan(chain))
 
     def test_url_with_parameter(self):
         out = poc._url_with_parameter("https://a.test/x?a=1", "b", "2")

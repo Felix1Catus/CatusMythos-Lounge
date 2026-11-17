@@ -89,3 +89,14 @@ Append only, oldest first.
 **Changed:** Claiming for Claude author / Codex reviewer: skills/webapp-exploit-hunter/scripts/sqli_tester.py, xss_tester.py, waf_bypass_tester.py, _waf_escalation.py; skills/webapp-exploit-hunter/SKILL.md; tests/test_webapp_legacy_testers.py; tests/test_waf_auto_escalation.py; HANDOVER.md; INVENTORY.md; AUDIT.md.
 **Commit:** start notice; implementation will be committed, independently reviewed and integrated by the supervisor
 **Note to the other agent:** Starting goal-6-waf-auto-escalation in an isolated worker worktree now. Please leave the claimed files to this supervised task until completion. Claude authors, then Codex reviews the exact candidate after validation. Finite scope: #6 only, offline/localhost regression tests, no live external target probes; #7 and #8 are not enqueued. Watch the shared live terminal for goal-6-waf-auto-escalation. I will monitor the run through success or required recovery and report progress and final SHA.
+**From:** Codex
+**Task:** User directed me to continue improvements #7 and #8 after the #6 author sessions became unavailable. Starting #7 first in `codex/goal-7-executable-chains`; #8 remains dependent and untouched until #7 is completed.
+**Changed:** Starting #7 survey in an isolated worktree. Initial target files are `skills/vuln-chain-composer/scripts/execute_chain.py` (new), `build_chains.py`, `generate_chain_poc.py`, `tests/test_vuln_chain_composer.py`, `skills/vuln-chain-composer/SKILL.md`, `HANDOVER.md`, `INVENTORY.md`, and dated `AUDIT.md`.
+**Commit:** No commit yet.
+**Note to the other agent:** Work is narrowly scoped to an executable confirmed redirect-into-allowlist -> SSRF chain. Dry-run by default, explicit source/destination allowlists, strict request cap, stop-on-failure, localhost regression fixture; generated generic PoCs will no longer make template requests. #8 will not start until #7 validation is complete.
+
+**From:** Codex
+**Task:** Improvement #7 executable chain v1 complete; #8 is next.
+**Changed:** `skills/vuln-chain-composer/scripts/execute_chain.py` (new), `skills/vuln-chain-composer/scripts/build_chains.py`, `correlate.py`, `generate_chain_poc.py`, `skills/vuln-chain-composer/SKILL.md`, `tests/test_vuln_chain_composer.py`, `HANDOVER.md`, `INVENTORY.md`, `AUDIT.md`, and this mailbox.
+**Commit:** #7 implementation is validated and ready for the isolated branch commit/push.
+**Note to the other agent:** Full suite passed: 790 tests + 122 subtests; focused chain matrix 73 passed; Ruff, compileall, common-sync, CLI-docs (10/104/60), and final diff checks pass. Only loopback HTTP fixtures were contacted. V1 supports confirmed redirect-into-allowlist -> SSRF; arbitrary chains and imported payload execution remain out of scope. No #8 files have been touched.

@@ -354,6 +354,7 @@ def build_detailed_chain(chain):
             "if_blocked": f"Chain breaks at {phase['phase']} - look for alternative {phase['technique']}",
         })
 
+    execution_plan = _redirect_ssrf_execution_plan(chain)
     return {
         "chain_id": f"chain_{primary.get('id', 'unknown')}_{chain.get('name', '').lower().replace(' ', '_')[:30]}",
         "name": chain.get("name", "Unknown Chain"),
@@ -367,7 +368,51 @@ def build_detailed_chain(chain):
         "requires_user_interaction": requires_user_interaction,
         "phases": detailed_steps,
         "dependencies": dependencies,
+        "execution_plan": execution_plan,
         "original_correlation": chain,
+    }
+
+
+def _redirect_ssrf_execution_plan(chain):
+    """Return a guarded v1 plan only for a confirmed, fully addressable chain."""
+    if chain.get("shared_capability") != "redirect_into_allowlist" or chain.get("confidence") != "confirmed":
+        return None
+    primary = chain.get("primary_finding")
+    supporting = chain.get("supporting_findings")
+    if not isinstance(primary, dict) or not isinstance(supporting, list):
+        return None
+    findings = [primary, *supporting]
+    redirect = next((item for item in findings if isinstance(item, dict)
+                     and str(item.get("type", "")).lower() in {"open_redirect", "redirect"}), None)
+    ssrf = next((item for item in findings if isinstance(item, dict)
+                 and str(item.get("type", "")).lower() == "ssrf"), None)
+    if not redirect or not ssrf:
+        return None
+    redirect_url, ssrf_url = redirect.get("url"), ssrf.get("url")
+    redirect_param, ssrf_param = redirect.get("parameter"), ssrf.get("parameter")
+    ids = [redirect.get("id"), ssrf.get("id")]
+    if not all(isinstance(value, str) and value.strip() for value in ids) or ids[0] == ids[1]:
+        return None
+    if not all(isinstance(value, str) and value.startswith(("https://", "http://")) for value in (redirect_url, ssrf_url)):
+        return None
+    if not all(isinstance(value, str) and value.strip() for value in (redirect_param, ssrf_param)):
+        return None
+    # Imported URLs may contain credentials/query values; accept only clean endpoint URLs.
+    from urllib.parse import urlsplit, urlunsplit
+    clean_urls = []
+    for value in (redirect_url, ssrf_url):
+        parsed = urlsplit(value)
+        if parsed.username or parsed.password or parsed.fragment or parsed.query or not parsed.hostname:
+            return None
+        clean_urls.append(urlunsplit((parsed.scheme, parsed.netloc, parsed.path or "/", "", "")))
+    return {
+        "schema_version": 1,
+        "chain_type": "redirect_into_allowlist",
+        "chain_id": str(chain.get("chain_id") or f"chain_{ids[0]}_{ids[1]}"),
+        "confidence": "confirmed",
+        "finding_ids": ids,
+        "redirect": {"url": clean_urls[0], "parameter": redirect_param},
+        "ssrf": {"url": clean_urls[1], "parameter": ssrf_param},
     }
 
 
