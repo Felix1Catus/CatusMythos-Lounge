@@ -205,3 +205,39 @@ This verifies remote main exactly matches the validated and independently
 approved candidate before marking the task done and releasing dependencies.
 A different/unreviewed remote commit cannot be accepted. Investigate divergent
 remote state manually; do not discard old checkpoints to force a retry.
+
+## Live shared-goal sessions in the desktop terminal
+
+Open the Codex desktop terminal at the repository root, then run:
+
+```powershell
+python3 tools/agent-supervisor/supervisor.py watch
+```
+
+The compact view shows the most recent active goal and the latest Codex/Claude
+session for that goal together: role, state, PID, native session ID, name,
+messages/tool activity, task stage and progress. Use `watch --goal <task-id>`
+to pin one goal, `watch --once` for a snapshot, or `sessions` for full JSON
+history. Watch is read-only and never approves or launches tasks. Ctrl+C exits
+the viewer only. `stop` remains the worker control. Stale heartbeat markers
+are shown as stale/unknown rather than proof of a live OS process.
+
+Claude workers now use named persistent `stream-json --verbose` sessions;
+Codex already supplies streamed thread IDs. Resume commands are shown only for
+valid UUID session IDs. Stop controlled workers before resuming one manually;
+interactive edits invalidate its previously reviewed candidate. These are real
+CLI sessions, not Claude chats embedded into Codex's native chat sidebar.
+
+An explicit, bounded read-only check can show both providers concurrently:
+
+```powershell
+python3 tools/agent-supervisor/supervisor.py demo --goal shared-session-visibility --seconds 90
+```
+
+This starts two read-only CLI sessions on the same inspection goal, never
+commits or pushes, and does not enqueue tasks #6–#8. It uses existing CLI auth,
+consumes model usage (Claude capped at USD 1), obeys the stop switch, and checks
+that the checkout stayed unchanged. Ordinary author/reviewer tasks retain v1's
+one-author-at-a-time integration controls. The app tooling can open a terminal
+panel but exposes no terminal input operation; starting watch there requires
+one paste. The monitor itself can also run in an ordinary terminal.

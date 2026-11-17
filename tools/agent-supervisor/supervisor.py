@@ -3,6 +3,7 @@
 import argparse
 import contextlib
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -401,7 +402,7 @@ def execute(argv, cwd, prompt, output, timeout, heartbeat):
         process = subprocess.Popen(argv, cwd=str(cwd), stdin=source, env=environment,
                                    stdout=stream, stderr=errors, **flags)
         marker = output.with_suffix(output.suffix + '.process.json')
-        metadata = {'pid': process.pid, 'session_token': session, 'started_at': time.time(), 'state': 'running'}
+        metadata = {'pid': process.pid, 'session_token': session, 'started_at': time.time(), 'heartbeat_at': time.time(), 'state': 'running'}
         close_job = lambda: None
         try:
             close_job = attach_windows_job(process)
@@ -409,6 +410,9 @@ def execute(argv, cwd, prompt, output, timeout, heartbeat):
             deadline = time.monotonic() + timeout
             while process.poll() is None:
                 heartbeat()
+                if time.time() - metadata['heartbeat_at'] >= 2:
+                    metadata['heartbeat_at'] = time.time()
+                    marker.write_text(encoded(metadata), encoding='utf-8')
                 if time.monotonic() >= deadline:
                     raise TimeoutError('worker/check exceeded its time limit')
                 time.sleep(0.2)
@@ -445,9 +449,32 @@ def resolve_cli(agent):
     return [executable]
 
 
+def claude_result(text):
+    try:
+        value = json.loads(text)
+        if isinstance(value, dict) and (value.get('type') == 'result' or (
+            'type' not in value and any(key in value for key in ('result', 'is_error', 'structured_output')))):
+            return value
+    except ValueError:
+        pass
+    for line in reversed(text.splitlines()):
+        try:
+            value = json.loads(line)
+            if isinstance(value, dict) and value.get('type') == 'result':
+                return value
+        except ValueError:
+            continue
+    raise ValueError('Claude stream contains no final result envelope')
+
+
 def worker_command(agent, review, final_path, config):
     argv = resolve_cli(agent)
     model = config.get('models', {}).get(agent)
+    goal = final_path.parent.parent.name
+    session_id = str(uuid.uuid5(uuid.NAMESPACE_URL, str(final_path.resolve()))) if agent == 'claude' else None
+    name = '{} / {} / {}'.format(goal, agent, final_path.stem)
+    final_path.with_suffix('.session.json').write_text(encoded(
+        {'agent': agent, 'name': name, 'session_id': session_id}), encoding='utf-8')
     if agent == 'codex':
         argv += ['exec', '-c', 'approval_policy="never"', '-s', 'read-only' if review else 'workspace-write',
                  '--json', '-o', str(final_path)]
@@ -458,7 +485,8 @@ def worker_command(agent, review, final_path, config):
         if model:
             argv += ['-m', model]
         return argv + ['-']
-    argv += ['-p', '--safe-mode', '--output-format', 'json', '--permission-prompts', 'none',
+    argv += ['-p', '--safe-mode', '--output-format', 'stream-json', '--verbose',
+             '--session-id', session_id, '--name', name, '--permission-prompts', 'none',
              '--permission-mode', 'dontAsk' if review else 'acceptEdits',
              '--tools', 'Read,Glob,Grep' if review else 'Read,Glob,Grep,Edit,Write',
              '--allowedTools', 'Read,Glob,Grep' if review else 'Read,Glob,Grep,Edit,Write',
@@ -474,7 +502,7 @@ def parse_review(agent, text, final_path, candidate, base):
     if agent == 'codex':
         result = json.loads(final_path.read_text(encoding='utf-8'))
     else:
-        envelope = json.loads(text)
+        envelope = claude_result(text)
         if envelope.get('is_error') or envelope.get('subtype', '').startswith('error'):
             raise RuntimeError('Claude reported an error')
         result = envelope.get('structured_output')
@@ -597,7 +625,7 @@ class Supervisor:
                     artifact / ('author-{}.log'.format(attempt)), min(self.config.get('worker_timeout', 900), remaining),
                     lambda: self.pulse(task))
                 if spec['agent'] == 'claude':
-                    envelope = json.loads((artifact / ('author-{}.log'.format(attempt))).read_text(encoding='utf-8'))
+                    envelope = claude_result((artifact / ('author-{}.log'.format(attempt))).read_text(encoding='utf-8'))
                     if envelope.get('is_error') or envelope.get('subtype', '').startswith('error'):
                         raise RuntimeError('Claude author reported an error')
                     if envelope.get('permission_denials'):
@@ -735,6 +763,14 @@ def main():
     parser.add_argument('--repo', default='.')
     commands = parser.add_subparsers(dest='command', required=True)
     commands.add_parser('status')
+    commands.add_parser('sessions')
+    watch = commands.add_parser('watch')
+    watch.add_argument('--goal')
+    watch.add_argument('--once', action='store_true')
+    watch.add_argument('--seconds', type=int, default=3600)
+    demo = commands.add_parser('demo')
+    demo.add_argument('--goal', default='shared-session-visibility')
+    demo.add_argument('--seconds', type=int, default=60)
     commands.add_parser('stop')
     commands.add_parser('clear-stop')
     cancel = commands.add_parser('cancel')
@@ -758,7 +794,18 @@ def main():
     args = parser.parse_args()
     try:
         store = Store(runtime_dir(args.repo))
-        if args.command == 'enqueue':
+        if args.command in ('watch', 'sessions', 'demo'):
+            source = Path(__file__).with_name('live_view.py')
+            spec = importlib.util.spec_from_file_location('catus_supervisor_live_view', source)
+            viewer = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(viewer)
+            if args.command == 'watch':
+                viewer.watch(store.root, args.goal, args.once, args.seconds)
+            elif args.command == 'sessions':
+                print(json.dumps(viewer.sessions(store.root), indent=2))
+            else:
+                print(json.dumps(viewer.demo(Path(args.repo).resolve(), store.root, args.goal, args.seconds), indent=2))
+        elif args.command == 'enqueue':
             store.enqueue(json.loads(Path(args.spec).read_text(encoding='utf-8-sig')), args.approve)
         elif args.command == 'cancel':
             store.cancel(args.task, args.confirm_workers_stopped)
