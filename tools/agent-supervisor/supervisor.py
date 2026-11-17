@@ -61,6 +61,24 @@ def encoded(value):
     return json.dumps(value, sort_keys=True, separators=(',', ':'), allow_nan=False)
 
 
+def write_json_atomic(path, value):
+    path = Path(path)
+    temporary = path.with_name(path.name + '.tmp-' + uuid.uuid4().hex)
+    try:
+        temporary.write_text(encoded(value), encoding='utf-8')
+        for attempt in range(5):
+            try:
+                os.replace(str(temporary), str(path))
+                break
+            except PermissionError:
+                if attempt == 4:
+                    raise
+                time.sleep(.02)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
 def safe_id(value):
     if not isinstance(value, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,63}', value):
         raise ValueError('identifier must be 1-64 letters/digits/underscores/hyphens')
@@ -406,13 +424,13 @@ def execute(argv, cwd, prompt, output, timeout, heartbeat):
         close_job = lambda: None
         try:
             close_job = attach_windows_job(process)
-            marker.write_text(encoded(metadata), encoding='utf-8')
+            write_json_atomic(marker, metadata)
             deadline = time.monotonic() + timeout
             while process.poll() is None:
                 heartbeat()
                 if time.time() - metadata['heartbeat_at'] >= 2:
                     metadata['heartbeat_at'] = time.time()
-                    marker.write_text(encoded(metadata), encoding='utf-8')
+                    write_json_atomic(marker, metadata)
                 if time.monotonic() >= deadline:
                     raise TimeoutError('worker/check exceeded its time limit')
                 time.sleep(0.2)
@@ -431,7 +449,7 @@ def execute(argv, cwd, prompt, output, timeout, heartbeat):
                     pass
             close_job()
             metadata.update(state='parent-exited' if process.poll() is not None else 'quarantined', returncode=process.poll())
-            marker.write_text(encoded(metadata), encoding='utf-8')
+            write_json_atomic(marker, metadata)
     return output.read_text(encoding='utf-8', errors='replace')
 
 

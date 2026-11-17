@@ -50,9 +50,13 @@ def summarize(events, defaults=None):
                 result['session_id'] = event['session_id']
             if event.get('is_error') or event.get('permission_denials') or str(event.get('subtype', '')).startswith('error'):
                 result['result'] = 'needs-attention'
-            elif event.get('result'):
-                messages.append(clean(event['result']))
+            else:
                 result['result'] = 'completed'
+                if event.get('result'):
+                    messages.append(clean(event['result']))
+                elif isinstance(event.get('structured_output'), dict):
+                    review = event['structured_output']
+                    messages.append('Review: ' + ('approved' if review.get('approved') is True else 'changes requested'))
         if kind in ('item.started', 'item.completed'):
             item = event.get('item', {})
             if item.get('type') == 'agent_message' and item.get('text'):
@@ -138,7 +142,7 @@ def sessions(root, goal=None):
             view['pid'] = process.get('pid')
             view['state'] = ('running' if process.get('state') == 'running' else
                              'needs-attention' if process.get('returncode') not in (None, 0) else
-                             view.get('result', 'waiting'))
+                             view.get('result', 'completed' if process.get('returncode') == 0 else 'waiting'))
             view['started_at'] = process.get('started_at', log.stat().st_mtime)
             view['goal_status'] = goals.get(goal_id, {})
             if view['state'] == 'running' and time.time() - process.get('heartbeat_at', view['started_at']) > 10:

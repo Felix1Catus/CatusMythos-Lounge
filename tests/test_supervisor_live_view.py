@@ -110,6 +110,20 @@ class SessionViewTests(unittest.TestCase):
             log.with_suffix('.log.process.json').write_text(json.dumps({'state': 'running', 'pid': 100, 'started_at': 1}))
             self.assertEqual(view.sessions(root)[0]['state'], 'stale/unknown')
 
+    def test_structured_reviewer_result_without_text_is_completed(self):
+        result = view.summarize([{'type': 'result', 'is_error': False, 'result': '',
+                                 'structured_output': {'approved': True, 'findings': []}}])
+        self.assertEqual(result['result'], 'completed')
+        self.assertIn('Review: approved', result['messages'])
+
+    def test_atomic_process_marker_has_no_partial_or_leftover_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'process.json'
+            backend.write_json_atomic(path, {'state': 'running'})
+            backend.write_json_atomic(path, {'state': 'parent-exited'})
+            self.assertEqual(view.read_json(path), {'state': 'parent-exited'})
+            self.assertEqual([file.name for file in Path(directory).iterdir()], ['process.json'])
+
     def test_terminal_control_sequences_are_not_replayed(self):
         self.assertEqual(view.clean('\x1b[2Jhello\x00\x07'), 'hello')
 
