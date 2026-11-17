@@ -982,3 +982,51 @@ and other testers, detailed Retry-After/window modeling, event history/purge
 UI, and tasks #6–#8. The generic store API is queryable by these consumers,
 but v1 does not claim they are wired. Technology fingerprints and HTTP status
 signals remain observations; no-new-error is not proof of non-vulnerability.
+
+## 2026-11-17 — Unattended Claude/Codex supervisor v1
+
+Implemented `tools/agent-supervisor/supervisor.py`, its disabled example
+configuration and README, and `tests/test_agent_supervisor.py`. Updated the
+mailbox README to distinguish shared runtime state from historical Markdown
+inboxes. Claude's independent design review is recorded at `fa479ef`.
+
+The stdlib controller uses one transactional SQLite queue/event stream under
+the Git common directory, so linked worktrees see the same tasks and ownership.
+Specs require explicit operator approval; file-set claims, fencing tokens,
+leases, dependencies, stop/recovery, checkpoints and append-only sequenced events
+are durable. No stale-lease automatic reassignment occurs. Quarantined claims
+require operator-confirmed process cleanup before retry/cancel. Historical
+mailboxes are not overwritten; the runtime transcript is a generated view.
+
+One author task executes at a time in v1, using the opposite model for review.
+Authors edit isolated worktrees outside `.git`; reviewers use independent local
+clones with their own Git metadata. The controller bounds worker/check/Git
+runtime, records explicit permission settings, commits as FelixCatus, validates
+claimed files before and after commit, checks committed whitespace, and sends
+the complete bounded binary-capable diff for exact-base/exact-candidate review.
+A separate integration worktree validates before a non-force push. Changed
+remote main invalidates integration; ambiguous/already-applied pushes block a
+blind retry. POSIX groups and Windows kill-on-close jobs provide lifecycle
+cleanup. JSON stdout is separate from stderr. No global bypass flags are used.
+
+Validation: **39 dedicated tests + 20 subtests** cover atomic/concurrent claims,
+quarantine, stale ownership, dependencies, strict reviews, CLI permissions,
+process timeout/stop/descendant cleanup, stderr separation, local Git remotes,
+repair, hook-injected/out-of-scope files, whitespace, changed main and push
+acknowledgement reconciliation. Final full pytest: **724 passed + 122 subtests passed**. Ruff,
+compileall, common-sync and CLI-doc checks (**10/102/59**) passed.
+
+Real CLI smoke tests passed in both directions using a disposable local Git
+remote: Codex author -> Claude reviewer, then Claude author -> Codex reviewer.
+The reverse test exposed `.git`-nested worktree edit restrictions and linked
+Git metadata visibility; these were fixed with outside-metadata worktrees and
+independent reviewer clones, without bypassing permissions. Claude's first code
+review rejected `ce9be40` with concrete findings; fixes are in `f7206db`.
+Independent Claude CLI review approved implementation `ceab93c7421c0423f9af847d49da69ac5ff0cf01` with no remaining findings.
+
+The committed example remains disabled. The real project queue is empty; no
+background service or task #6–#8 was started. Runtime task approval is explicit.
+This is local trusted-repository lifecycle coordination, not a hostile-code
+sandbox, an encrypted log store, or a promise of a Codex USD spending cap.
+Parallel author execution, automatic orphan PID killing, cloud synchronization,
+and hidden-session recovery are not implemented; see the README's limits.

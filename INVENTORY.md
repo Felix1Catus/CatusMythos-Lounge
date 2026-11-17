@@ -349,3 +349,27 @@ by integrations. Paths and technology metadata still need private handling.
 Not wired in v1: cloud-pivot-finder, api-breaker (Claude owns #4), other
 vulnerability testers/SQLi modes. No automatic new WAF escalation (#6),
 end-to-end exploitation (#7), or semantic severity changes (#8).
+
+## 2026-11-17 addendum — unattended supervisor infrastructure
+
+New `tools/agent-supervisor/`: one stdlib controller, a disabled example config,
+and setup/permission/recovery documentation. It coordinates approved coding
+tasks across Codex and Claude through a Git-common-dir SQLite queue and event
+stream; this is separate from target knowledge and lounge target-probe cells.
+Runtime transcripts preserve historical mailbox files. Worker worktrees live
+outside Git metadata; reviewer clones have independent metadata.
+
+V1 provides fenced ownership, file claims, finite queues, dependencies, bounded
+repairs, exact-SHA cross-model review, validation, stop/quarantine recovery,
+non-force integration and ambiguous-push reconciliation. One author task runs
+at a time; no recurring service, speculative backlog, or #6–#8 work is enabled.
+Default config is disabled, and only explicitly approved task specs execute.
+
+`tests/test_agent_supervisor.py`: **39 tests + 20 subtests** with disposable local
+Git remotes and offline model adapters. Both real CLI author/reviewer directions
+also passed bounded disposable-repository smoke tests. Final full pytest: **724 passed + 122 subtests passed**;
+Ruff, compileall, helper sync, CLI docs (**10/102/59**) and diff checks passed.
+Independent Claude CLI review approved implementation `ceab93c7421c0423f9af847d49da69ac5ff0cf01` with no remaining findings. File claims are post-edit validation plus normal
+CLI sandbox/tool controls; worktrees share the OS user and are not a security
+boundary against hostile executables. Runtime logs/prompts require private
+handling; no model secrets are provisioned or committed by this tool.

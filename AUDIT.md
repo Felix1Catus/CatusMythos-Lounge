@@ -684,3 +684,32 @@ payload reuse is narrowly error-based and expires after 15 minutes.
 Follow-up limits are documented in `scripts/TARGET_KNOWLEDGE.md`: cloud/API
 wiring, remaining testers, rate-limit timing models, history/purge UI, and
 other improvement-list tasks remain out of scope.
+
+## 2026-11-17 — Unattended supervisor implementation and review
+
+Surveyed mailbox ownership, established workflow, lounge identifiers/claims/
+leases/events, and installed Codex/Claude CLI interfaces. Kept implementation
+separate from lounge's HTTP-cell protocol and #5's target-knowledge store.
+Claude's design review `fa479ef` informed atomic file claims, fencing,
+quarantine, worktree identity, exact-SHA review and recovery behavior.
+
+The first independent Claude code review rejected `ce9be40`; corrected full-diff
+visibility (including binary data), successful-parent POSIX cleanup, stderr/JSON
+separation, typed ownership/process errors, noninteractive/deadline-aware Git,
+ambiguous-push handling, committed whitespace checks and protected transcript
+paths. The real reverse CLI smoke exposed additional Git-metadata path issues,
+fixed by separating worker worktrees and independent reviewer clones.
+
+Evidence: **39 supervisor regression tests + 20 subtests**, including local
+non-network Git integration and process lifecycle cases. Both real CLI
+handoff directions passed with a disposable local remote; fixture code was not
+pushed to GitHub. Final full pytest: **724 passed + 122 subtests passed**. Ruff, full compileall,
+common-sync, CLI docs (**10/102/59**) and final diff checks passed.
+Independent Claude CLI review approved implementation `ceab93c7421c0423f9af847d49da69ac5ff0cf01` with no remaining findings.
+
+Shipped defaults remain disabled and the project queue is empty. No tasks
+#6–#8, live target assessment, global permission bypass, API-key provisioning,
+or recurring background service activation occurred. Runtime data is private
+under Git metadata; worktrees are separate. Lifecycle coordination assumes
+trusted repositories and is not hostile-code isolation or a strict Codex cost
+cap. All residual limits are documented in tools/agent-supervisor/README.md.
