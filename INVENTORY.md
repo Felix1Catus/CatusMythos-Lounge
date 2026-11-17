@@ -35,7 +35,7 @@ checked by `tests/test_plugin_bootstrap_hook.py` and the same matrix.
 
 | Coverage | Skills |
 |---|---|
-| Broad script-level regression matrices | `recon-dominator` (59), `cloud-pivot-finder` (38), `attack-path-architect` (28), `16-ai-llm-security` (87), `03-exploit-development` (14), `vuln-chain-composer` (63), legacy `webapp-exploit-hunter` testers (60) |
+| Broad script-level regression matrices | `recon-dominator` (59), `cloud-pivot-finder` (38), `attack-path-architect` (28), `16-ai-llm-security` (87), `03-exploit-development` (14), `vuln-chain-composer` (63), legacy `webapp-exploit-hunter` testers (82) |
 | Focused or partial coverage | `api-breaker` (focused scope/discovery/business-logic/GraphQL/BOLA/BFLA/auth-analyzer/rate-limit/report regressions); `webapp-exploit-hunter` browser/crawler/DOM and selected CLI paths; `web-cache-auditor` (12 focused tests for its script) |
 | Plugin infrastructure | `tests/test_bootstrap.py` (30): parsing, install command construction, retry/cache validation, browser setup, PATH readiness, and nonzero preflight gates |
 | No scripts (manual methodology) | `web-protocol-auditor` |
@@ -82,16 +82,31 @@ specific fixes, test themes, browser limitations, and the latest verification.
   `upload_tester` (largest, 1201 ln), `race_tester`, `waf_bypass_tester`,
   `browser_security_auditor`, `generate_poc`, `vuln_report`. `_common.py` (162).
 - **Deps:** stdlib + playwright (browser auditor only).
-- **Coverage:** `tests/test_webapp_legacy_testers.py` adds a 60-test offline
+- **Coverage:** `tests/test_webapp_legacy_testers.py` adds an 82-test offline
   matrix for LFI, upload, race, SSRF, SSTI, IDOR, XSS, and WAF-bypass logic;
   network calls are mocked. Browser auditor has pure-function and local
   Playwright/Chromium integration coverage; DOM reviewer, crawler, redirect
   helper, and selected auth/SQLi/PoC/report paths have targeted coverage.
-  **Still partial:** auth_tester/sqli_tester network workflows, generate_poc,
-  vuln_report, browser state/redaction boundaries, and full multi-step upload
-  paths are not exhaustively exercised.
+  **Still partial:** auth_tester/sqli_tester's remaining network workflows
+  (boolean/time-based), generate_poc, vuln_report, browser state/redaction
+  boundaries, and full multi-step upload paths are not exhaustively exercised.
+- **Adaptive WAF-evasion retry (2026-11-16):** `sqli_tester.test_error_based`
+  and `xss_tester.test_xss_payloads` no longer give up on the first blocked
+  response. Generalizing `16-ai-llm-security/prompt_injection_tester.py`'s
+  best-of-N mutate/retry pattern: when a response actually looks
+  filtered/blocked (not merely "no signal yet" — a genuinely clean parameter
+  must not trigger extra requests), each tool automatically tries evasion
+  before moving on. SQLi gets 3 new syntax-preserving mutation primitives
+  (keyword case-randomization, inline-comment keyword-splitting, whitespace
+  -to-comment substitution — the same family as sqlmap's `randomcase`/
+  `space2comment` tampers), bounded by `--max-mutations` (default 2, 0
+  disables). XSS auto-escalates to its existing `waf_bypass` payload
+  category instead of requiring the operator to pass `--waf-bypass` by hand.
+  Every escalated finding is marked (`waf_evasion_used`/`auto_escalated`) so
+  a report never silently hides that evasion was needed.
 - **Scope controls:** `--active`, `--submit-forms`, `--callback-url`,
-  `--allow-destructive-poc`, `--skip-lfi-chains`; HTTPS-verified default.
+  `--allow-destructive-poc`, `--skip-lfi-chains`, `--max-mutations` (sqli);
+  HTTPS-verified default.
 
 ### api-breaker — `[82 FOCUSED TESTS; SCOPED CLOSEOUT COMPLETE]`
 - **Use:** API security from domains — discover REST/GraphQL/SOAP, rebuild

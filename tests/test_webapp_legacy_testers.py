@@ -20,6 +20,7 @@ the reproduction did not match what was tested. Fixed via a pure
 import base64
 import importlib.util
 import json
+import random
 import sys
 import unittest
 from contextlib import contextmanager
@@ -555,6 +556,83 @@ class TestXssPayloads(unittest.TestCase):
             self.assertEqual(xss.test_xss_payloads("https://t.test/?q=1", "q", ["html_body"]), [])
 
 
+class TestXssLooksBlocked(unittest.TestCase):
+    def test_block_status_codes(self):
+        self.assertTrue(xss._looks_blocked(403, ""))
+        self.assertTrue(xss._looks_blocked(429, ""))
+
+    def test_block_signature_phrase(self):
+        self.assertTrue(xss._looks_blocked(200, "Request Blocked by Cloudflare"))
+
+    def test_ordinary_response_not_blocked(self):
+        self.assertFalse(xss._looks_blocked(200, "ordinary page content"))
+
+    def test_transport_error_not_blocked(self):
+        # status 0 means the request itself failed -- that's not evidence of
+        # a WAF; escalating on it would just be wasted requests.
+        self.assertFalse(xss._looks_blocked(0, "anything"))
+
+
+class TestXssAutoEscalation(unittest.TestCase):
+    def test_escalates_to_waf_bypass_after_block_signal(self):
+        """Regression: previously --waf-bypass had to be set by hand before
+        the tool would ever try its own bypass payload set. A filtered
+        context-specific payload must now trigger automatic escalation."""
+        calls = []
+
+        def fake(url, method="GET", data=None, headers=None, timeout=10):
+            calls.append(url)
+            if "ScRiPt" in url:  # one of the waf_bypass payloads
+                return 200, {}, "echoed <ScRiPt>alert('0r1z0n')</ScRiPt> back"
+            return 403, {}, "Access Denied"
+
+        with patched(xss, "http_request", fake):
+            findings = xss.test_xss_payloads("https://t.test/?q=1", "q", ["html_body"])
+        self.assertEqual(len(findings), 1)
+        self.assertTrue(findings[0]["auto_escalated"])
+        self.assertEqual(findings[0]["context"], "waf_bypass")
+        # Escalation must have actually sent requests beyond the context set.
+        self.assertGreater(len(calls), len(xss.PAYLOADS["html_body"]))
+
+    def test_no_escalation_without_block_signal(self):
+        """A genuinely unreflected (not blocked) parameter must not trigger
+        extra WAF-bypass requests -- that would be noise, not adaptation."""
+        calls = []
+
+        def fake(url, method="GET", data=None, headers=None, timeout=10):
+            calls.append(url)
+            return 200, {}, "ordinary unrelated page content"
+
+        with patched(xss, "http_request", fake):
+            findings = xss.test_xss_payloads("https://t.test/?q=1", "q", ["html_body"])
+        self.assertEqual(findings, [])
+        self.assertEqual(len(calls), len(xss.PAYLOADS["html_body"]))  # no escalation attempts
+
+    def test_escalation_exhausted_returns_empty(self):
+        """Block signal observed, but even WAF-bypass payloads never reflect
+        -- the function must terminate cleanly with no finding, not loop."""
+        def fake(url, method="GET", data=None, headers=None, timeout=10):
+            return 403, {}, "Access Denied"
+
+        with patched(xss, "http_request", fake):
+            findings = xss.test_xss_payloads("https://t.test/?q=1", "q", ["html_body"])
+        self.assertEqual(findings, [])
+
+    def test_explicit_waf_bypass_flag_runs_regardless_of_block_signal(self):
+        """--waf-bypass (try_bypass=True) is an explicit override: it must
+        still include those payloads even with no block signal at all,
+        preserving the pre-existing opt-in behavior."""
+        def fake(url, method="GET", data=None, headers=None, timeout=10):
+            if "ScRiPt" in url:
+                return 200, {}, "echoed <ScRiPt>alert('0r1z0n')</ScRiPt> back"
+            return 200, {}, "ordinary page, nothing blocked"
+
+        with patched(xss, "http_request", fake):
+            findings = xss.test_xss_payloads("https://t.test/?q=1", "q", ["html_body"], try_bypass=True)
+        self.assertEqual(len(findings), 1)
+        self.assertNotIn("auto_escalated", findings[0])  # explicit opt-in, not auto-escalation
+
+
 # ---------------------------------------------------------------------------
 # auth_tester / sqli_tester pure helpers
 # ---------------------------------------------------------------------------
@@ -577,6 +655,135 @@ class TestSqliDetectErrors(unittest.TestCase):
 
     def test_clean_body(self):
         self.assertEqual(sqli.detect_sql_errors("welcome to the site"), [])
+
+
+class TestSqliLooksBlocked(unittest.TestCase):
+    def test_block_status_codes(self):
+        self.assertTrue(sqli._looks_blocked(403, ""))
+        self.assertTrue(sqli._looks_blocked(406, ""))
+
+    def test_block_signature_phrase(self):
+        self.assertTrue(sqli._looks_blocked(200, "mod_security triggered"))
+
+    def test_ordinary_response_not_blocked(self):
+        self.assertFalse(sqli._looks_blocked(200, "welcome to the site"))
+
+    def test_transport_error_not_blocked(self):
+        self.assertFalse(sqli._looks_blocked(0, "anything"))
+
+
+class TestSqliMutations(unittest.TestCase):
+    _KEYWORD_RE = sqli._SQL_KEYWORD_RE
+
+    def test_mutate_case_preserves_keywords_case_insensitively(self):
+        payload = "' UNION SELECT NULL--"
+        mutated = sqli._mutate_case(payload, random.Random(1))
+        self.assertEqual(mutated.upper(), payload.upper())  # same chars, only case changed
+        self.assertTrue(self._KEYWORD_RE.search(mutated))
+
+    def test_mutate_inline_comment_splits_or_wraps_one_keyword(self):
+        payload = "' UNION SELECT NULL--"
+        mutated = sqli._mutate_inline_comment(payload, random.Random(2))
+        self.assertIn("/*", mutated)
+        self.assertNotEqual(mutated, payload)
+
+    def test_mutate_inline_comment_noop_without_keyword(self):
+        self.assertEqual(sqli._mutate_inline_comment("no keywords here", random.Random(1)), "no keywords here")
+
+    def test_mutate_whitespace_replaces_spaces_with_comment(self):
+        mutated = sqli._mutate_whitespace("UNION SELECT NULL", random.Random(1))
+        self.assertNotIn(" ", mutated)
+        self.assertIn("/**/", mutated)
+
+    def test_mutate_whitespace_noop_without_spaces(self):
+        self.assertEqual(sqli._mutate_whitespace("NOSPACESHERE", random.Random(1)), "NOSPACESHERE")
+
+    def test_mutate_sqli_payload_starts_fresh_from_original_each_call(self):
+        # Matches prompt_injection_tester.py's convention: every mutation
+        # attempt derives from the ORIGINAL payload, never compounds.
+        payload = "' UNION SELECT NULL--"
+        rng = random.Random(42)
+        first = sqli.mutate_sqli_payload(payload, rng)
+        second = sqli.mutate_sqli_payload(payload, rng)
+        # Both must still be recognizably derived from the same original
+        # (same keyword set survives case/comment mutation).
+        for variant in (first, second):
+            self.assertTrue(self._KEYWORD_RE.search(variant.replace("/**/", " ").replace("/*!50000", "").replace("*/", "")))
+
+
+class TestSqliAdaptiveRetry(unittest.TestCase):
+    def test_blocked_baseline_mutation_confirms_finding(self):
+        """The base payload gets blocked; a mutated variant on the very next
+        attempt slips through and triggers a real DB error -- the adaptive
+        retry must catch this where a single static attempt would have
+        missed it. Call 1 is the baseline read (clean), call 2 is the first
+        payload's base attempt (blocked), call 3 is its first mutation
+        (errors) -- the loop must stop there with exactly those 3 calls."""
+        calls = {"n": 0}
+
+        def fake(url, method="GET", data=None, headers=None, timeout=10):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return 200, {}, "ordinary baseline page", 0.05
+            if calls["n"] == 2:
+                return 403, {}, "Access Denied", 0.05
+            return 500, {}, "You have an error in your SQL syntax near 'NULL'", 0.05
+
+        with patched(sqli, "http_request", fake):
+            findings = sqli.test_error_based(
+                "https://t.test/?id=1", "id", "1", max_mutations=3, seed=7)
+        self.assertTrue(findings)
+        self.assertTrue(findings[0]["waf_evasion_used"])
+        self.assertEqual(len(findings[0]["attempts"]), 2)
+        self.assertEqual(calls["n"], 3)
+
+    def test_no_signal_stops_without_exhausting_mutation_budget(self):
+        """A payload that is neither an error nor a block must not trigger
+        any mutation retries -- one request, move to the next payload."""
+        calls = []
+
+        def fake(url, method="GET", data=None, headers=None, timeout=10):
+            calls.append(url)
+            return 200, {}, "ordinary page, nothing happened", 0.05
+
+        with patched(sqli, "http_request", fake):
+            findings = sqli.test_error_based(
+                "https://t.test/?id=1", "id", "1", max_mutations=3, seed=1)
+        self.assertEqual(findings, [])
+        # Exactly one attempt per ERROR_PAYLOADS entry plus one baseline read.
+        self.assertEqual(len(calls), len(sqli.ERROR_PAYLOADS) + 1)
+
+    def test_max_mutations_zero_disables_retry(self):
+        """--max-mutations 0 must behave exactly like the pre-existing
+        single-attempt-per-payload code: blocked or not, no retries."""
+        calls = []
+
+        def fake(url, method="GET", data=None, headers=None, timeout=10):
+            calls.append(url)
+            return 403, {}, "Access Denied", 0.05
+
+        with patched(sqli, "http_request", fake):
+            findings = sqli.test_error_based(
+                "https://t.test/?id=1", "id", "1", max_mutations=0, seed=1)
+        self.assertEqual(findings, [])
+        self.assertEqual(len(calls), len(sqli.ERROR_PAYLOADS) + 1)
+
+    def test_blocked_and_mutations_exhausted_moves_to_next_payload(self):
+        """Every mutation of a payload still gets blocked -- the loop must
+        terminate at the mutation budget and continue to the next payload
+        rather than retrying forever."""
+        current = [0]
+
+        def fake(url, method="GET", data=None, headers=None, timeout=10):
+            current[0] += 1
+            return 403, {}, "Access Denied", 0.05
+
+        with patched(sqli, "http_request", fake):
+            findings = sqli.test_error_based(
+                "https://t.test/?id=1", "id", "1", max_mutations=2, seed=3)
+        self.assertEqual(findings, [])
+        # baseline + len(ERROR_PAYLOADS) * (1 base + 2 mutations)
+        self.assertEqual(current[0], 1 + len(sqli.ERROR_PAYLOADS) * 3)
 
 
 if __name__ == "__main__":

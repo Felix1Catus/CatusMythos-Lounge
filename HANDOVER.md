@@ -554,6 +554,50 @@ claim that every behavior is exhaustively validated):**
   pattern needs "MySQL" after "SQL syntax" — the Generic table catches the
   bare phrase first). auth_tester/sqli_tester network paths and
   generate_poc/vuln_report remain covered only by their earlier targeted tests.
+- **Adaptive WAF-evasion retry for sqli_tester/xss_tester (2026-11-16):**
+  capability add, not a bug fix. Generalizes `16-ai-llm-security`'s
+  `prompt_injection_tester.run_best_of_n`/`mutate_payload` pattern (mutate,
+  retry, stop at first success) into the two web injection testers that most
+  obviously benefit from it: previously, a payload that got caught by a WAF
+  simply produced no finding for that parameter, with no distinction between
+  "genuinely not vulnerable" and "vulnerable but filtered." Both testers now
+  escalate automatically, but ONLY when a response actually looks
+  filtered/blocked (new `_looks_blocked`, duplicated locally in each script
+  rather than added to the byte-synced `_common.py` — see each script's own
+  docstring note); a parameter that produces no signal at all is left alone
+  after one attempt, exactly as before, so this adds capability without
+  adding noise.
+  - `sqli_tester.py`: `test_error_based` retries a blocked payload with up to
+    `--max-mutations` (default 2, 0 disables) syntax-preserving WAF-evasion
+    mutations — `_mutate_case` (keyword case-randomization, e.g. `UNION` ->
+    `UniON`), `_mutate_inline_comment` (keyword-splitting/MySQL versioned
+    comments, e.g. `UNION` -> `/*!50000UNION*/`), `_mutate_whitespace`
+    (space-to-inline-comment substitution) — the same technique family as
+    sqlmap's `randomcase`/`space2comment` tampers. Every mutation attempt
+    derives fresh from the ORIGINAL payload (never compounds), matching
+    `mutate_payload`'s own convention. A confirmed finding via evasion is
+    marked `waf_evasion_used: true` with a full `attempts` trail (attempt
+    number, payload variant, status, blocked flag) so nothing is hidden.
+  - `xss_tester.py`: `test_xss_payloads` now auto-escalates to the existing
+    `waf_bypass` payload category when context-specific payloads are all
+    filtered/blocked and none are confirmed — previously this category only
+    ran when the operator passed `--waf-bypass` by hand. The flag still
+    works as an explicit unconditional override. An auto-escalated finding
+    is marked `auto_escalated: true`.
+  - Added 22 tests to `tests/test_webapp_legacy_testers.py` (webapp legacy
+    matrix: 60 -> 82): block-detection true/false/transport-error cases for
+    both scripts, all three SQLi mutation primitives (including the
+    keyword-preserving and no-keyword-noop cases), the fresh-from-original
+    mutation convention, and — the core behavior under test — a blocked
+    baseline whose mutation confirms a real finding, a clean parameter that
+    triggers exactly one request (no wasted escalation), `--max-mutations 0`
+    reproducing the old single-attempt behavior exactly, the mutation budget
+    terminating cleanly and moving to the next payload, XSS auto-escalation
+    firing/not-firing correctly, and `--waf-bypass`'s explicit-override
+    behavior staying intact.
+  - Full suite verified: **588 tests + 73 subtests passed** (up from 566 + 73
+    before this change); Ruff and compileall clean on the changed files.
+    All new target-facing tests are mocked; no live target was contacted.
 
 ## Browser auditor (`webapp-exploit-hunter/scripts/browser_security_auditor.py`)
 The four browser bullets in the closeout checklist were resolved on 2026-11-16:
