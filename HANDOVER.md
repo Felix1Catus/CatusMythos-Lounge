@@ -1210,3 +1210,19 @@ transfer is not an authenticated sync protocol. Validation: full pytest
 **827 passed + 128 subtests**; Ruff, compileall, common-sync, CLI docs
 (**10 docs / 111 references / 60 CLIs**), and final diff checks pass. No live
 targets were tested.
+
+## 2026-11-17 addendum — guided stateful business scenarios
+
+Added `business_scenario.py` and opt-in `workflow_tester.py --scenario`
+support for operator-authored business assertions. Scenario plans are the
+default and issue no requests. Execution requires `--execute`; scenarios
+containing writes additionally require `--allow-mutation-write`, fixture and
+cleanup declarations, a baseline assertion, a bounded request count, and
+same-origin action URLs. Each case receives fresh setup and cleanup; baseline
+failure skips misuse cases while still attempting cleanup. A 429 or any
+`Retry-After` header halts follow-up probes. Reports contain response statuses
+and assertion pass/fail flags, not response values, and are expressly not
+validated findings. Dynamic-ID capture, automatic action reordering,
+cross-skill persistence, rule inference, and generalized rollback remain
+follow-up work. Focused coverage: `tests/test_business_scenario.py` and the
+existing workflow tests. Full validation is recorded in the audit addendum.

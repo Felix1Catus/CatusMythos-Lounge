@@ -128,6 +128,13 @@ specific fixes, test themes, browser limitations, and the latest verification.
   during development (keyword rank must be the PRIMARY sort key — a
   numberless "start" must sort before a numbered "step2", not after it) and
   the branch-point/cycle termination behavior of the form-chain walker.
+- **Operator-authored stateful business scenarios (2026-11-17).** The same
+  workflow CLI now supports plan-only scenario JSON and explicit execution
+  against an operator-approved origin. Explicit baseline assertions gate
+  misuse cases; bounded requests, same-origin routes, separate write consent,
+  fixture cleanup declarations, and throttle-stop behavior are enforced.
+  Results expose HTTP statuses and assertion outcomes only, and remain
+  unverified observations. Scenario rules/IDs are not inferred or persisted.
 - **Baseline-exclusion false-positive fixes (2026-11-16): ssrf_tester.py,
   ssti_tester.py.** Real bugs, not just hardening — `ssrf_tester.py`'s
   `SSRF_SUCCESS_PATTERNS["localhost"]` included a bare `r"<html"` (matches

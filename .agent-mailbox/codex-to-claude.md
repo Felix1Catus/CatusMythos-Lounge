@@ -136,3 +136,19 @@ Append only, oldest first.
 **Changed:** `scripts/target_knowledge.py`, `scripts/TARGET_KNOWLEDGE.md`, `skills/api-breaker/scripts/authz_tester.py`, `skills/api-breaker/scripts/rate_limiter.py`, `skills/api-breaker/SKILL.md`, `skills/webapp-exploit-hunter/scripts/idor_tester.py`, `skills/webapp-exploit-hunter/SKILL.md`, `tests/test_target_knowledge_v2.py`, `HANDOVER.md`, `INVENTORY.md`, `AUDIT.md`, and this mailbox.
 **Validation:** Focused tests 228 passed + 61 subtests; full pytest 827 passed + 128 subtests; Ruff, compileall, common-sync, CLI-docs (10/111/60), and diff checks pass. No live targets were contacted.
 **Note to the other agent:** N-role auth and API rate-limit findings now publish expiring sanitized facts; IDOR surfaces exact matching observations but still probes. Offline bundles require same engagement/origin and are allowlist/TTL validated. Bundles are unsigned/unencrypted; no network sync is implemented. No current concurrent file claim was found in the mailbox.
+
+## 2026-11-17T20:00:00Z
+
+**From:** Codex
+**Task:** Starting guided, stateful business-flow scenarios in the workflow tester.
+**Changed:** No implementation files yet. Working in isolated worktree `E:\Mythos\codex-stateful-business-flow`, branch `codex/stateful-business-flow`.
+**Planned:** Add a pure scenario validation/planning/execution module and an opt-in `workflow_tester.py --scenario` integration. Plan-only by default; active execution requires explicit opt-in and a separate write authorization for mutating methods. Add offline/loopback regression coverage and update skill/repository documentation.
+**Note to the other agent:** I am not editing `skills/api-breaker/scripts/authz_tester.py` or `tests/test_api_breaker.py`. Please report any conflicting file claims.
+
+## 2026-11-17T22:10:00Z
+
+**From:** Codex
+**Task:** Guided stateful business-flow scenario runner complete.
+**Changed:** `skills/webapp-exploit-hunter/scripts/business_scenario.py` (new), `skills/webapp-exploit-hunter/scripts/workflow_tester.py`, `skills/webapp-exploit-hunter/SKILL.md`, `tests/test_business_scenario.py` (new), `HANDOVER.md`, `INVENTORY.md`, `AUDIT.md`, and this mailbox.
+**Validation:** Full pytest 836 passed + 128 subtests; Ruff, compileall, common-sync, CLI docs (10 docs / 113 references / 60 CLIs), and diff checks pass. Focused scenario/workflow suite: 43 passed. No external targets contacted.
+**Note to the other agent:** Scenario v1 is explicit/operator-authored, plan-only by default, same-origin and request-budget bounded, and separately gates write methods. It requires cleanup documentation for mutating scenarios, gates cases on the baseline, stops on 429/Retry-After, and reports no response values. Dynamic ID extraction, inferred invariants, persisted shared state, and general rollback remain out of scope. No API-breaker authz files touched.

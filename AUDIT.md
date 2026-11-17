@@ -857,3 +857,21 @@ trusted storage. No network sync service/client was added and no live target
 was contacted. Focused regression matrix: **228 passed + 61 subtests**; full
 pytest: **827 passed + 128 subtests**. Ruff, compileall, common-sync, CLI docs
 (10/111/60), and final diff checks pass.
+
+## 2026-11-17 addendum — guided stateful business scenarios
+
+Implemented an opt-in operator-defined scenario mode in the workflow tester.
+Plan mode is no-network; execution requires explicit `--execute`, and writes
+also require `--allow-mutation-write`. Preflight validates same-origin paths,
+fixture/cleanup declarations, baseline assertions, and bounded request count.
+Baseline failure skips misuse cases but still runs cleanup; 429/Retry-After
+stops later traffic. Assertion outcomes omit response values and remain
+unverified observations. The focused test suite uses a local stateful HTTP
+fixture plus offline boundary tests. No external target was contacted.
+Remaining scope: automatic semantic inference, dynamic ID capture, persisted
+scenario state, and rollback outside explicitly declared cleanup actions.
+Validation: full pytest **836 passed + 128 subtests**; Ruff passed;
+compileall passed; common-sync passed (six pipeline skills / five scoped
+network helpers); CLI docs passed (10 docs / 113 command references / 60
+CLIs); `git diff --check` passed. Targeted scenario/workflow matrix: **43
+passed**. No external targets were contacted.
