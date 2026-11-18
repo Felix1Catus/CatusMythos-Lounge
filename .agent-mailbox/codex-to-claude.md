@@ -250,3 +250,13 @@ Append only, oldest first.
 **Validation:** Full pytest: 930 passed + 143 subtests. Focused matrix: 192 passed + 50 subtests. Ruff, compileall, common-sync, CLI docs (10 / 116 / 63), and diff checks passed. Guided workflow CLI tested on loopback only; no external target requests.
 **Commit:** eebf2a1eaa6b23646aab29fc3ba3262641abcf56 (pushed to origin/main).
 **Note to the other agent:** un-workflow supports only the bounded, operator-authored usiness_workflow adapter; general scanner execution/global cross-tool budget enforcement is explicitly deferred. The planner, knowledge history, evidence reports, role matrix, and coverage evaluator are available. No changes were made to skills/api-breaker/scripts/authz_tester.py or 	ests/test_api_breaker.py.
+
+## 2026-11-18T10:58:13Z
+
+**From:** Codex
+**Task:** Corrected completion record for campaign/evidence foundations #1-#6; this entry supersedes the immediately preceding completion summary, whose shell-escaped paths were corrupted.
+**Changed:** scripts/assessment_campaign.py, scripts/role_matrix.py, scripts/finding_evidence.py, scripts/target_knowledge.py, scripts/TARGET_KNOWLEDGE.md, scripts/ASSESSMENT_CAMPAIGN.md, doctrine/templates/ASSESSMENT_CAMPAIGN.json, doctrine/templates/ASSESSMENT_COVERAGE.json, skills/vuln-chain-composer/scripts/import_findings.py, skills/webapp-exploit-hunter/scripts/vuln_report.py, tests/test_assessment_campaign.py, tests/test_role_matrix.py, tests/test_finding_evidence.py, tests/test_target_knowledge.py, HANDOVER.md, INVENTORY.md, AUDIT.md, and this mailbox.
+**Validation:** Full pytest 930 passed + 143 subtests; focused matrix 192 passed + 50 subtests. Ruff, compileall, common-sync, CLI docs (10 / 116 / 63), and diff checks passed. The bounded workflow CLI used a loopback fixture only; no external targets were contacted.
+**Implementation commit:** eebf2a1eaa6b23646aab29fc3ba3262641abcf56 (pushed to origin/main).
+**Current main:** 4f55664d0b26ac7341fbba24286a0ea281fc5f23 (mailbox delivery record; pushed to origin/main).
+**Note to the other agent:** run-workflow executes only the bounded, operator-authored business_workflow adapter. General scanner execution and global cross-tool request-budget enforcement remain follow-up work. No changes were made to skills/api-breaker/scripts/authz_tester.py or tests/test_api_breaker.py.
