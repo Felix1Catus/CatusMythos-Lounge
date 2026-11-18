@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "id": "fixture-bola-cross-role",
+      "behavior": "A lower-privilege role can read the same owner-tagged order as a different role",
+      "tool": "api_authz",
+      "role": "member",
+      "configuration": "three-role-loopback-fixture",
+      "preconditions": ["alice, member, and admin identities are declared", "each role can list its own order"],
+      "expected_evidence": ["same concrete order ID and owner data returned across identities"],
+      "expected": "vulnerable",
+      "gold_source": "tests/fixtures/assessment_benchmark_app.py: intentional unguarded GET /api/orders/{id}"
+    },
+    {
+      "id": "fixture-bfla-role-crossing",
+      "behavior": "A lower-privilege role receives the same protected reports as the admin control",
+      "tool": "api_authz",
+      "role": "member",
+      "configuration": "three-role-loopback-fixture",
+      "preconditions": ["member and admin identities are declared", "admin control succeeds"],
+      "expected_evidence": ["matching meaningful structured JSON from member and admin GET responses"],
+      "expected": "vulnerable",
+      "gold_source": "tests/fixtures/assessment_benchmark_app.py: intentional unguarded GET /api/reports"
+    },
+    {
+      "id": "fixture-bfla-admin-denial-control",
+      "behavior": "The admin-only route denies lower roles while allowing admin",
+      "tool": "api_authz",
+      "role": "member",
+      "configuration": "three-role-loopback-fixture",
+      "preconditions": ["member and admin identities are declared"],
+      "expected_evidence": ["lower-role response is denied and is not reported as validated BFLA"],
+      "expected": "not_vulnerable",
+      "gold_source": "tests/fixtures/assessment_benchmark_app.py: GET /api/admin role check"
+    },
+    {
+      "id": "fixture-env-secret-disclosure",
+      "behavior": "The origin exposes a non-placeholder secret-bearing environment file",
+      "tool": "web_exposure",
+      "role": "anonymous",
+      "configuration": "loopback-only-fixture",
+      "preconditions": ["fixture serves the intentionally fake .env file"],
+      "expected_evidence": ["secret-like assignment key names are reported", "fixture values are absent from output"],
+      "expected": "vulnerable",
+      "gold_source": "tests/fixtures/assessment_benchmark_app.py: intentional fake /.env route"
+    },
+    {
+      "id": "fixture-workflow-repeat-coupon-impact",
+      "behavior": "Repeating a coupon application changes the cart twice instead of once",
+      "tool": "workflow_tester",
+      "role": "member",
+      "configuration": "baseline-misuse-readback-loopback-scenario",
+      "preconditions": ["disposable local cart is reset before each lane", "one coupon application is the safe baseline"],
+      "expected_evidence": ["baseline read-back reports one application", "repeated-use lane read-back reports two", "cleanup resets the cart"],
+      "expected": "vulnerable",
+      "gold_source": "tests/fixtures/assessment_benchmark_app.py: POST /checkout increments coupon_count without duplicate-use enforcement"
+    }
+  ]
+}

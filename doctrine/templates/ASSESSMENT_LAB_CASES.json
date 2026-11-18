@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "id": "dvwa-low-sqli-error-based",
+      "behavior": "A quote in the low-security SQLi id parameter reaches a database error",
+      "tool": "web_sqli",
+      "role": "admin",
+      "configuration": "DVWA-low",
+      "preconditions": ["database initialized", "authenticated session", "security level low"],
+      "expected_evidence": ["error-based SQLi response distinguishes the quote payload from baseline"],
+      "expected": "vulnerable",
+      "gold_source": "Official DVWA low security SQLi training module; local result includes a validated error-based finding"
+    },
+    {
+      "id": "dvwa-low-reflected-xss",
+      "behavior": "The low-security reflected-XSS name parameter reflects injected markup without encoding",
+      "tool": "web_xss",
+      "role": "admin",
+      "configuration": "DVWA-low",
+      "preconditions": ["authenticated session", "security level low", "browser execution validation available"],
+      "expected_evidence": ["browser confirms script execution in the reflected context"],
+      "expected": "vulnerable",
+      "gold_source": "Official DVWA low security reflected-XSS training module"
+    },
+    {
+      "id": "crapi-env-config-disclosure",
+      "behavior": "The public web root serves a populated environment configuration file with sensitive assignments",
+      "tool": "web_exposure",
+      "role": "anonymous",
+      "configuration": "OWASP-crAPI-local-container",
+      "preconditions": ["stock local crAPI Docker deployment"],
+      "expected_evidence": ["text configuration response contains non-placeholder sensitive key assignments; values are redacted"],
+      "expected": "vulnerable",
+      "gold_source": "Local stock OWASP crAPI container response at /.env; verification recorded only sensitive key names"
+    },
+    {
+      "id": "juice-shop-spa-fallback-not-env-leak",
+      "behavior": "Unknown paths /.env and /.git/HEAD return the SPA shell rather than file contents",
+      "tool": "web_exposure",
+      "role": "anonymous",
+      "configuration": "OWASP-Juice-Shop-local-container",
+      "preconditions": ["stock local Juice Shop Docker deployment"],
+      "expected_evidence": ["candidate response is HTML and byte-identical to the root app shell"],
+      "expected": "not_vulnerable",
+      "gold_source": "Local stock Juice Shop comparison of /, /.env, and /.git/HEAD responses"
+    }
+  ]
+}

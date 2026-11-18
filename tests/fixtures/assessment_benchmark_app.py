@@ -7,6 +7,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 class BenchmarkHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         role = self.headers.get("Authorization", "").removeprefix("Bearer ")
+        if self.path == "/.env":
+            body = b"DB_PASSWORD=fixture-not-a-real-secret\nAPI_TOKEN=fixture-token-value\n"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         owned_orders = {"alice": (101, "alice"), "member": (202, "member"),
                         "admin": (303, "admin")}
         if self.path == "/api/orders":
@@ -37,6 +45,24 @@ class BenchmarkHandler(BaseHTTPRequestHandler):
             # Intentional workflow skip: later steps accept a fresh session.
             self._json(200, {"step": self.path.rsplit("/", 1)[-1], "role": role})
             return
+        if self.path == "/cart":
+            self._json(200, {"coupon_count": self.server.state["coupon_count"]})
+            return
+        self.send_error(404)
+
+    def do_POST(self):
+        body_length = int(self.headers.get("Content-Length", "0"))
+        if body_length:
+            self.rfile.read(body_length)
+        if self.path == "/reset":
+            self.server.state["coupon_count"] = 0
+            self._json(200, {"reset": True})
+            return
+        if self.path == "/checkout":
+            # Intentional business-rule flaw: the same coupon is applied twice.
+            self.server.state["coupon_count"] += 1
+            self._json(200, {"accepted": True})
+            return
         self.send_error(404)
 
     def _json(self, status, value):
@@ -53,4 +79,6 @@ class BenchmarkHandler(BaseHTTPRequestHandler):
 
 def serve():
     """Bind loopback only; callers own shutdown and must never expose externally."""
-    return ThreadingHTTPServer(("127.0.0.1", 0), BenchmarkHandler)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), BenchmarkHandler)
+    server.state = {"coupon_count": 0}
+    return server

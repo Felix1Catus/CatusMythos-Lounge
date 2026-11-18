@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "benchmark": "CatusMythos local vulnerable-lab baseline",
+  "run_date": "2026-11-18",
+  "scope": {
+    "target_network": "Docker containers published only on WSL 127.0.0.1",
+    "external_targets_contacted": false,
+    "credentials_or_exposed_values_committed": false
+  },
+  "builds": {
+    "dvwa": {
+      "source_commit": "502ac150ce37c20ca6e04cab7c5ca959f315f2d0",
+      "image": "ghcr.io/digininja/dvwa@sha256:61167ec23fbf861f7d96a7beb4be3612d043d48dbc6b239d4f90d7e8cdff8115",
+      "database_image": "mariadb:10@sha256:7d829180b5b2a9ba74f6242876ab401a0d7dd338a807e522ef92bc9698760f20",
+      "security_level": "low"
+    },
+    "juice_shop": {
+      "image": "bkimminich/juice-shop@sha256:877fc77b12d72b42e486eb09b6b1711cc56514306d92006b284e7e7cf076a809"
+    },
+    "crapi": {
+      "source_commit": "b5fc307f3e5f875809b095b771108ef342a33724",
+      "web_image": "crapi/crapi-web@sha256:b27d246c646bd33898e7d1d2095b6e7576c0993a7b81a73aa7386929493d7151",
+      "identity_image": "crapi/crapi-identity@sha256:5d1db5b3ba8e02bc68711ec6fc4e35ed7cd8b87e63785ece9e7ff5b5e36c5260",
+      "workshop_image": "crapi/crapi-workshop@sha256:d4d2d94d35a31e211b04d5a771881f5ae13e358e8fa0804463ae3bace05dd815"
+    }
+  },
+  "scan_runs": {
+    "dvwa": {
+      "crawler_requests": 51,
+      "sqli_campaign_requests": 32,
+      "sqli_parameters": 2,
+      "sqli_error_based_findings": 1,
+      "xss_campaign_requests": 2,
+      "xss_candidates": 1,
+      "xss_confirmed": 0
+    },
+    "juice_shop": {
+      "crawler_requests": 55,
+      "sensitive_file_requests": 10,
+      "sensitive_file_findings": 0,
+      "api_discovery_requests": 240,
+      "api_discovery_budget": 240,
+      "api_discovery_partial": true,
+      "api_routes_reported_before_cap": 40,
+      "graphql_routes_reported": 4
+    },
+    "crapi": {
+      "crawler_requests": 49,
+      "api_discovery_requests": 72,
+      "api_routes_reported": 3,
+      "sensitive_file_requests": 10,
+      "verified_sensitive_file_findings": 1,
+      "sensitive_key_names": ["DB_PASSWORD", "MONGO_DB_PASSWORD"],
+      "secret_values_recorded": false
+    }
+  },
+  "case_outcomes": [
+    {"case_id": "dvwa-low-sqli-error-based", "expected": "vulnerable", "status": "confirmed"},
+    {"case_id": "dvwa-low-reflected-xss", "expected": "vulnerable", "status": "candidate"},
+    {"case_id": "crapi-env-config-disclosure", "expected": "vulnerable", "status": "confirmed"},
+    {"case_id": "juice-shop-spa-fallback-not-env-leak", "expected": "not_vulnerable", "status": "tested_negative"}
+  ],
+  "labeled_metrics": {
+    "true_positive": 2,
+    "false_positive": 0,
+    "false_negative": 0,
+    "true_negative": 1,
+    "unresolved_labeled": 1,
+    "resolved_subset_precision_percent": 100.0,
+    "resolved_subset_recall_percent": 100.0,
+    "note": "One vulnerable XSS case is unresolved, so these percentages are for the resolved subset only; this small suite is not an internet-wide estimate."
+  },
+  "artifacts": "Runtime scan JSON and per-campaign SQLite ledgers are in the ignored targets/benchmark/ directory on the assessment host. They are not committed because they are engagement artifacts."
+}

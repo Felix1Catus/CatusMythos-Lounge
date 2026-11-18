@@ -56,8 +56,9 @@ tools retain their own exact-key cache/reuse rules.
 
 Three native adapters execute: `business_workflow`, `tech_fingerprint`, and
 anonymous `api_discovery`. The `run-cli` command executes registered entrypoints
-for `cloud_detector`, `api_authz`, `web_crawl`, `web_sqli`, `web_xss`,
-`web_idor`, `web_dom_xss`, `web_cache`, four AI/LLM testers, and `chain_execute`.
+for `cloud_detector`, `api_authz`, `web_crawl`, `web_exposure`, `web_sqli`,
+`web_xss`, `web_idor`, `web_dom_xss`, `web_cache`, four AI/LLM testers, and
+`chain_execute`.
 Shared-transport requests, direct `requests`/urllib clients, and upload tester
 TCP connections reserve against the same ledger. API authz campaign runs require
 the injected gate context and reject mutation-write mode. The runner invokes a fixed
@@ -220,6 +221,20 @@ and `unauthorized_data_proof` all set to true. The evaluator does not send
 requests, inspect credentials, or infer ownership.
 
 ## Coverage and benchmark labels
+
+Run the built-in offline benchmark against its loopback-only authz and
+stateful-workflow fixture:
+
+```powershell
+python scripts/run_local_benchmark.py --output targets/benchmark/local-v2.json
+```
+
+It executes BOLA/BFLA role controls, a protected-admin negative control, and a
+repeat-coupon baseline/misuse/read-back/cleanup scenario. The result uses the
+same coverage evaluator below and includes benchmark-specific precision and
+recall. The fixture is a regression baseline only; run separately provisioned
+DVWA, Juice Shop, or crAPI builds for broader coverage. Do not treat this
+fixture score as internet-wide accuracy.
 
 The plan's `business_context` object remains in the existing
 `context_severity.py` document format. It can be saved as a separate JSON file

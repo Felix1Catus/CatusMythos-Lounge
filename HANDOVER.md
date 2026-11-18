@@ -4,7 +4,66 @@ Living status note for the ongoing CatusMythos-Lounge improvement work. Keep it
 current; it records what has and has **not** been deeply reviewed so later work
 doesn't mistake uneven coverage for uniform coverage.
 
+## 2026-11-18 addendum — three-lab benchmark and sensitive-file detector
+
+Added a bounded `web_exposure` campaign tool after the local crAPI run showed
+that crawl discovery surfaced `/.env` but did not verify its contents. The
+verifier detected the stock crAPI configuration leak from sensitive assignment
+names while omitting values; it returned no finding for Juice Shop's HTML SPA
+fallback at `/.env` and `/.git/HEAD`. Request counts were 10/12 for each app,
+origin-scoped through the campaign gate.
+
+Provisioned official DVWA, Juice Shop, and crAPI Docker labs inside WSL2. All
+published endpoints were bound to loopback. The benchmark report and pinned
+image/source versions are in
+`doctrine/benchmarks/lab-run-2026-11-18.json`; raw scan outputs and SQLite
+campaign ledgers remain in ignored `targets/benchmark/`. After the scans were
+saved, all lab containers and persistent volumes were stopped and removed;
+the WSL Docker package and image cache remain installed for future reruns.
+
+The DVWA low-security SQLi CLI reported one error-based finding across two
+parameters (32/80 campaign requests). The XSS CLI returned one reflected
+candidate, not a confirmed execution (2/80). Crawlers used 51/100 requests on
+DVWA, 55/100 on Juice Shop, and 49/100 on crAPI. API discovery completed on
+crAPI at 72/120 requests with three anonymous routes; Juice Shop discovery
+reported 40 routes and four GraphQL endpoints but exhausted its 240-request
+cap, so it is partial. These inventory results are not vulnerability counts.
+
+The four-case cross-lab score is **2 confirmed true positives, 1 clean true
+negative, 0 false positives, 0 false negatives, and 1 unresolved positive**
+(DVWA XSS). The resolved subset shows 100% precision/recall, but one positive
+is unresolved and this small challenge set does not estimate real-world
+recall. Full suite: **978 tests + 143 subtests**. Ruff, compileall,
+common-sync, CLI-docs (**10 docs / 119 command references / 64 CLIs**), and
+`git diff --check` passed. No lab container remains running.
+
 ## 2026-11-18 addendum — application behavior handoff and test prioritization
+
+Added the bounded `web_exposure` campaign CLI. It tests nine common sensitive
+file paths, compares candidate bodies with the root response, suppresses HTML
+SPA fallbacks, and confirms `.env` only when non-placeholder secret-like
+assignments are present. It reports key names but never configuration values.
+The verifier found the stock local crAPI `.env` disclosure and correctly
+returned no finding for Juice Shop's `/.env` and `/.git/HEAD` HTML shell
+fallbacks. Both campaign runs used 10/12 request slots and stayed origin-scoped.
+The `.env` values were not written to artifacts or output.
+
+Added `scripts/run_local_benchmark.py` and
+`doctrine/templates/ASSESSMENT_LOCAL_BENCHMARK.json`. The benchmark now tests
+BOLA, BFLA, a protected-admin negative control, secret-file exposure, and a
+stateful duplicate-coupon flow with safe baseline, read-back, and reset. Its
+fixture score is **4/4 positives confirmed, 1/1 negative clean**; this remains
+a narrow regression score, not an estimate of external recall.
+
+Lab smoke runs used current local builds: DVWA SQLi run reported one
+error-based finding; reflected XSS returned one candidate requiring browser
+execution proof. Juice Shop crawl/API discovery recorded 8 endpoints and 40
+API route candidates; crAPI recorded 5 crawl endpoints and 3 API candidates.
+Crawler path hits are discovery leads, not vulnerability findings: Juice
+Shop's 38 hidden-path hits include SPA fallbacks, and crAPI's crawler found
+`/.env` before the verifier confirmed its content. The API counts are inventory
+results, not vulnerability detections. Per-lab artifact files are under the
+ignored `targets/benchmark/` directory.
 
 Added `scripts/assessment_intelligence.py` to normalize saved crawler, API
 discovery, and browser reports into short-lived, same-origin endpoint knowledge.

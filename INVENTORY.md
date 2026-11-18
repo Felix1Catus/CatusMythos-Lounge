@@ -7,6 +7,12 @@ it is not itself a line-by-line doc-vs-code audit (that happens per skill).
 
 ## 2026-11-18 addendum — discovery handoff and evidence-led execution
 
+The web app pipeline includes `exposure_tester.py`, a nine-path content-aware
+verifier. It compares responses to the root baseline, ignores HTML SPA
+fallbacks, detects non-placeholder secret assignment values without recording
+them, and checks valid Git HEAD references. It is available as campaign tool
+`web_exposure` and counts each request against the campaign ledger.
+
 Saved crawl, API discovery, and browser reports can be imported as bounded,
 same-origin endpoint observations through `target_knowledge.py --ingest`.
 Authorization testing can consume those learned routes; browser links and form
