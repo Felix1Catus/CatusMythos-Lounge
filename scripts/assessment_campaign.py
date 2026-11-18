@@ -7,13 +7,17 @@ coverage ledger input while enforcing exact-origin scope, role labels,
 dependency order, request budgets, and explicit state-change declarations.
 """
 import argparse
+import contextlib
 import hashlib
 import importlib.util
+import io
 import json
 import os
 import re
 import sqlite3
 import sys
+import tempfile
+import threading
 import time
 from pathlib import Path
 import urllib.error
@@ -371,7 +375,23 @@ def evaluate_coverage(cases, step_results):
                "recall_percent": round(100 * tp / recall_denominator, 1)
                if recall_denominator else None,
                "scope_note": "Metrics apply only to labeled cases in this manifest; they do not estimate internet-wide accuracy."}
-    return {"counts": counts, "cases": rows,
+    dimensions = {}
+    for field in ("tool", "role", "configuration"):
+        groups = {}
+        for row in rows:
+            label = row.get(field) or "unspecified"
+            groups.setdefault(label, []).append(row)
+        dimensions[field] = {
+            label: {
+                "total": len(group),
+                "executed": sum(item["status"] in ("confirmed", "candidate", "tested_negative")
+                                for item in group),
+                **{status: sum(item["status"] == status for item in group)
+                   for status in ("confirmed", "candidate", "tested_negative", "blocked", "untested", "conflict")},
+            }
+            for label, group in sorted(groups.items())
+        }
+    return {"counts": counts, "cases": rows, "coverage_by_dimension": dimensions,
             "labeled_metrics": metrics if metrics["labeled_cases"] else None}
 
 
@@ -412,7 +432,9 @@ class CampaignLedger:
         self.database = str(database)
         self.campaign_id = campaign_id
         try:
-            self.connection = sqlite3.connect(self.database, timeout=15)
+            # Some registered adapters (API discovery) invoke the request gate
+            # from a bounded worker pool; their gate serializes ledger access.
+            self.connection = sqlite3.connect(self.database, timeout=15, check_same_thread=False)
             self.connection.execute("PRAGMA busy_timeout=15000")
             self.connection.executescript("""
                 CREATE TABLE IF NOT EXISTS campaigns (
@@ -439,6 +461,25 @@ class CampaignLedger:
                     event TEXT NOT NULL,
                     created_at INTEGER NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS campaign_step_dependencies (
+                    campaign_id TEXT NOT NULL,
+                    step_id TEXT NOT NULL,
+                    dependency_id TEXT NOT NULL,
+                    PRIMARY KEY (campaign_id, step_id, dependency_id)
+                );
+                CREATE TABLE IF NOT EXISTS campaign_step_registry (
+                    campaign_id TEXT NOT NULL,
+                    step_id TEXT NOT NULL,
+                    tool TEXT NOT NULL,
+                    PRIMARY KEY (campaign_id, step_id)
+                );
+                CREATE TABLE IF NOT EXISTS campaign_step_attestations (
+                    campaign_id TEXT NOT NULL,
+                    step_id TEXT NOT NULL,
+                    note_sha256 TEXT NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    PRIMARY KEY (campaign_id, step_id)
+                );
             """)
         except sqlite3.Error as exc:
             raise CampaignError("cannot open campaign ledger: {}".format(exc)) from exc
@@ -460,6 +501,19 @@ class CampaignLedger:
                 self._event(None, "campaign_created")
             elif row != (plan["engagement"], fingerprint, plan["scope"]["request_budget"]):
                 raise CampaignError("campaign id is already bound to a different engagement or manifest")
+            for step in plan["steps"]:
+                connection.execute(
+                    "INSERT OR IGNORE INTO campaign_steps "
+                    "(campaign_id, step_id, status, requests_used, updated_at) VALUES (?, ?, 'planned', 0, ?)",
+                    (self.campaign_id, step["id"], time.time_ns()))
+                connection.execute(
+                    "INSERT OR IGNORE INTO campaign_step_registry(campaign_id, step_id, tool) VALUES (?, ?, ?)",
+                    (self.campaign_id, step["id"], step["tool"]))
+                for dependency_id in step["depends_on"]:
+                    connection.execute(
+                        "INSERT OR IGNORE INTO campaign_step_dependencies "
+                        "(campaign_id, step_id, dependency_id) VALUES (?, ?, ?)",
+                        (self.campaign_id, step["id"], dependency_id))
             connection.commit()
         except Exception:
             connection.rollback()
@@ -477,18 +531,71 @@ class CampaignLedger:
             row = self.connection.execute(
                 "SELECT status FROM campaign_steps WHERE campaign_id=? AND step_id=?",
                 (self.campaign_id, step_id)).fetchone()
-            if row and row[0] == "completed":
+            if row is None:
+                raise CampaignError("campaign step is not registered")
+            if row[0] == "completed":
                 raise CampaignError("campaign step is already completed; refusing duplicate execution")
             if row and row[0] == "running" and not retry_interrupted:
                 raise CampaignError("campaign step has an unfinished run; inspect it before explicit retry")
             if row and row[0] in ("interrupted", "failed") and not retry_interrupted:
                 raise CampaignError("campaign step was interrupted; use --retry-interrupted after review")
+            dependencies = self.connection.execute(
+                "SELECT d.dependency_id, s.status FROM campaign_step_dependencies d "
+                "LEFT JOIN campaign_steps s ON s.campaign_id=d.campaign_id AND s.step_id=d.dependency_id "
+                "WHERE d.campaign_id=? AND d.step_id=?",
+                (self.campaign_id, step_id)).fetchall()
+            unfinished = [dependency_id for dependency_id, status in dependencies if status != "completed"]
+            if unfinished:
+                raise CampaignError("campaign step dependencies are not completed: {}".format(
+                    ", ".join(unfinished)))
             self.connection.execute(
                 "INSERT INTO campaign_steps(campaign_id, step_id, status, requests_used, updated_at) "
                 "VALUES (?, ?, 'running', 0, ?) ON CONFLICT(campaign_id, step_id) DO UPDATE SET "
                 "status='running', updated_at=excluded.updated_at",
                 (self.campaign_id, step_id, time.time_ns()))
             self._event(step_id, "step_started")
+            self.connection.commit()
+        except Exception:
+            self.connection.rollback()
+            raise
+
+    def attest_external_step(self, step_id, operator_note):
+        """Record operator-confirmed completion of an adapterless, non-workflow step."""
+        if not isinstance(operator_note, str) or not operator_note.strip() or len(operator_note) > 1000:
+            raise CampaignError("operator_note must be a nonempty note under 1000 characters")
+        try:
+            self.connection.execute("BEGIN IMMEDIATE")
+            row = self.connection.execute(
+                "SELECT status FROM campaign_steps WHERE campaign_id=? AND step_id=?",
+                (self.campaign_id, step_id)).fetchone()
+            if row is None:
+                raise CampaignError("campaign step is not registered")
+            tool = self.connection.execute(
+                "SELECT tool FROM campaign_step_registry WHERE campaign_id=? AND step_id=?",
+                (self.campaign_id, step_id)).fetchone()
+            if tool is None:
+                raise CampaignError("campaign step is not registered")
+            if tool[0] in ("business_workflow", "tech_fingerprint", "api_discovery"):
+                raise CampaignError("native campaign steps must be completed through run-step")
+            if row[0] != "planned":
+                raise CampaignError("only a still-planned external step can be attested")
+            dependencies = self.connection.execute(
+                "SELECT d.dependency_id, s.status FROM campaign_step_dependencies d "
+                "LEFT JOIN campaign_steps s ON s.campaign_id=d.campaign_id AND s.step_id=d.dependency_id "
+                "WHERE d.campaign_id=? AND d.step_id=?",
+                (self.campaign_id, step_id)).fetchall()
+            unfinished = [dependency_id for dependency_id, status in dependencies if status != "completed"]
+            if unfinished:
+                raise CampaignError("campaign step dependencies are not completed: {}".format(
+                    ", ".join(unfinished)))
+            self.connection.execute(
+                "UPDATE campaign_steps SET status='completed', updated_at=? WHERE campaign_id=? AND step_id=?",
+                (time.time_ns(), self.campaign_id, step_id))
+            note_digest = hashlib.sha256(operator_note.strip().encode("utf-8")).hexdigest()
+            self.connection.execute(
+                "INSERT INTO campaign_step_attestations VALUES (?, ?, ?, ?)",
+                (self.campaign_id, step_id, note_digest, time.time_ns()))
+            self._event(step_id, "step_operator_attested")
             self.connection.commit()
         except Exception:
             self.connection.rollback()
@@ -501,10 +608,12 @@ class CampaignLedger:
                 "SELECT request_budget, requests_used FROM campaigns WHERE campaign_id=?",
                 (self.campaign_id,)).fetchone()
             step = self.connection.execute(
-                "SELECT requests_used FROM campaign_steps WHERE campaign_id=? AND step_id=?",
+                "SELECT requests_used, status FROM campaign_steps WHERE campaign_id=? AND step_id=?",
                 (self.campaign_id, step_id)).fetchone()
             if campaign is None or step is None:
                 raise CampaignError("campaign step is not registered in the ledger")
+            if step[1] != "running":
+                raise CampaignError("request reservations require a running campaign step")
             if campaign[1] >= campaign[0]:
                 raise CampaignError("campaign-wide request budget exhausted")
             if step[0] >= step_budget:
@@ -637,6 +746,200 @@ def execute_workflow_step(manifest, manifest_path, step_id, confirm_target, requ
     return result
 
 
+def execute_fingerprint_step(manifest, step_id, confirm_target, request_reserver):
+    """Run the registered single-origin fingerprint adapter under the campaign request cap."""
+    plan = validate_manifest(manifest)
+    selected = next((step for step in plan["steps"] if step["id"] == step_id), None)
+    if selected is None or selected["tool"] != "tech_fingerprint":
+        raise CampaignError("selected step does not exist or is not a tech_fingerprint step")
+    if canonical_origin(confirm_target) != selected["origin"]:
+        raise CampaignError("--confirm-target must exactly match the selected step's in-scope origin")
+    target = next(item for item in plan["targets"] if item["id"] == selected["target"])
+    script_dir = Path(__file__).resolve().parents[1] / "skills" / "recon-dominator" / "scripts"
+    script_path = script_dir / "tech_fingerprint.py"
+    spec = importlib.util.spec_from_file_location("catus_campaign_tech_fingerprint", script_path)
+    if spec is None or spec.loader is None:
+        raise CampaignError("cannot load the registered technology fingerprint adapter")
+    module = importlib.util.module_from_spec(spec)
+    previous_common = sys.modules.pop("_common", None)
+    sys.path.insert(0, str(script_dir))
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.remove(str(script_dir))
+        sys.modules.pop("_common", None)
+        if previous_common is not None:
+            sys.modules["_common"] = previous_common
+
+    requests_sent = 0
+    budget_exhausted = False
+
+    def reserve_request():
+        nonlocal requests_sent, budget_exhausted
+        try:
+            request_reserver(step_id, selected["max_requests"])
+        except CampaignError:
+            budget_exhausted = True
+            return False
+        requests_sent += 1
+        return True
+
+    hostname = urlsplit(target["url"]).netloc
+    fingerprint = module.fingerprint_host(hostname, before_request=reserve_request)
+    details = fingerprint.get("details", {})
+    security_headers = details.get("security_headers", {})
+    known_technologies = {technology for mapping in module.HEADER_SIGNATURES.values()
+                          for technology in mapping.values()}
+    known_technologies.update(module.COOKIE_SIGNATURES.values())
+    known_technologies.update(technology for _pattern, technology in module.BODY_SIGNATURES)
+    versioned = details.get("versioned_components", [])
+    versioned = versioned if isinstance(versioned, list) else []
+    safe_versioned = [{"kind": item["kind"], "name": item["name"], "version": item["version"]}
+                      for item in versioned[:100] if isinstance(item, dict)
+                      and all(isinstance(item.get(field), str) and len(item[field]) <= 160
+                              for field in ("kind", "name", "version"))]
+    return {
+        "tool": "tech_fingerprint",
+        "technologies": sorted(set(fingerprint.get("technologies", [])) & known_technologies),
+        "waf": [item for item in details.get("waf", []) if item in module.WAF_SIGNATURES.values()],
+        "cdn": [item for item in details.get("cdn", []) if item in module.CDN_HEADER_SIGNATURES.values()],
+        "versioned_components": safe_versioned,
+        "security_headers": {name: {"present": value.get("present") is True}
+                             for name, value in security_headers.items() if isinstance(value, dict)},
+        "execution": {"step_id": step_id, "requests_sent": requests_sent,
+                      "request_budget": selected["max_requests"],
+                      "budget_exhausted": budget_exhausted,
+                      "response_headers_recorded": False, "response_bodies_recorded": False},
+    }
+
+
+def execute_api_discovery_step(manifest, step_id, confirm_target, request_reserver):
+    """Run anonymous, same-origin API discovery under the shared campaign request cap."""
+    plan = validate_manifest(manifest)
+    selected = next((step for step in plan["steps"] if step["id"] == step_id), None)
+    if selected is None or selected["tool"] != "api_discovery":
+        raise CampaignError("selected step does not exist or is not an api_discovery step")
+    if canonical_origin(confirm_target) != selected["origin"]:
+        raise CampaignError("--confirm-target must exactly match the selected step's in-scope origin")
+    target = next(item for item in plan["targets"] if item["id"] == selected["target"])
+    role = next(item for item in target["roles"] if item["name"] == selected["role"])
+    if role["name"] != "anonymous" or role.get("credential_env"):
+        raise CampaignError("native api_discovery currently supports only an anonymous role")
+
+    script_dir = Path(__file__).resolve().parents[1] / "skills" / "api-breaker" / "scripts"
+    script_path = script_dir / "api_discovery.py"
+    spec = importlib.util.spec_from_file_location("catus_campaign_api_discovery", script_path)
+    if spec is None or spec.loader is None:
+        raise CampaignError("cannot load the registered API discovery adapter")
+    module = importlib.util.module_from_spec(spec)
+    previous_common = sys.modules.pop("_common", None)
+    sys.path.insert(0, str(script_dir))
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.remove(str(script_dir))
+        sys.modules.pop("_common", None)
+        if previous_common is not None:
+            sys.modules["_common"] = previous_common
+
+    requests_sent = 0
+    budget_exhausted = False
+    scope_violation_blocked = False
+    throttled = False
+    last_request_at = 0.0
+    reserve_lock = threading.Lock()
+    opener = urllib.request.build_opener(_NoRedirect())
+
+    def bounded_request(url, method="GET", headers=None, data=None, timeout=8):
+        nonlocal requests_sent, budget_exhausted, scope_violation_blocked, throttled, last_request_at
+        if throttled:
+            return 429, {"Retry-After": "campaign adapter stopped after throttling"}, ""
+        try:
+            if target_origin(url) != selected["origin"]:
+                scope_violation_blocked = True
+                return 0, {}, ""
+        except CampaignError:
+            scope_violation_blocked = True
+            return 0, {}, ""
+        with reserve_lock:
+            try:
+                request_reserver(step_id, selected["max_requests"])
+            except CampaignError:
+                budget_exhausted = True
+                return 0, {}, ""
+            delay = 0.1 - (time.monotonic() - last_request_at)
+            if delay > 0:
+                time.sleep(delay)
+            requests_sent += 1
+            last_request_at = time.monotonic()
+        if isinstance(data, str):
+            data = data.encode("utf-8")
+        response = _bounded_http_request(opener, url, method=method, data=data, headers=headers)
+        response_status, response_headers, _body = response
+        if response_status == 429 or any(str(name).lower() == "retry-after" for name in response_headers):
+            throttled = True
+        return response
+
+    original_legacy = module.discover_legacy_versions
+
+    def in_scope_legacy_discovery(discovered, base_url, extra_headers=None, burst_count=30,
+                                  enable_wayback=True, domain=None):
+        return original_legacy(discovered, base_url, extra_headers, burst_count,
+                               enable_wayback=False, domain=None)
+
+    module.http_request = bounded_request
+    module.discover_legacy_versions = in_scope_legacy_discovery
+    # The stock adapter probes PUT/DELETE/PATCH on discovered paths. The
+    # campaign adapter deliberately omits method discovery to avoid writes.
+    module.test_http_methods = lambda *_args, **_kwargs: []
+
+    with tempfile.TemporaryDirectory(prefix="campaign-api-") as directory:
+        output_path = Path(directory) / "api-discovery.json"
+        old_argv = sys.argv
+        try:
+            sys.argv = ["api_discovery", "--domain", target["url"], "--threads", "1",
+                        "--output", str(output_path)]
+            with contextlib.redirect_stdout(io.StringIO()):
+                module.main()
+        finally:
+            sys.argv = old_argv
+        try:
+            raw = json.loads(output_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise CampaignError("API discovery adapter did not produce valid output") from exc
+
+    discovered = raw.get("discovered_apis", [])
+    safe_endpoints = []
+    if isinstance(discovered, list):
+        for item in discovered[:1000]:
+            if not isinstance(item, dict):
+                continue
+            path = urlsplit(str(item.get("url", ""))).path
+            safe_endpoints.append({"path": path[:500], "status": item.get("status"),
+                                   "api_type": item.get("api_type", "unknown"),
+                                   "auth_required": item.get("auth_required") is True})
+    raw_stats = raw.get("stats", {})
+    allowed_stats = {"paths_tested", "js_scripts_analyzed", "js_endpoints_probed", "apis_found",
+                     "graphql_endpoints", "openapi_docs", "documented_endpoints", "legacy_version_findings"}
+    safe_stats = {key: value for key, value in raw_stats.items()
+                  if key in allowed_stats and isinstance(value, int) and not isinstance(value, bool)} \
+        if isinstance(raw_stats, dict) else {}
+    return {
+        "tool": "api_discovery",
+        "stats": safe_stats,
+        "discovered_apis": safe_endpoints,
+        "finding_types": sorted({str(item.get("type")) for item in raw.get("findings", [])
+                                  if isinstance(item, dict) and isinstance(item.get("type"), str)}),
+        "execution": {"step_id": step_id, "requests_sent": requests_sent,
+                      "request_budget": selected["max_requests"],
+                      "budget_exhausted": budget_exhausted,
+                      "throttled": throttled,
+                      "off_origin_requests_blocked": scope_violation_blocked,
+                      "response_bodies_recorded": False, "credentials_recorded": False,
+                      "state_changing_method_probes_enabled": False},
+    }
+
+
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     """Keep a confirmed target origin from redirecting active scenario traffic."""
 
@@ -687,7 +990,8 @@ def main(argv=None):
     authorization.add_argument("--plan", required=True)
     authorization.add_argument("--results", required=True, help="JSON list of role/object observations")
     authorization.add_argument("--output", required=True)
-    workflow = subparsers.add_parser("run-workflow", help="execute one explicitly gated business scenario")
+    workflow = subparsers.add_parser("run-workflow", aliases=["run-step"],
+                                    help="execute one registered campaign adapter")
     workflow.add_argument("--manifest", required=True)
     workflow.add_argument("--step", required=True)
     workflow.add_argument("--confirm-target", required=True,
@@ -700,6 +1004,16 @@ def main(argv=None):
     status = subparsers.add_parser("campaign-status", help="show campaign counters and step states")
     status.add_argument("--state-db", required=True)
     status.add_argument("--campaign-id", required=True)
+    status.add_argument("--output", help="Optional JSON output path")
+    record = subparsers.add_parser("campaign-record-step",
+                                   help="attest completion of an adapterless campaign step")
+    record.add_argument("--manifest", required=True)
+    record.add_argument("--state-db", required=True)
+    record.add_argument("--campaign-id", required=True)
+    record.add_argument("--step", required=True)
+    record.add_argument("--operator-note", required=True,
+                        help="Short note identifying the external result reviewed; note text is hashed")
+    record.add_argument("--output", help="Optional JSON output path")
     args = parser.parse_args(argv)
     try:
         if args.command == "plan":
@@ -708,7 +1022,7 @@ def main(argv=None):
             result = validate_manifest(_read_json(args.manifest))
             if args.knowledge_db:
                 result = enrich_plan_with_knowledge(result, args.knowledge_db, args.engagement)
-        elif args.command == "run-workflow":
+        elif args.command in ("run-workflow", "run-step"):
             if bool(args.state_db) != bool(args.campaign_id):
                 raise CampaignError("--state-db and --campaign-id must be supplied together")
             if args.retry_interrupted and not args.state_db:
@@ -716,25 +1030,41 @@ def main(argv=None):
             manifest = _read_json(args.manifest)
             opener = urllib.request.build_opener(_NoRedirect())
             ledger = None
+            plan = validate_manifest(manifest)
+            selected = next((step for step in plan["steps"] if step["id"] == args.step), None)
+            if selected is None or selected["tool"] not in (
+                    "business_workflow", "tech_fingerprint", "api_discovery"):
+                raise CampaignError("selected step does not exist or has no native campaign adapter")
+            if selected["tool"] in ("tech_fingerprint", "api_discovery") and not args.state_db:
+                raise CampaignError("active scanner steps require --state-db and --campaign-id")
+            if canonical_origin(args.confirm_target) != selected["origin"]:
+                raise CampaignError("--confirm-target must exactly match the selected step's in-scope origin")
+            if selected["depends_on"] and not args.state_db:
+                raise CampaignError("steps with dependencies require --state-db and --campaign-id")
             if args.state_db:
-                plan = validate_manifest(manifest)
-                selected = next((step for step in plan["steps"] if step["id"] == args.step), None)
-                if selected is None or selected["tool"] != "business_workflow":
-                    raise CampaignError("selected step does not exist or is not a business_workflow")
-                if canonical_origin(args.confirm_target) != selected["origin"]:
-                    raise CampaignError("--confirm-target must exactly match the selected step's in-scope origin")
                 ledger = CampaignLedger(args.state_db, args.campaign_id)
                 ledger.bind(manifest)
                 ledger.start_step(args.step, args.retry_interrupted)
             try:
-                result = execute_workflow_step(
-                    manifest, args.manifest, args.step, args.confirm_target,
-                    lambda url, method="GET", data=None, headers=None: _bounded_http_request(
-                        opener, url, method=method, data=data, headers=headers),
-                    budget_reserver=ledger.reserve_request if ledger else None)
+                if selected["tool"] == "tech_fingerprint":
+                    result = execute_fingerprint_step(
+                        manifest, args.step, args.confirm_target, ledger.reserve_request)
+                elif selected["tool"] == "api_discovery":
+                    result = execute_api_discovery_step(
+                        manifest, args.step, args.confirm_target, ledger.reserve_request)
+                else:
+                    result = execute_workflow_step(
+                        manifest, args.manifest, args.step, args.confirm_target,
+                        lambda url, method="GET", data=None, headers=None: _bounded_http_request(
+                            opener, url, method=method, data=data, headers=headers),
+                        budget_reserver=ledger.reserve_request if ledger else None)
                 if ledger:
+                    execution = result["execution"]
+                    run_status = ("failed" if execution.get("budget_exhausted")
+                                  or execution.get("throttled")
+                                  or execution.get("off_origin_requests_blocked") else "completed")
+                    ledger.finish_step(args.step, run_status)
                     result["execution"]["campaign_budget"] = ledger.summary()
-                    ledger.finish_step(args.step, "completed")
             except Exception:
                 if ledger:
                     ledger.finish_step(args.step, "failed")
@@ -745,6 +1075,21 @@ def main(argv=None):
         elif args.command == "campaign-status":
             ledger = CampaignLedger(args.state_db, args.campaign_id)
             try:
+                result = ledger.summary()
+            finally:
+                ledger.close()
+        elif args.command == "campaign-record-step":
+            manifest = _read_json(args.manifest)
+            plan = validate_manifest(manifest)
+            selected = next((step for step in plan["steps"] if step["id"] == args.step), None)
+            if selected is None:
+                raise CampaignError("selected step does not exist")
+            if selected["tool"] == "business_workflow":
+                raise CampaignError("business_workflow steps must complete through run-workflow")
+            ledger = CampaignLedger(args.state_db, args.campaign_id)
+            try:
+                ledger.bind(manifest)
+                ledger.attest_external_step(args.step, args.operator_note)
                 result = ledger.summary()
             finally:
                 ledger.close()
@@ -768,8 +1113,12 @@ def main(argv=None):
                 module = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(module)
                 result = module.evaluate_matrix(cases, results)
-        Path(args.output).write_text(json.dumps(result, indent=2, allow_nan=False) + "\n", encoding="utf-8")
-        print(json.dumps({"status": "ok", "output": str(Path(args.output).resolve())}))
+        output_path = getattr(args, "output", None)
+        if output_path:
+            Path(output_path).write_text(json.dumps(result, indent=2, allow_nan=False) + "\n", encoding="utf-8")
+            print(json.dumps({"status": "ok", "output": str(Path(output_path).resolve())}))
+        else:
+            print(json.dumps(result, indent=2, allow_nan=False))
         return 0
     except (OSError, ValueError) as exc:
         parser.error(str(exc))

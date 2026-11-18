@@ -14,19 +14,22 @@ remain historical snapshots; `git log -1` is the source of truth for the tip.
 Added an offline campaign manifest/planner, scoped role/object matrix evaluator,
 coverage registry and evaluator, common finding evidence review, and contextual
 business-document scope validation. The planner can read sanitized target
-knowledge and emits an ordered plan; a single gated executor runs the existing
-business-scenario workflow through an injected, no-redirect, request-budgeted
-transport. An opt-in SQLite ledger persists workflow step state, makes the
-aggregate request budget atomic across workflow steps, and blocks completed
-step replay. General scanner CLI orchestration and shared caps across those
-independent CLIs remain deferred. Existing testers retain their independent
-probe behavior and request controls.
+knowledge and emits an ordered plan. Its opt-in SQLite ledger persists step
+state, enforces dependencies, reserves requests atomically, and blocks
+completed-step replay. Three native adapters execute: business workflows,
+technology fingerprinting, and anonymous API discovery. Other tools can be
+recorded by operator attestation until native adapters are available; their
+requests are outside the aggregate counter. Existing testers retain their
+independent probe behavior and request controls.
 
 The shared target-knowledge store now migrates schema-v1 databases to schema v2
 and retains the newest 20,000 local history events per engagement for auditing;
 current lookups remain latest-value views. New tests cover campaign scope,
 role/state policy, knowledge migration/history, report integration, and labeled
-coverage metrics. Full suite: **933 passed + 143 subtests**. Ruff, compileall, common-sync, CLI docs
+coverage metrics. The standalone web report now supports evidence-gated
+business-context tiers without changing technical CVSS or severity. Full suite:
+**942 passed + 143 subtests**; focused campaign/evidence/context/knowledge/recon
+matrix: **160 passed + 47 subtests**. Ruff, compileall, common-sync, CLI docs
 (**10/116/63**), and diff checks pass. See `scripts/ASSESSMENT_CAMPAIGN.md`
 and the corresponding dated handover/audit records for explicit execution and
 accuracy limits.

@@ -11,7 +11,8 @@ origin scope, engagement, registered tools, role labels, step dependencies,
 per-step/global declared budgets, and state-change cleanup gates. It emits an
 ordered plan, can attach allowlisted exact-origin knowledge as advisory data,
 evaluates role/object observations, and reports coverage separately from
-precision/recall. Only provenance-backed labeled cases feed those metrics;
+precision/recall. Coverage output also groups execution by tool, role, and
+configuration. Only provenance-backed labeled cases feed accuracy metrics;
 conflicting confirmed/negative results remain conflicts.
 
 `scripts/role_matrix.py` builds role × object cases from operator-declared
@@ -36,19 +37,23 @@ compatible with `context_severity.py` / `calculate_impact.py`.
 
 Templates and usage: `doctrine/templates/ASSESSMENT_CAMPAIGN.json`,
 `doctrine/templates/ASSESSMENT_COVERAGE.json`, and
-`scripts/ASSESSMENT_CAMPAIGN.md`. `run-workflow` executes one existing
-operator-authored business scenario after exact-origin confirmation, stateful
-gate and scenario-budget preflight; the no-redirect transport enforces its
-per-step request cap. The optional `CampaignLedger` in SQLite now binds a
-campaign ID to an engagement and manifest hash, reserves request counts
-transactionally across workflow steps, reports step/campaign status, and
-refuses completed-step replay. Interrupted/failed runs require explicit
-`--retry-interrupted` review. This cap only covers runs using the workflow
-adapter; scanner CLIs remain independent. Tests use offline data and loopback
-only; no external target was contacted. Full validation after the ledger change:
-**933 pytest tests + 143 subtests passed**. Ruff, compileall (`skills scripts
-tests tools`), common-sync, CLI docs (**10 / 116 / 63**), and `git diff
---check` passed.
+`scripts/ASSESSMENT_CAMPAIGN.md`. Three native campaign adapters execute:
+`business_workflow`, `tech_fingerprint`, and anonymous `api_discovery`. The
+opt-in SQLite ledger binds a campaign ID to an engagement and manifest hash,
+enforces step dependencies, reserves scanner requests transactionally, reports
+step/campaign status, and refuses completed-step replay. Unsupported scanner
+steps can be marked complete only by operator attestation; the note is hashed,
+not stored, and its requests are outside the central counter. API discovery is
+serial, exact-origin, request-capped, skips Wayback and potentially mutating
+method probes, and emits only sanitized output. The standalone web report now
+accepts evidence-backed business context; contextual severity remains separate
+from technical CVSS and is assigned only after complete proof review.
+
+Tests use offline data and loopback only; no external target was contacted in
+this implementation. Full validation: **942 pytest tests + 143 subtests**.
+Focused campaign/evidence/context/knowledge/recon matrix: **160 tests + 47
+subtests passed**. Ruff, compileall (`skills scripts tests tools`), common-sync,
+CLI docs (**10 / 116 / 63**), and `git diff --check` passed.
 
 ## 2026-11-17 addendum — supervised improvement #6: automatic bounded WAF escalation
 

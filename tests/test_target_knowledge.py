@@ -48,6 +48,16 @@ class KnowledgeTests(unittest.TestCase):
     def observe(self, **kwargs):
         self.store.observe(self.url, 'technology', 'stack', {'name': 'nginx'}, 'fixture', **kwargs)
 
+    def test_fingerprint_normalizes_standard_http_header_casing(self):
+        headers = {"Server": "nginx", "X-Powered-By": "PHP/8.3", "Set-Cookie": "csrftoken=fixture",
+                   "Strict-Transport-Security": "max-age=1000"}
+        with patch.object(recon, 'fetch_page', return_value=(headers, "")):
+            result = recon.fingerprint_host("app.example.test")
+        self.assertIn("Nginx", result["technologies"])
+        self.assertIn("PHP", result["technologies"])
+        self.assertIn("Django", result["technologies"])
+        self.assertTrue(result["details"]["security_headers"]["HSTS"]["present"])
+
     def test_origin_canonicalization(self):
         cases = {'HTTPS://EXAMPLE.TEST/a?secret=x': 'https://example.test:443',
                  'https://example.test:443/': 'https://example.test:443',

@@ -1057,10 +1057,12 @@ contracts in `scripts/assessment_campaign.py`, `scripts/role_matrix.py`, and
 `scripts/finding_evidence.py`. Campaign inputs require exact credential-free
 HTTP(S) origins, explicit targets/roles, ordered dependencies, bounded declared
 request totals, and an explicit mutation/cleanup declaration for workflow
-steps. The planner accepts registered tool identifiers only; it does not run
-arbitrary commands or launch general scanner CLIs. Its `run-workflow` adapter
-executes only the existing operator-authored business-scenario runner after an
-exact-origin confirmation and request-budget preflight.
+steps. The SQLite ledger records step state and enforces dependencies across
+resumed runs. Three native adapters execute: the gated business workflow, the
+single-origin tech fingerprint, and anonymous API discovery. API discovery is
+serial, budget-gated, strips response details, disables Wayback, and omits
+potentially mutating HTTP method probes. Other registered tool steps remain
+operator-attested until they have native adapters.
 
 **Shared state and evidence.** Target knowledge schema v2 keeps the latest
 observation as the query view and adds a bounded local history of up to 20,000
@@ -1080,19 +1082,18 @@ not become negatives. Campaign business-context input is validated against
 scoped hostnames and stays compatible with the existing contextual severity
 path.
 
-**Boundary / remaining uncertainty.** Planning and reporting are offline;
-`run-workflow` is the only active adapter. Its optional SQLite ledger persists
-step state, prevents completed-step replay, and enforces a transactional
-aggregate cap across calls using that adapter. It does not cap independent,
-heterogeneous scanner CLIs. Existing per-tool limits are not equivalent to a
-whole-pipeline cap. Automatic hypothesis generation,
-dynamic business-context inference, and full benchmark labels across DVWA
-levels and another vulnerable application remain follow-up work. These files
-make no live-target claims.
+**Boundary / remaining uncertainty.** Campaign-wide request enforcement covers
+only the three native adapters. Independently run scanner CLIs are outside the
+counter; operator attestations complete dependencies but do not claim verified
+execution or account for their requests. Coverage precision/recall still
+requires engagement-supplied, provenance-backed labeled cases. Business
+context is explicit operator/evidence input; no application-purpose inference
+is claimed. The standalone web report now supports separate evidence-gated
+contextual tiers. These files make no live-target claims.
 
-**Validation.** Final exact-code full pytest: **933 passed + 143 subtests**.
-Campaign ledger regression tests: **37 passed + 7 subtests**. Full
-Ruff, compileall (`skills scripts tests tools`), common-sync, CLI-doc checker
-(**10 skill docs / 116 references / 63 CLIs**), and `git diff --check` pass.
-Tests use synthetic/offline data and existing local fixtures; this work made no
-live target requests.
+**Validation.** Final full pytest: **942 passed + 143 subtests**. Focused
+campaign/evidence/context/knowledge/recon matrix: **160 passed + 47 subtests**.
+Full Ruff, compileall (`skills scripts tests tools`), common-sync, CLI-doc
+checker (**10 skill docs / 116 references / 63 CLIs**), and `git diff --check`
+pass. Tests use synthetic/offline data and loopback fixtures; this work made no
+external target requests.

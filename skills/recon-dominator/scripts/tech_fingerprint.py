@@ -133,8 +133,10 @@ COOKIE_SIGNATURES = {
 }
 
 
-def fetch_page(url, timeout=10):
+def fetch_page(url, timeout=10, before_request=None):
     """Fetch a page and return headers + body."""
+    if before_request is not None and before_request() is False:
+        return None, None
     ctx = ssl.create_default_context()
     if os.environ.get("CATUS_INSECURE_TLS") == "1":
         ctx.check_hostname = False
@@ -200,28 +202,30 @@ def extract_versioned_components(body):
     return components
 
 
-def fingerprint_host(host):
-    """Fingerprint a single host."""
+def fingerprint_host(host, before_request=None):
+    """Fingerprint a single host; optional gate runs before each HTTP request."""
     technologies = set()
     details = {}
 
     # Try HTTPS first, then HTTP
     for scheme in ["https", "http"]:
         url = f"{scheme}://{host}/"
-        headers, body = fetch_page(url)
+        headers, body = (fetch_page(url) if before_request is None else
+                         fetch_page(url, before_request=before_request))
         if headers:
+            normalized_headers = {str(name).lower(): value for name, value in headers.items()}
             details["url"] = url
             details["headers"] = headers
 
             # Header-based detection
             for header_name, sigs in HEADER_SIGNATURES.items():
-                header_val = (headers.get(header_name, "") or "").lower()
+                header_val = (normalized_headers.get(header_name.lower(), "") or "").lower()
                 for pattern, tech in sigs.items():
                     if pattern in header_val:
                         technologies.add(tech)
 
             # Cookie-based detection
-            cookies = headers.get("Set-Cookie", "") or ""
+            cookies = normalized_headers.get("set-cookie", "") or ""
             for cookie_name, tech in COOKIE_SIGNATURES.items():
                 if cookie_name.lower() in cookies.lower():
                     technologies.add(tech)
@@ -236,11 +240,10 @@ def fingerprint_host(host):
                 details["waf"] = sorted(wafs)
 
             # CDN detection (specific header presence)
-            headers_lower = {k.lower(): v for k, v in headers.items()}
             cdns = set()
             for hdr, cdn_name in CDN_HEADER_SIGNATURES.items():
-                if hdr in headers_lower:
-                    cdns.add(cdn_name or headers_lower[hdr])
+                if hdr in normalized_headers:
+                    cdns.add(cdn_name or normalized_headers[hdr])
             if cdns:
                 details["cdn"] = sorted(cdns)
 
@@ -259,7 +262,7 @@ def fingerprint_host(host):
                 "Cross-Origin-Resource-Policy": "CORP",
             }
             for header, name in sec_headers.items():
-                val = headers.get(header, "")
+                val = normalized_headers.get(header.lower(), "")
                 security[name] = {"present": bool(val), "value": val or "MISSING"}
 
             details["security_headers"] = security

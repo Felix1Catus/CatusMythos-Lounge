@@ -309,6 +309,8 @@ class CampaignManifestTests(unittest.TestCase):
             ledger.reserve_request("workflow", 2)
             ledger.reserve_request("workflow", 2)
             ledger.finish_step("workflow", "completed")
+            with self.assertRaisesRegex(campaign.CampaignError, "require a running campaign step"):
+                ledger.reserve_request("workflow", 2)
             ledger.start_step("workflow-two")
             ledger.reserve_request("workflow-two", 2)
             ledger.reserve_request("workflow-two", 2)
@@ -318,6 +320,41 @@ class CampaignManifestTests(unittest.TestCase):
             ledger.close()
         self.assertEqual(summary["requests_used"], 4)
         self.assertEqual(summary["request_budget"], 4)
+
+    def test_campaign_ledger_enforces_dependencies_and_operator_attestation(self):
+        value = manifest()
+        value["steps"][0]["tool"] = "cloud_detector"
+        with tempfile.TemporaryDirectory() as directory:
+            ledger = campaign.CampaignLedger(Path(directory) / "state.sqlite", "ordered-run")
+            ledger.bind(value)
+            with self.assertRaisesRegex(campaign.CampaignError, "dependencies are not completed: recon"):
+                ledger.start_step("discover")
+            with self.assertRaisesRegex(campaign.CampaignError, "dependencies are not completed: recon"):
+                ledger.attest_external_step("discover", "Premature completion attempt")
+            ledger.attest_external_step("recon", "Reviewed recon-dominator output recon.json")
+            ledger.start_step("discover")
+            ledger.finish_step("discover", "completed")
+            summary = ledger.summary()
+            ledger.close()
+        self.assertEqual([step["status"] for step in summary["steps"]],
+                         ["completed", "completed", "planned"])
+
+    def test_campaign_record_step_cli_attests_registered_external_step(self):
+        value = manifest()
+        value["steps"] = [{"id": "manual-scan", "tool": "web_idor", "target": "app",
+                           "max_requests": 4}]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest_path, state_path = root / "campaign.json", root / "state.sqlite"
+            manifest_path.write_text(json.dumps(value), encoding="utf-8")
+            self.assertEqual(campaign.main([
+                "campaign-record-step", "--manifest", str(manifest_path),
+                "--state-db", str(state_path), "--campaign-id", "cli-run",
+                "--step", "manual-scan", "--operator-note", "Reviewed local scan output",
+            ]), 0)
+            result = campaign.main(["campaign-status", "--state-db", str(state_path),
+                                    "--campaign-id", "cli-run"])
+        self.assertEqual(result, 0)
 
     def test_http_transport_does_not_follow_redirects_out_of_scope(self):
         class Handler(BaseHTTPRequestHandler):
@@ -386,6 +423,97 @@ class CampaignManifestTests(unittest.TestCase):
         self.assertTrue(all(entry["assertions_passed"] for entry in result["results"]))
         self.assertNotIn('"state": "ok"', json.dumps(result))
 
+    def test_run_step_cli_fingerprints_only_confirmed_loopback_origin_with_ledger_budget(self):
+        class Handler(BaseHTTPRequestHandler):
+            server_version = "nginx"
+            sys_version = ""
+
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header("Set-Cookie", "session=secret-campaign-cookie")
+                self.end_headers()
+                self.wfile.write(b'<html><meta name="generator" content="secret-campaign-meta">WordPress fixture</html>')
+
+            def log_message(self, fmt, *args):
+                pass
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(worker.join, 2)
+        self.addCleanup(server.shutdown)
+        base = "http://127.0.0.1:{}/".format(server.server_address[1])
+        value = manifest()
+        value["scope"] = {"origins": [base], "request_budget": 2}
+        value["targets"][0]["url"] = base
+        value["steps"] = [{"id": "fingerprint", "tool": "tech_fingerprint", "target": "app",
+                           "max_requests": 2}]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest_path, state_path, output_path = root / "campaign.json", root / "state.sqlite", root / "out.json"
+            manifest_path.write_text(json.dumps(value), encoding="utf-8")
+            self.assertEqual(campaign.main([
+                "run-step", "--manifest", str(manifest_path), "--step", "fingerprint",
+                "--confirm-target", base, "--state-db", str(state_path),
+                "--campaign-id", "fingerprint-run", "--output", str(output_path),
+            ]), 0)
+            result = json.loads(output_path.read_text(encoding="utf-8"))
+        self.assertIn("WordPress", result["technologies"])
+        self.assertLessEqual(result["execution"]["requests_sent"], 2)
+        self.assertFalse(result["execution"]["response_headers_recorded"])
+        self.assertNotIn("secret-campaign-cookie", json.dumps(result))
+        self.assertNotIn("secret-campaign-meta", json.dumps(result))
+
+    def test_run_step_cli_api_discovery_caps_same_origin_reads_and_omits_bodies(self):
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                body = b'{"openapi":"3.0.0","paths":{}}'
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Set-Cookie", "session=secret-api-cookie")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, fmt, *args):
+                pass
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(worker.join, 2)
+        self.addCleanup(server.shutdown)
+        base = "http://127.0.0.1:{}/".format(server.server_address[1])
+        value = manifest()
+        value["scope"] = {"origins": [base], "request_budget": 2}
+        value["targets"][0]["url"] = base
+        value["steps"] = [{"id": "api-discovery", "tool": "api_discovery", "target": "app",
+                           "max_requests": 2}]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest_path, state_path, output_path = root / "campaign.json", root / "state.sqlite", root / "out.json"
+            manifest_path.write_text(json.dumps(value), encoding="utf-8")
+            self.assertEqual(campaign.main([
+                "run-step", "--manifest", str(manifest_path), "--step", "api-discovery",
+                "--confirm-target", base, "--state-db", str(state_path),
+                "--campaign-id", "api-run", "--output", str(output_path),
+            ]), 0)
+            result = json.loads(output_path.read_text(encoding="utf-8"))
+            ledger = campaign.CampaignLedger(state_path, "api-run")
+            campaign_state = ledger.summary()
+            ledger.close()
+        self.assertLessEqual(result["execution"]["requests_sent"], 2)
+        self.assertTrue(result["discovered_apis"])
+        self.assertTrue(result["execution"]["budget_exhausted"])
+        self.assertEqual(campaign_state["requests_used"], 2)
+        self.assertEqual(campaign_state["steps"][0]["status"], "failed")
+        self.assertTrue(result["execution"]["state_changing_method_probes_enabled"] is False)
+        self.assertFalse(result["execution"]["response_bodies_recorded"])
+        self.assertFalse(result["execution"]["credentials_recorded"])
+        self.assertNotIn("secret-api-cookie", json.dumps(result))
+
     def test_manifest_schema_and_scope_types_are_strict(self):
         value = manifest()
         value["schema_version"] = 2
@@ -413,6 +541,9 @@ class CoverageManifestTests(unittest.TestCase):
                                              "blocked": 1, "untested": 0, "conflict": 0, "total": 3,
                                              "executed": 2, "execution_coverage_percent": 66.7})
         self.assertIsNone(report["labeled_metrics"])
+        self.assertEqual(report["coverage_by_dimension"]["tool"]["web_xss"]["confirmed"], 1)
+        self.assertEqual(report["coverage_by_dimension"]["role"]["any"]["tested_negative"], 1)
+        self.assertEqual(report["coverage_by_dimension"]["configuration"]["any"]["blocked"], 1)
 
     def test_candidate_outcome_takes_precedence_over_negative(self):
         cases = campaign.load_coverage_manifest({"schema_version": 1,
@@ -477,6 +608,33 @@ class CoverageManifestTests(unittest.TestCase):
         with self.assertRaisesRegex(campaign.CampaignError, "gold_source"):
             campaign.load_coverage_manifest({"schema_version": 1, "cases": [
                 {"id": "case-a", "behavior": "x", "expected": "vulnerable"}]})
+
+    def test_coverage_cli_reports_labeled_metrics_and_dimension_gaps(self):
+        case_doc = {"schema_version": 1, "cases": [
+            {"id": "sqli-vulnerable", "behavior": "error-based SQLi", "tool": "web_sqli",
+             "role": "member", "configuration": "fixture-low", "expected": "vulnerable",
+             "gold_source": "local fixture oracle"},
+            {"id": "sqli-safe", "behavior": "parameterized query", "tool": "web_sqli",
+             "role": "anonymous", "configuration": "fixture-low", "expected": "not_vulnerable",
+             "gold_source": "local fixture oracle"},
+        ]}
+        results = [
+            {"case_id": "sqli-vulnerable", "status": "confirmed",
+             "evidence_review": confirmed_evidence_review()},
+            {"case_id": "sqli-safe", "status": "tested_negative"},
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest_path, results_path, output_path = root / "cases.json", root / "results.json", root / "report.json"
+            manifest_path.write_text(json.dumps(case_doc), encoding="utf-8")
+            results_path.write_text(json.dumps(results), encoding="utf-8")
+            self.assertEqual(campaign.main(["coverage", "--manifest", str(manifest_path),
+                                            "--results", str(results_path), "--output", str(output_path)]), 0)
+            report = json.loads(output_path.read_text(encoding="utf-8"))
+        self.assertEqual(report["labeled_metrics"]["precision_percent"], 100.0)
+        self.assertEqual(report["labeled_metrics"]["recall_percent"], 100.0)
+        self.assertEqual(report["coverage_by_dimension"]["tool"]["web_sqli"]["total"], 2)
+        self.assertEqual(report["coverage_by_dimension"]["role"]["member"]["confirmed"], 1)
 
     def test_cli_plan_writes_validated_plan_without_launching_tools(self):
         with tempfile.TemporaryDirectory() as directory:

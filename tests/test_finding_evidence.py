@@ -1,6 +1,9 @@
 """Regression tests for cross-pipeline evidence review and report integration."""
 import importlib.util
+import json
+import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -38,6 +41,16 @@ def complete_proof():
         "impact_evidence": ["controlled marker appeared in expected output"],
         "private_note": "must not appear in review output",
     }
+
+
+def context_profile(host, criticality, sensitivity, scope):
+    return {"schema_version": 1, "assets": [{
+        "host": host, "service_name": "Payment service", "purpose": "Processes tenant payments",
+        "business_criticality": criticality, "data_sensitivity": sensitivity,
+        "affected_scope": scope, "evidence": "Owner supplied service inventory",
+        "impact_evidence": "Finding affects the documented payment workflow",
+        "source": "engagement risk register",
+    }]}
 
 
 class EvidenceContractTests(unittest.TestCase):
@@ -94,6 +107,54 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertEqual(rendered["evidence_review"]["assessment_state"], "confirmed")
         self.assertTrue(rendered["validated"])
         self.assertNotIn("private_note", str(rendered["evidence_review"]))
+
+    def test_report_business_context_is_evidence_gated_and_kept_separate_from_cvss(self):
+        context = context_profile("app.example.test", "critical", "restricted", "multi_tenant")
+        confirmed = {"type": "sqli", "url": "https://app.example.test/search", "validated": True,
+                     "severity": "MEDIUM", "proof": complete_proof()}
+        assessment = reporter.assess_finding_business_context(confirmed, context)
+        self.assertEqual(assessment["contextual_severity"], "CRITICAL")
+        self.assertEqual(assessment["technical_severity"], "MEDIUM")
+
+        unproven = {"type": "sqli", "url": "https://app.example.test/search", "validated": True,
+                    "severity": "MEDIUM"}
+        assessment = reporter.assess_finding_business_context(unproven, context)
+        self.assertIsNone(assessment["contextual_severity"])
+        self.assertEqual(assessment["potential_contextual_severity"], "CRITICAL")
+
+    def test_report_business_context_does_not_bleed_to_neighbor_subdomain(self):
+        context = context_profile("app.example.test", "critical", "restricted", "multi_tenant")
+        finding = {"type": "sqli", "url": "https://api.app.example.test/search", "validated": True,
+                   "severity": "MEDIUM", "proof": complete_proof()}
+        assessment = reporter.assess_finding_business_context(finding, context)
+        self.assertEqual(assessment["status"], "no_matching_context")
+        self.assertIsNone(assessment["contextual_severity"])
+
+    def test_report_cli_emits_context_tier_without_replacing_technical_severity(self):
+        report_script = ROOT / "skills" / "webapp-exploit-hunter" / "scripts" / "vuln_report.py"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            findings_path, context_path, output_base = (root / "findings.json", root / "context.json",
+                                                        root / "report")
+            findings_path.write_text(json.dumps({"meta": {"target": "app.example.test"}, "findings": [
+                {"type": "sqli", "url": "https://app.example.test/search", "validated": True,
+                 "severity": "MEDIUM", "proof": complete_proof()},
+                {"type": "xss", "url": "https://app.example.test/profile", "validated": True,
+                 "severity": "LOW"},
+            ]}), encoding="utf-8")
+            context_path.write_text(json.dumps(context_profile(
+                "app.example.test", "critical", "restricted", "multi_tenant")), encoding="utf-8")
+            run = subprocess.run([sys.executable, str(report_script), "--findings", str(findings_path),
+                                  "--format", "json", "--output", str(output_base),
+                                  "--business-context", str(context_path)],
+                                 capture_output=True, text=True, timeout=20)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            output = json.loads(Path(str(output_base) + ".json").read_text(encoding="utf-8"))
+        confirmed, unproven = output["findings"]
+        self.assertEqual(confirmed["severity"], "MEDIUM")
+        self.assertEqual(confirmed["business_context_assessment"]["contextual_severity"], "CRITICAL")
+        self.assertEqual(unproven["severity"], "LOW")
+        self.assertEqual(unproven["business_context_assessment"]["potential_contextual_severity"], "CRITICAL")
 
 
 if __name__ == "__main__":

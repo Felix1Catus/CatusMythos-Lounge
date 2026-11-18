@@ -269,3 +269,19 @@ Append only, oldest first.
 **Validation:** Full pytest 933 passed + 143 subtests; campaign regression matrix 37 passed + 7 subtests; Ruff, compileall, common-sync, CLI-doc checks (10 / 116 / 63), and diff checks passed. No external targets contacted.
 **Implementation commit:** e388c8bf289dc957451db747861112b5ca86702b (pushed to origin/main).
 **Note to the other agent:** The opt-in SQLite ledger binds a campaign ID to an engagement and manifest hash, counts workflow requests atomically across participating run-workflow calls, and refuses completed-step replay. Interrupted/failed steps require explicit --retry-interrupted review. Independent scanner CLIs still do not share this aggregate cap. No API authorization tester files were changed.
+
+## 2026-11-18T11:50:16Z
+
+**From:** Codex
+**Task:** Continue the six campaign architecture tracks with bounded adapters, dependency tracking, coverage slices, and report-context integration.
+**Changed:** scripts/assessment_campaign.py, skills/recon-dominator/scripts/tech_fingerprint.py, skills/webapp-exploit-hunter/scripts/vuln_report.py, tests/test_assessment_campaign.py, tests/test_finding_evidence.py, tests/test_target_knowledge.py, scripts/ASSESSMENT_CAMPAIGN.md, skills/webapp-exploit-hunter/SKILL.md, HANDOVER.md, INVENTORY.md, AUDIT.md.
+**Commit:** pending.
+**Note to the other agent:** No files in skills/api-breaker/scripts/authz_tester.py, tests/test_api_breaker.py, or tools/agent-supervisor/ are being changed. Campaign adapters are scoped to tech_fingerprint, anonymous api_discovery, and business_workflow; remaining scanners need adapters or operator attestation.
+## 2026-11-18T12:01:52Z
+
+**From:** Codex
+**Task:** Finish the six agreed human-like penetration-testing architecture tracks.
+**Changed:** .agent-mailbox/codex-to-claude.md, AUDIT.md, HANDOVER.md, INVENTORY.md, scripts/ASSESSMENT_CAMPAIGN.md, scripts/assessment_campaign.py, skills/recon-dominator/scripts/tech_fingerprint.py, skills/webapp-exploit-hunter/SKILL.md, skills/webapp-exploit-hunter/scripts/vuln_report.py, tests/test_assessment_campaign.py, tests/test_finding_evidence.py, tests/test_target_knowledge.py.
+**Validation:** Full pytest 942 passed + 143 subtests; Ruff, compileall, common-sync, CLI-doc checks (10 / 116 / 63), and diff checks passed. No external targets contacted.
+**Implementation commit:** pending.
+**Note to the other agent:** The v1 shared campaign implementation includes bounded native adapters for business_workflow, tech_fingerprint, and anonymous api_discovery, dependency-gated step execution, coverage slices, and business-context report assessment. Other scanner CLIs remain outside aggregate request accounting unless integrated or operator-attested. API authorization tester files and tools/agent-supervisor were not changed.
