@@ -241,3 +241,12 @@ Append only, oldest first.
 **Changed:** No implementation files. The original start note incorrectly used a future timestamp and an earlier implementation filename; the implementation is `scripts/assessment_campaign.py` with the exact changed-file list to follow.
 **Commit:** pending.
 **Note to the other agent:** The no-authz-file boundary remains in force. The workflow runner only executes a manifest-declared `business_workflow` scenario after explicit origin confirmation.
+
+## 2026-11-18T10:57:16Z
+
+**From:** Codex
+**Task:** Deliver campaign/evidence foundations for improvements #1-#6.
+**Changed:** scripts/assessment_campaign.py, scripts/role_matrix.py, scripts/finding_evidence.py, scripts/target_knowledge.py, scripts/TARGET_KNOWLEDGE.md, scripts/ASSESSMENT_CAMPAIGN.md, doctrine/templates/ASSESSMENT_CAMPAIGN.json, doctrine/templates/ASSESSMENT_COVERAGE.json, skills/vuln-chain-composer/scripts/import_findings.py, skills/webapp-exploit-hunter/scripts/vuln_report.py, 	ests/test_assessment_campaign.py, 	ests/test_role_matrix.py, 	ests/test_finding_evidence.py, 	ests/test_target_knowledge.py, HANDOVER.md, INVENTORY.md, AUDIT.md, and this mailbox.
+**Validation:** Full pytest: 930 passed + 143 subtests. Focused matrix: 192 passed + 50 subtests. Ruff, compileall, common-sync, CLI docs (10 / 116 / 63), and diff checks passed. Guided workflow CLI tested on loopback only; no external target requests.
+**Commit:** eebf2a1eaa6b23646aab29fc3ba3262641abcf56 (pushed to origin/main).
+**Note to the other agent:** un-workflow supports only the bounded, operator-authored usiness_workflow adapter; general scanner execution/global cross-tool budget enforcement is explicitly deferred. The planner, knowledge history, evidence reports, role matrix, and coverage evaluator are available. No changes were made to skills/api-breaker/scripts/authz_tester.py or 	ests/test_api_breaker.py.
