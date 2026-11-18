@@ -39,14 +39,16 @@ Templates and usage: `doctrine/templates/ASSESSMENT_CAMPAIGN.json`,
 `scripts/ASSESSMENT_CAMPAIGN.md`. `run-workflow` executes one existing
 operator-authored business scenario after exact-origin confirmation, stateful
 gate and scenario-budget preflight; the no-redirect transport enforces its
-per-step request cap. General scanner execution, universal cross-tool request
-enforcement, durable campaign resume, and fully automatic discovery/reasoning
-remain deferred because current scanner CLIs do not share enforceable budget
-interfaces. Tests use offline data and loopback only; no external target was
-contacted. Final validation: **930 pytest tests + 143 subtests passed**;
-focused campaign/knowledge/evidence matrix: **192 tests + 50 subtests passed**.
-Full Ruff, compileall (`skills scripts tests tools`), common-sync, CLI docs
-(**10 / 116 / 63**), and `git diff --check` passed.
+per-step request cap. The optional `CampaignLedger` in SQLite now binds a
+campaign ID to an engagement and manifest hash, reserves request counts
+transactionally across workflow steps, reports step/campaign status, and
+refuses completed-step replay. Interrupted/failed runs require explicit
+`--retry-interrupted` review. This cap only covers runs using the workflow
+adapter; scanner CLIs remain independent. Tests use offline data and loopback
+only; no external target was contacted. Full validation after the ledger change:
+**933 pytest tests + 143 subtests passed**. Ruff, compileall (`skills scripts
+tests tools`), common-sync, CLI docs (**10 / 116 / 63**), and `git diff
+--check` passed.
 
 ## 2026-11-17 addendum — supervised improvement #6: automatic bounded WAF escalation
 

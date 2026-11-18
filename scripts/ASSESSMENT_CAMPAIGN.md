@@ -58,6 +58,34 @@ counts each outbound request against the selected step's budget. A 429 or
 result contains statuses/assertion booleans, never response bodies or auth
 values.
 
+For durable, resumable execution, pass a local SQLite state file and a stable
+campaign ID. The first run binds that ID to the engagement, manifest hash, and
+declared global request budget. Every outbound workflow request is atomically
+reserved against both the step ceiling and aggregate campaign ceiling. A
+completed step cannot be replayed. A crashed or failed step requires explicit
+review and `--retry-interrupted`; retry can repeat side effects, so use only
+after checking the target and prior result. The ledger records step states and
+counts, never request URLs, credentials, response bodies, or payload values.
+
+```powershell
+python scripts/assessment_campaign.py run-workflow `
+  --manifest targets/fixture/campaign.json `
+  --step checkout-flow `
+  --confirm-target https://app.example.test `
+  --state-db targets/fixture/campaign-state.sqlite `
+  --campaign-id assessment-2026-11 `
+  --output targets/fixture/checkout-result.json
+
+python scripts/assessment_campaign.py campaign-status `
+  --state-db targets/fixture/campaign-state.sqlite `
+  --campaign-id assessment-2026-11
+```
+
+Keep the SQLite file local to the engagement and protect it like assessment
+metadata. The aggregate counter covers runs that use this campaign ledger and
+the `business_workflow` adapter only; independent scanner CLIs do not currently
+participate in it.
+
 ```powershell
 python scripts/assessment_campaign.py run-workflow `
   --manifest targets/fixture/campaign.json `
@@ -121,12 +149,12 @@ same case has both a confirmed and negative result, it is marked `conflict`.
 
 ## Current v1 boundary
 
-The planner validates and emits the ordered plan. Execution adapters for
-recon, API discovery, and vulnerability scanners, a durable campaign event
-log/resume command, and universal cross-tool request-budget enforcement remain
-deferred. Existing per-tool request limits remain in effect where a CLI exposes
-one. This boundary is
-intentional because current tools expose different request controls, and a
+The planner validates and emits the ordered plan. The workflow adapter has an
+opt-in SQLite ledger for durable step state and an aggregate workflow request
+cap. Execution adapters for recon, API discovery, and vulnerability scanners,
+and universal cross-tool request-budget enforcement remain deferred. Existing
+per-tool request limits remain in effect where a CLI exposes one. This boundary
+is intentional because current tools expose different request controls, and a
 campaign-wide ceiling cannot be claimed until the runner can enforce it across
 all adapters. Browser-only proof, automatic workflow discovery, remote
 knowledge synchronization, and fully automatic business-context inference are

@@ -7,11 +7,14 @@ coverage ledger input while enforcing exact-origin scope, role labels,
 dependency order, request budgets, and explicit state-change declarations.
 """
 import argparse
+import hashlib
 import importlib.util
 import json
 import os
 import re
+import sqlite3
 import sys
+import time
 from pathlib import Path
 import urllib.error
 import urllib.request
@@ -400,8 +403,155 @@ def enrich_plan_with_knowledge(plan, database, engagement):
     return plan
 
 
+class CampaignLedger:
+    """SQLite-backed campaign identity, step state, and aggregate request counter."""
+
+    def __init__(self, database, campaign_id):
+        if not isinstance(campaign_id, str) or not MAX_ID.fullmatch(campaign_id):
+            raise CampaignError("campaign_id must be a stable identifier (letters, digits, . _ -)")
+        self.database = str(database)
+        self.campaign_id = campaign_id
+        try:
+            self.connection = sqlite3.connect(self.database, timeout=15)
+            self.connection.execute("PRAGMA busy_timeout=15000")
+            self.connection.executescript("""
+                CREATE TABLE IF NOT EXISTS campaigns (
+                    campaign_id TEXT PRIMARY KEY,
+                    engagement TEXT NOT NULL,
+                    manifest_sha256 TEXT NOT NULL,
+                    request_budget INTEGER NOT NULL,
+                    requests_used INTEGER NOT NULL DEFAULT 0,
+                    created_at INTEGER NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS campaign_steps (
+                    campaign_id TEXT NOT NULL,
+                    step_id TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    requests_used INTEGER NOT NULL DEFAULT 0,
+                    updated_at INTEGER NOT NULL,
+                    PRIMARY KEY (campaign_id, step_id),
+                    FOREIGN KEY (campaign_id) REFERENCES campaigns(campaign_id)
+                );
+                CREATE TABLE IF NOT EXISTS campaign_events (
+                    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    campaign_id TEXT NOT NULL,
+                    step_id TEXT,
+                    event TEXT NOT NULL,
+                    created_at INTEGER NOT NULL
+                );
+            """)
+        except sqlite3.Error as exc:
+            raise CampaignError("cannot open campaign ledger: {}".format(exc)) from exc
+
+    def bind(self, manifest):
+        plan = validate_manifest(manifest)
+        fingerprint = hashlib.sha256(json.dumps(
+            manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")).hexdigest()
+        connection = self.connection
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT engagement, manifest_sha256, request_budget FROM campaigns WHERE campaign_id=?",
+                (self.campaign_id,)).fetchone()
+            if row is None:
+                connection.execute("INSERT INTO campaigns VALUES (?, ?, ?, ?, 0, ?)",
+                                   (self.campaign_id, plan["engagement"], fingerprint,
+                                    plan["scope"]["request_budget"], time.time_ns()))
+                self._event(None, "campaign_created")
+            elif row != (plan["engagement"], fingerprint, plan["scope"]["request_budget"]):
+                raise CampaignError("campaign id is already bound to a different engagement or manifest")
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        return plan
+
+    def _event(self, step_id, event):
+        self.connection.execute(
+            "INSERT INTO campaign_events(campaign_id, step_id, event, created_at) VALUES (?, ?, ?, ?)",
+            (self.campaign_id, step_id, event, time.time_ns()))
+
+    def start_step(self, step_id, retry_interrupted=False):
+        try:
+            self.connection.execute("BEGIN IMMEDIATE")
+            row = self.connection.execute(
+                "SELECT status FROM campaign_steps WHERE campaign_id=? AND step_id=?",
+                (self.campaign_id, step_id)).fetchone()
+            if row and row[0] == "completed":
+                raise CampaignError("campaign step is already completed; refusing duplicate execution")
+            if row and row[0] == "running" and not retry_interrupted:
+                raise CampaignError("campaign step has an unfinished run; inspect it before explicit retry")
+            if row and row[0] in ("interrupted", "failed") and not retry_interrupted:
+                raise CampaignError("campaign step was interrupted; use --retry-interrupted after review")
+            self.connection.execute(
+                "INSERT INTO campaign_steps(campaign_id, step_id, status, requests_used, updated_at) "
+                "VALUES (?, ?, 'running', 0, ?) ON CONFLICT(campaign_id, step_id) DO UPDATE SET "
+                "status='running', updated_at=excluded.updated_at",
+                (self.campaign_id, step_id, time.time_ns()))
+            self._event(step_id, "step_started")
+            self.connection.commit()
+        except Exception:
+            self.connection.rollback()
+            raise
+
+    def reserve_request(self, step_id, step_budget):
+        try:
+            self.connection.execute("BEGIN IMMEDIATE")
+            campaign = self.connection.execute(
+                "SELECT request_budget, requests_used FROM campaigns WHERE campaign_id=?",
+                (self.campaign_id,)).fetchone()
+            step = self.connection.execute(
+                "SELECT requests_used FROM campaign_steps WHERE campaign_id=? AND step_id=?",
+                (self.campaign_id, step_id)).fetchone()
+            if campaign is None or step is None:
+                raise CampaignError("campaign step is not registered in the ledger")
+            if campaign[1] >= campaign[0]:
+                raise CampaignError("campaign-wide request budget exhausted")
+            if step[0] >= step_budget:
+                raise CampaignError("step request budget exhausted")
+            self.connection.execute("UPDATE campaigns SET requests_used=requests_used+1 WHERE campaign_id=?",
+                                    (self.campaign_id,))
+            self.connection.execute("UPDATE campaign_steps SET requests_used=requests_used+1, updated_at=? "
+                                    "WHERE campaign_id=? AND step_id=?",
+                                    (time.time_ns(), self.campaign_id, step_id))
+            self._event(step_id, "request_reserved")
+            self.connection.commit()
+            return True
+        except Exception:
+            self.connection.rollback()
+            raise
+
+    def finish_step(self, step_id, status):
+        if status not in ("completed", "failed", "interrupted"):
+            raise CampaignError("invalid campaign step state")
+        self.connection.execute("BEGIN IMMEDIATE")
+        self.connection.execute("UPDATE campaign_steps SET status=?, updated_at=? "
+                                "WHERE campaign_id=? AND step_id=?",
+                                (status, time.time_ns(), self.campaign_id, step_id))
+        self._event(step_id, "step_" + status)
+        self.connection.commit()
+
+    def summary(self):
+        campaign = self.connection.execute(
+            "SELECT engagement, request_budget, requests_used FROM campaigns WHERE campaign_id=?",
+            (self.campaign_id,)).fetchone()
+        if campaign is None:
+            raise CampaignError("campaign id is not initialized")
+        steps = self.connection.execute(
+            "SELECT step_id, status, requests_used FROM campaign_steps WHERE campaign_id=? ORDER BY rowid",
+            (self.campaign_id,)).fetchall()
+        return {"campaign_id": self.campaign_id, "engagement": campaign[0],
+                "requests_used": campaign[2], "request_budget": campaign[1],
+                "steps": [{"step_id": row[0], "status": row[1], "requests_used": row[2]}
+                          for row in steps],
+                "secrets_or_response_bodies_recorded": False}
+
+    def close(self):
+        self.connection.close()
+
+
 def execute_workflow_step(manifest, manifest_path, step_id, confirm_target, request_func,
-                          credential_environment=None):
+                          credential_environment=None, budget_reserver=None):
     """Execute one explicitly gated business scenario through an injected transport."""
     plan = validate_manifest(manifest)
     selected = next((step for step in plan["steps"] if step["id"] == step_id), None)
@@ -452,6 +602,12 @@ def execute_workflow_step(manifest, manifest_path, step_id, confirm_target, requ
         if sent >= selected["max_requests"]:
             exhausted = True
             return 0, {}, ""
+        if budget_reserver is not None:
+            try:
+                budget_reserver(step_id, selected["max_requests"])
+            except CampaignError:
+                exhausted = True
+                return 0, {}, ""
         sent += 1
         return request_func(url, method=method, data=data, headers=headers or {})
 
@@ -537,6 +693,13 @@ def main(argv=None):
     workflow.add_argument("--confirm-target", required=True,
                           help="Exact origin confirmation; must match the selected step")
     workflow.add_argument("--output", required=True)
+    workflow.add_argument("--state-db", help="Optional SQLite ledger for aggregate budget and resume safety")
+    workflow.add_argument("--campaign-id", help="Stable campaign identifier; required with --state-db")
+    workflow.add_argument("--retry-interrupted", action="store_true",
+                          help="Explicitly permit retry after reviewing an interrupted/failed step")
+    status = subparsers.add_parser("campaign-status", help="show campaign counters and step states")
+    status.add_argument("--state-db", required=True)
+    status.add_argument("--campaign-id", required=True)
     args = parser.parse_args(argv)
     try:
         if args.command == "plan":
@@ -546,12 +709,45 @@ def main(argv=None):
             if args.knowledge_db:
                 result = enrich_plan_with_knowledge(result, args.knowledge_db, args.engagement)
         elif args.command == "run-workflow":
+            if bool(args.state_db) != bool(args.campaign_id):
+                raise CampaignError("--state-db and --campaign-id must be supplied together")
+            if args.retry_interrupted and not args.state_db:
+                raise CampaignError("--retry-interrupted requires the campaign ledger")
             manifest = _read_json(args.manifest)
             opener = urllib.request.build_opener(_NoRedirect())
-            result = execute_workflow_step(
-                manifest, args.manifest, args.step, args.confirm_target,
-                lambda url, method="GET", data=None, headers=None: _bounded_http_request(
-                    opener, url, method=method, data=data, headers=headers))
+            ledger = None
+            if args.state_db:
+                plan = validate_manifest(manifest)
+                selected = next((step for step in plan["steps"] if step["id"] == args.step), None)
+                if selected is None or selected["tool"] != "business_workflow":
+                    raise CampaignError("selected step does not exist or is not a business_workflow")
+                if canonical_origin(args.confirm_target) != selected["origin"]:
+                    raise CampaignError("--confirm-target must exactly match the selected step's in-scope origin")
+                ledger = CampaignLedger(args.state_db, args.campaign_id)
+                ledger.bind(manifest)
+                ledger.start_step(args.step, args.retry_interrupted)
+            try:
+                result = execute_workflow_step(
+                    manifest, args.manifest, args.step, args.confirm_target,
+                    lambda url, method="GET", data=None, headers=None: _bounded_http_request(
+                        opener, url, method=method, data=data, headers=headers),
+                    budget_reserver=ledger.reserve_request if ledger else None)
+                if ledger:
+                    result["execution"]["campaign_budget"] = ledger.summary()
+                    ledger.finish_step(args.step, "completed")
+            except Exception:
+                if ledger:
+                    ledger.finish_step(args.step, "failed")
+                raise
+            finally:
+                if ledger:
+                    ledger.close()
+        elif args.command == "campaign-status":
+            ledger = CampaignLedger(args.state_db, args.campaign_id)
+            try:
+                result = ledger.summary()
+            finally:
+                ledger.close()
         else:
             if args.command == "coverage":
                 case_doc = _read_json(args.manifest)

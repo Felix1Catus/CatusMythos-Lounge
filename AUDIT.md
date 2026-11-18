@@ -1081,16 +1081,17 @@ scoped hostnames and stays compatible with the existing contextual severity
 path.
 
 **Boundary / remaining uncertainty.** Planning and reporting are offline;
-`run-workflow` is the only active adapter. Campaigns do not yet persist
-resumable events or enforce a single request budget across heterogeneous
-scanner CLIs. Existing per-tool limits are not equivalent to a campaign-wide
-cap. Automatic hypothesis generation,
+`run-workflow` is the only active adapter. Its optional SQLite ledger persists
+step state, prevents completed-step replay, and enforces a transactional
+aggregate cap across calls using that adapter. It does not cap independent,
+heterogeneous scanner CLIs. Existing per-tool limits are not equivalent to a
+whole-pipeline cap. Automatic hypothesis generation,
 dynamic business-context inference, and full benchmark labels across DVWA
 levels and another vulnerable application remain follow-up work. These files
 make no live-target claims.
 
-**Validation.** Final exact-code full pytest: **930 passed + 143 subtests**.
-Focused campaign/knowledge/evidence matrix: **192 passed + 50 subtests**. Full
+**Validation.** Final exact-code full pytest: **933 passed + 143 subtests**.
+Campaign ledger regression tests: **37 passed + 7 subtests**. Full
 Ruff, compileall (`skills scripts tests tools`), common-sync, CLI-doc checker
 (**10 skill docs / 116 references / 63 CLIs**), and `git diff --check` pass.
 Tests use synthetic/offline data and existing local fixtures; this work made no

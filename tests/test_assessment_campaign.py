@@ -245,6 +245,80 @@ class CampaignManifestTests(unittest.TestCase):
                                                "https://app.example.test", lambda *a, **kw: calls.append(1))
         self.assertEqual(calls, [])
 
+    def test_campaign_ledger_shares_budget_and_refuses_completed_step_replay(self):
+        value = workflow_manifest()
+        value["scope"]["request_budget"] = 8
+        value["steps"].append({**value["steps"][0], "id": "workflow-two"})
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest_path = root / "campaign.json"
+            (root / "flow.json").write_text(json.dumps(workflow_scenario()), encoding="utf-8")
+            manifest_path.write_text(json.dumps(value), encoding="utf-8")
+            ledger = campaign.CampaignLedger(root / "state.sqlite", "fixture-run")
+            ledger.bind(value)
+            calls = []
+            request = lambda *args, **kwargs: (calls.append(1) or (200, {}, '{"state":"ok"}'))
+            ledger.start_step("workflow")
+            first = campaign.execute_workflow_step(value, manifest_path, "workflow",
+                "https://app.example.test", request, {"FIXTURE_MEMBER_TOKEN": "secret"},
+                ledger.reserve_request)
+            ledger.finish_step("workflow", "completed")
+            self.assertEqual(first["execution"]["requests_sent"], 2)
+            with self.assertRaisesRegex(campaign.CampaignError, "already completed"):
+                ledger.start_step("workflow")
+            ledger.start_step("workflow-two")
+            second = campaign.execute_workflow_step(value, manifest_path, "workflow-two",
+                "https://app.example.test", request, {"FIXTURE_MEMBER_TOKEN": "secret"},
+                ledger.reserve_request)
+            ledger.finish_step("workflow-two", "completed")
+            summary = ledger.summary()
+            ledger.close()
+        self.assertEqual(second["execution"]["requests_sent"], 2)
+        self.assertFalse(second["execution"]["budget_exhausted"])
+        self.assertEqual(len(calls), 4)
+        self.assertEqual(summary["requests_used"], 4)
+        self.assertNotIn("secret-fixture-token", json.dumps(summary))
+
+    def test_campaign_ledger_binds_campaign_id_to_manifest_and_requires_retry_review(self):
+        value = workflow_manifest()
+        with tempfile.TemporaryDirectory() as directory:
+            ledger = campaign.CampaignLedger(Path(directory) / "state.sqlite", "run-a")
+            ledger.bind(value)
+            ledger.start_step("workflow")
+            with self.assertRaisesRegex(campaign.CampaignError, "unfinished"):
+                ledger.start_step("workflow")
+            ledger.finish_step("workflow", "interrupted")
+            with self.assertRaisesRegex(campaign.CampaignError, "after review"):
+                ledger.start_step("workflow")
+            ledger.start_step("workflow", retry_interrupted=True)
+            changed = copy.deepcopy(value)
+            changed["scope"]["request_budget"] += 1
+            with self.assertRaisesRegex(campaign.CampaignError, "different engagement or manifest"):
+                ledger.bind(changed)
+            ledger.close()
+
+    def test_campaign_ledger_atomically_rejects_requests_over_campaign_cap(self):
+        value = workflow_manifest()
+        value["scope"]["request_budget"] = 4
+        value["steps"][0]["max_requests"] = 2
+        value["steps"].append({**value["steps"][0], "id": "workflow-two"})
+        with tempfile.TemporaryDirectory() as directory:
+            ledger = campaign.CampaignLedger(Path(directory) / "state.sqlite", "budget-run")
+            ledger.bind(value)
+            ledger.start_step("workflow")
+            ledger.reserve_request("workflow", 2)
+            ledger.reserve_request("workflow", 2)
+            ledger.finish_step("workflow", "completed")
+            ledger.start_step("workflow-two")
+            ledger.reserve_request("workflow-two", 2)
+            ledger.reserve_request("workflow-two", 2)
+            with self.assertRaisesRegex(campaign.CampaignError, "campaign-wide request budget exhausted"):
+                ledger.reserve_request("workflow-two", 2)
+            summary = ledger.summary()
+            ledger.close()
+        self.assertEqual(summary["requests_used"], 4)
+        self.assertEqual(summary["request_budget"], 4)
+
     def test_http_transport_does_not_follow_redirects_out_of_scope(self):
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self):
