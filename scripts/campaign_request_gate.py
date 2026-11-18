@@ -178,6 +178,48 @@ def reserve_network_endpoint_from_environment(host, port, protocol="tcp"):
     return True
 
 
+def network_endpoint_is_scoped(host, port, protocol="tcp"):
+    """Check a Python socket destination against campaign scope without charging it."""
+    database = os.environ.get("CATUS_CAMPAIGN_GATE_DB")
+    if not database:
+        return True
+    allowed_origin = os.environ.get("CATUS_CAMPAIGN_GATE_ORIGIN")
+    try:
+        parsed = urlsplit(allowed_origin or "")
+        allowed_port = parsed.port or (443 if parsed.scheme.lower() == "https" else 80)
+        normalized_host = _normalize_network_host(host)
+        allowed_host = _normalize_network_host(parsed.hostname or "")
+        normalized_port = int(port)
+        if (_origin(allowed_origin) != allowed_origin or protocol not in ("tcp", "udp")
+                or not 1 <= normalized_port <= 65535):
+            return False
+    except (AttributeError, TypeError, UnicodeError, ValueError):
+        return False
+    if protocol == "tcp" and normalized_port == allowed_port:
+        allowed_addresses = set()
+        try:
+            decoded = json.loads(os.environ.get("CATUS_CAMPAIGN_GATE_ORIGIN_ADDRESSES", "[]"))
+            allowed_addresses.update(_normalize_network_host(item) for item in decoded
+                                     if isinstance(item, str))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            pass
+        if normalized_host == allowed_host or normalized_host in allowed_addresses:
+            return True
+    try:
+        connection = sqlite3.connect(database, timeout=5)
+        try:
+            return connection.execute(
+                "SELECT 1 FROM campaign_network_endpoints WHERE campaign_id=? AND host=? "
+                "AND protocol=? AND port=?",
+                (os.environ.get("CATUS_CAMPAIGN_GATE_CAMPAIGN"), normalized_host,
+                 protocol, normalized_port),
+            ).fetchone() is not None
+        finally:
+            connection.close()
+    except sqlite3.Error:
+        return False
+
+
 _KNOWN_NETWORK_EXECUTABLES = {
     "amass", "curl", "dig", "ffuf", "gobuster", "httpx", "naabu", "nmap",
     "nuclei", "puredns", "subfinder", "wget", "whois",
@@ -203,9 +245,14 @@ def reserve_external_command_from_environment(command, *, shell=False):
         values = [str(value) for value in command]
         executable = ntpath.basename(values[0]).lower().removesuffix(".exe")
     except (IndexError, TypeError):
-        return False
+        _mark_status("gate_errors")
+        raise CampaignGateError("campaign gate blocks an invalid child process command")
     if executable not in _KNOWN_NETWORK_EXECUTABLES:
-        return values
+        _mark_status("gate_errors")
+        raise CampaignGateError(
+            "campaign gate blocks child processes without an explicit command adapter: "
+            + (executable or "<empty>")
+        )
     if ntpath.basename(values[0]) != values[0]:
         _mark_status("gate_errors")
         raise CampaignGateError("campaign network commands must use the registered executable name from PATH")

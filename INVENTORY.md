@@ -13,12 +13,15 @@ API authz. The authz CLI has campaign-required context validation, and tests
 exercise it through loopback and the registered runner. The external adapter
 supports bounded curl, single-query dig, and one-port Nmap connect probes with
 explicit endpoint declarations. Other variable-volume network executables,
-shell-mediated commands, and isolated copied skill folders remain outside the
-supported campaign runner boundary. Validation: **957 pytest tests + 143
-subtests**; focused campaign/authz suite **115 + 29 subtests**; Ruff,
-compileall, common-sync, CLI-docs (**10/116/63**), and diff checks passed.
-Loopback fixtures only; no external target was contacted. Commit and push SHA
-are recorded in the latest dated handover addendum.
+shell-mediated commands, and unknown child processes fail closed. Campaign
+Python processes also guard DNS resolution and TCP/UDP socket destinations and
+disable ambient proxies. This is process-level defense in depth, not a host
+firewall; native code and copied installations outside the campaign bootstrap
+still require OS isolation. Validation and push details follow after the full
+suite. Full pytest: **957 tests + 143 subtests**; focused campaign/authz tests:
+**115 tests + 29 subtests**. Ruff, compileall, common-sync, CLI-docs
+(**10/116/63**), and diff checks passed. Loopback fixtures only; no external
+target was contacted. The follow-up was pushed to `main`.
 Inventory structure originated at `f870a85`. Coverage status was refreshed
 2026-11-16 through the scoped closeout in `HANDOVER.md`; the final verification
 and commit are recorded in the latest dated addendum below. Earlier checkpoints

@@ -1131,14 +1131,17 @@ authz runs reject mutation-write mode. The new `run-external` adapter reserves
 one operation for curl, one scoped dig query, or one Nmap single-port TCP
 connect probe. It limits redirects, curl retries/globbing/routing overrides,
 dig query fan-out, and unadapted network executables. Network endpoints outside
-the selected HTTP origin must appear in `scope.network_endpoints`.
+the selected HTTP origin must appear in `scope.network_endpoints`. Campaign
+Python processes now restrict DNS lookup, TCP/UDP sockets, and urllib proxy
+resolution to the selected origin and declared endpoints. The startup hook
+blocks unknown child processes plus shell and direct `os` process-launch APIs;
+supported external tools must pass through their bounded adapter.
 
-This remains guard logic in the campaign runner; it is not a universal OS-level
-network sandbox. Copied skill installations without the central scripts module
-are unsupported in campaign mode, and variable-volume external tools are still
-blocked until they receive dedicated bounded adapters. Full pytest passed
-**957 tests + 143 subtests**; focused campaign/authz tests passed **115 tests +
-29 subtests**. Ruff, compileall, common-sync, CLI-doc checker (**10/116/63**),
-and diff checks passed. External interaction was limited to loopback fixtures.
-No public or third-party target was contacted. Commit and push SHA are recorded
-in the latest dated handover addendum.
+This remains process-level guard logic, not a universal OS-level network
+sandbox. Native code, processes started outside the campaign runner, and copied
+skill installations without the central bootstrap remain outside the enforced
+boundary and require host-level isolation. Full pytest passed **957 tests +
+143 subtests**; focused campaign/authz passed **115 tests + 29 subtests**.
+Ruff, compileall, common-sync, CLI-docs (**10/116/63**), and diff checks passed.
+Only loopback fixtures were used. No external target was contacted. The
+follow-up is pushed to `main`.

@@ -172,11 +172,27 @@ class CampaignRequestGateTests(unittest.TestCase):
         env["PYTHONPATH"] = str(ROOT / "scripts") + os.pathsep + env.get("PYTHONPATH", "")
         code = (
             "import subprocess; "
+            "import os; "
+            "import socket; "
+            "import urllib.request; "
             "from campaign_request_gate import CampaignGateError; "
             "try_run = False; "
             "\ntry:\n subprocess.run(['nmap','--top-ports','100','127.0.0.1'])"
             "\nexcept CampaignGateError:\n try_run = True\n"
-            "assert try_run"
+            "assert try_run; unknown_blocked = False"
+            "\ntry:\n subprocess.run(['powershell','-NoProfile','-Command','echo test'])"
+            "\nexcept CampaignGateError:\n unknown_blocked = True\n"
+            "assert unknown_blocked; os_blocked = False"
+            "\ntry:\n os.system('curl https://example.invalid')"
+            "\nexcept CampaignGateError:\n os_blocked = True\n"
+            "assert os_blocked; allowed = socket.create_connection(('127.0.0.1', "
+            + str(self.server.server_port) + "), timeout=2); allowed.close(); socket_blocked = False"
+            "\ntry:\n socket.create_connection(('127.0.0.1', 1), timeout=0.2)"
+            "\nexcept CampaignGateError:\n socket_blocked = True\n"
+            "assert socket_blocked; dns_blocked = False"
+            "\ntry:\n socket.getaddrinfo('example.com', 80)"
+            "\nexcept CampaignGateError:\n dns_blocked = True\n"
+            "assert dns_blocked; assert urllib.request.getproxies() == {}"
         )
         result = subprocess.run([sys.executable, "-c", code], env=env,
                                 capture_output=True, text=True, timeout=10)

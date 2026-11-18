@@ -104,8 +104,12 @@ counts, never request URLs, credentials, response bodies, or payload values.
 It also enforces declared step dependencies. For the registered scanner CLI
 entrypoints, use `run-cli` or `run-external` so supported requests are charged
 as they leave the adapted transport. Python helpers consult the gate only when
-campaign environment is set. A copied skill without the central gate module is
-not a supported campaign execution environment. Other registered non-network tools can be marked complete with an
+campaign environment is set. The campaign bootstrap also scopes ordinary
+Python DNS lookups and TCP/UDP sockets, disables ambient urllib proxies, and
+blocks shell, direct `os` process APIs, and unadapted child executables. It is
+process-level defense in depth, not an OS firewall; native extensions and tools
+launched outside this runner are not contained. A copied skill without the
+central gate module is not a supported campaign execution environment. Other registered non-network tools can be marked complete with an
 operator note; the ledger stores only a digest of that note, not its text, and
 the attestation is not independent proof of the tool's outcome.
 

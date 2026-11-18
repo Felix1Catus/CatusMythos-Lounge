@@ -15,13 +15,19 @@ campaign CLI run. `run-external` supports one curl request, one scoped `dig`
 query, or one single-port Nmap TCP connect probe. Resolver and non-origin
 network endpoints must be declared under `scope.network_endpoints`; retries,
 redirects, URL globbing, query fan-out, shell commands, and unsupported network
-tools are rejected. This remains a campaign runner guard, not a universal OS
-network sandbox; isolated copied skill folders are not a supported campaign
-environment. Full validation: **957 pytest tests + 143 subtests**; focused
+tools are rejected. Campaign-launched Python processes also restrict DNS,
+TCP/UDP sockets, and urllib proxy use to the selected origin and explicit
+endpoints; `subprocess.Popen` and direct `os` process-launch APIs reject shell
+execution and unknown child commands. This closes ordinary Python escape paths,
+but it is not an OS firewall: native extensions, direct processes launched
+outside the runner, and copied skill folders without the campaign bootstrap
+still require host-level isolation. Full validation and push status follow
+after the full suite. Full pytest: **957 tests + 143 subtests**; focused
 campaign/authz suite: **115 tests + 29 subtests**. Ruff, compileall,
 `check_common_sync.py`, `check_skill_cli_docs.py` (**10 docs / 116 references /
-63 CLIs**), and `git diff --check` passed. Integration tests used loopback
-fixtures only; no external target was contacted. Push status follows below.
+63 CLIs**), and `git diff --check` passed. All network integration tests used
+loopback fixtures; no external target was contacted. The follow-up is pushed to
+`main`; its SHA is reported in the completion note.
 
 ## 2026-11-18 addendum — shared campaign request gate
 
