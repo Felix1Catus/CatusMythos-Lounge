@@ -153,12 +153,19 @@ def detect_from_cname(hostname):
     return findings
 
 
-def detect_from_headers(hostname):
+def detect_from_headers(hostname, campaign_origin=None):
     """Detect cloud provider from HTTP response headers."""
     findings = []
 
-    for scheme in ["https", "http"]:
-        url = f"{scheme}://{hostname}/"
+    if campaign_origin:
+        parsed_origin = urllib.parse.urlsplit(campaign_origin)
+        if (parsed_origin.hostname or "").lower() != hostname.lower():
+            return findings
+        urls = [campaign_origin.rstrip("/") + "/"]
+    else:
+        urls = [f"{scheme}://{hostname}/" for scheme in ("https", "http")]
+
+    for url in urls:
         ctx = ssl.create_default_context()
         if os.environ.get("CATUS_INSECURE_TLS") == "1":
             ctx.check_hostname = False
@@ -217,30 +224,31 @@ def detect_from_ip_whois(ip):
     return None
 
 
-def analyze_host(hostname):
-    """Full cloud detection analysis on a single host."""
+def analyze_host(hostname, http_only=False, campaign_origin=None):
+    """Analyze one host; campaign mode can limit detection to scoped HTTP headers."""
     result = {
         "hostname": hostname,
-        "ip": resolve_ip(hostname),
+        "ip": None if http_only else resolve_ip(hostname),
         "cloud_services": [],
         "providers_detected": set(),
     }
 
-    # CNAME analysis
-    cname_findings = detect_from_cname(hostname)
-    for f in cname_findings:
-        result["cloud_services"].append(f)
-        provider = f["service"].split()[0]  # First word is usually the provider
-        result["providers_detected"].add(provider)
+    if not http_only:
+        # DNS and WHOIS use network paths outside the HTTP request gate.
+        cname_findings = detect_from_cname(hostname)
+        for f in cname_findings:
+            result["cloud_services"].append(f)
+            provider = f["service"].split()[0]  # First word is usually the provider
+            result["providers_detected"].add(provider)
 
     # Header analysis
-    header_findings = detect_from_headers(hostname)
+    header_findings = detect_from_headers(hostname, campaign_origin=campaign_origin)
     for f in header_findings:
         result["cloud_services"].append(f)
         result["providers_detected"].add(f["provider"])
 
     # IP whois
-    if result["ip"]:
+    if not http_only and result["ip"]:
         ip_provider = detect_from_ip_whois(result["ip"])
         if ip_provider:
             result["providers_detected"].add(ip_provider)
@@ -372,7 +380,13 @@ def main():
     parser.add_argument("--knowledge-db", help="Opt-in shared SQLite target-knowledge file")
     parser.add_argument("--engagement", help="Required engagement namespace when knowledge is enabled")
     parser.add_argument("--knowledge-refresh", action="store_true", help="Force fresh DNS/header/WHOIS detection")
+    parser.add_argument("--campaign-http-only", action="store_true",
+                        help=argparse.SUPPRESS)
     args = parser.parse_args()
+    campaign_origin = os.environ.get("CATUS_CAMPAIGN_GATE_ORIGIN")
+    if args.campaign_http_only and (not os.environ.get("CATUS_CAMPAIGN_GATE_DB")
+                                    or not campaign_origin or not args.domain or args.input):
+        parser.error("--campaign-http-only requires a campaign gate and one --domain")
     if args.engagement and not args.knowledge_db:
         parser.error("--engagement requires --knowledge-db")
     if args.knowledge_db and not args.engagement:
@@ -445,7 +459,9 @@ def main():
 
     import concurrent.futures
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.threads) as executor:
-        futures = {executor.submit(analyze_host, host): host for host in hosts_to_scan}
+        futures = {executor.submit(
+            analyze_host, host, args.campaign_http_only,
+            campaign_origin if args.campaign_http_only else None): host for host in hosts_to_scan}
         for future in concurrent.futures.as_completed(futures):
             result = future.result()
             results.append(result)

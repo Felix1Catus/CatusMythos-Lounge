@@ -45,6 +45,7 @@ SHARED_NETWORK_CORE = {
     "_http_origin",
     "same_origin_url",
     "SameOriginRedirectHandler",
+    "_reserve_campaign_request",
     "scoped_urlopen",
 }
 

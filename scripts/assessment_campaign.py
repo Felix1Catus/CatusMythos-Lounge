@@ -15,6 +15,7 @@ import json
 import os
 import re
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import threading
@@ -49,6 +50,19 @@ TOOLS = {
     "chain_analysis": {"skill": "vuln-chain-composer", "stateful": False},
     "report": {"skill": "vuln-chain-composer", "stateful": False},
 }
+
+# These entrypoints cover the registered standalone scanners that share the
+# guarded _common.scoped_urlopen transport. The authorization entrypoint is
+# only referenced here; its implementation and tests remain independently owned.
+TOOL_ENTRYPOINTS = {
+    "api_authz": ("api-breaker", "authz_tester.py"),
+    "cloud_detector": ("cloud-pivot-finder", "cloud_detector.py"),
+    "web_crawl": ("webapp-exploit-hunter", "crawler.py"),
+    "web_sqli": ("webapp-exploit-hunter", "sqli_tester.py"),
+    "web_xss": ("webapp-exploit-hunter", "xss_tester.py"),
+    "web_idor": ("webapp-exploit-hunter", "idor_tester.py"),
+}
+CLI_TIMEOUT_SECONDS = 1800
 
 
 class CampaignError(ValueError):
@@ -471,6 +485,7 @@ class CampaignLedger:
                     campaign_id TEXT NOT NULL,
                     step_id TEXT NOT NULL,
                     tool TEXT NOT NULL,
+                    max_requests INTEGER NOT NULL DEFAULT 0,
                     PRIMARY KEY (campaign_id, step_id)
                 );
                 CREATE TABLE IF NOT EXISTS campaign_step_attestations (
@@ -481,6 +496,11 @@ class CampaignLedger:
                     PRIMARY KEY (campaign_id, step_id)
                 );
             """)
+            registry_columns = {row[1] for row in self.connection.execute(
+                "PRAGMA table_info(campaign_step_registry)")}
+            if "max_requests" not in registry_columns:
+                self.connection.execute(
+                    "ALTER TABLE campaign_step_registry ADD COLUMN max_requests INTEGER NOT NULL DEFAULT 0")
         except sqlite3.Error as exc:
             raise CampaignError("cannot open campaign ledger: {}".format(exc)) from exc
 
@@ -507,8 +527,13 @@ class CampaignLedger:
                     "(campaign_id, step_id, status, requests_used, updated_at) VALUES (?, ?, 'planned', 0, ?)",
                     (self.campaign_id, step["id"], time.time_ns()))
                 connection.execute(
-                    "INSERT OR IGNORE INTO campaign_step_registry(campaign_id, step_id, tool) VALUES (?, ?, ?)",
-                    (self.campaign_id, step["id"], step["tool"]))
+                    "INSERT OR IGNORE INTO campaign_step_registry"
+                    "(campaign_id, step_id, tool, max_requests) VALUES (?, ?, ?, ?)",
+                    (self.campaign_id, step["id"], step["tool"], step["max_requests"]))
+                connection.execute(
+                    "UPDATE campaign_step_registry SET max_requests=? "
+                    "WHERE campaign_id=? AND step_id=? AND max_requests=0",
+                    (step["max_requests"], self.campaign_id, step["id"]))
                 for dependency_id in step["depends_on"]:
                     connection.execute(
                         "INSERT OR IGNORE INTO campaign_step_dependencies "
@@ -940,6 +965,70 @@ def execute_api_discovery_step(manifest, step_id, confirm_target, request_reserv
     }
 
 
+def execute_registered_cli_step(manifest, step_id, confirm_target, state_database,
+                                campaign_id, tool_args):
+    """Run a fixed registered scanner entrypoint with the SQLite request gate active."""
+    plan = validate_manifest(manifest)
+    selected = next((step for step in plan["steps"] if step["id"] == step_id), None)
+    if selected is None or selected["tool"] not in TOOL_ENTRYPOINTS:
+        raise CampaignError("selected step has no campaign-gated CLI entrypoint")
+    if canonical_origin(confirm_target) != selected["origin"]:
+        raise CampaignError("--confirm-target must exactly match the selected step's in-scope origin")
+    skill_name, entrypoint = TOOL_ENTRYPOINTS[selected["tool"]]
+    if skill_name != selected["skill"]:
+        raise CampaignError("registered CLI does not match the selected tool's skill")
+    script_dir = Path(__file__).resolve().parents[1] / "skills" / skill_name / "scripts"
+    script_path = (script_dir / entrypoint).resolve()
+    if script_path.parent != script_dir.resolve() or not script_path.is_file():
+        raise CampaignError("registered CLI entrypoint is missing or outside its skill")
+    if any(not isinstance(arg, str) or "\x00" in arg for arg in tool_args):
+        raise CampaignError("tool arguments must be strings without NUL bytes")
+
+    status = {"budget_exhausted": False, "off_origin_requests_blocked": False,
+              "gate_errors": False}
+    return_code = None
+    timed_out = False
+    with tempfile.TemporaryDirectory(prefix="campaign-cli-") as directory:
+        status_path = Path(directory) / "gate-status.json"
+        status_path.write_text(json.dumps(status), encoding="utf-8")
+        env = os.environ.copy()
+        env.update({
+            "CATUS_CAMPAIGN_GATE_DB": str(Path(state_database).expanduser().resolve()),
+            "CATUS_CAMPAIGN_GATE_CAMPAIGN": campaign_id,
+            "CATUS_CAMPAIGN_GATE_STEP": step_id,
+            "CATUS_CAMPAIGN_GATE_ORIGIN": selected["origin"],
+            "CATUS_CAMPAIGN_GATE_STATUS": str(status_path),
+        })
+        existing_pythonpath = env.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = str(Path(__file__).resolve().parent) + (
+            os.pathsep + existing_pythonpath if existing_pythonpath else "")
+        if selected["tool"] == "cloud_detector" and "--campaign-http-only" not in tool_args:
+            tool_args.append("--campaign-http-only")
+        try:
+            completed = subprocess.run(
+                [sys.executable, str(script_path), *tool_args], cwd=str(script_dir),
+                env=env, check=False, timeout=CLI_TIMEOUT_SECONDS,
+            )
+            return_code = completed.returncode
+        except subprocess.TimeoutExpired:
+            timed_out = True
+        try:
+            recorded_status = json.loads(status_path.read_text(encoding="utf-8"))
+            if isinstance(recorded_status, dict):
+                status.update({key: recorded_status.get(key) is True for key in status})
+        except (OSError, json.JSONDecodeError):
+            status["gate_errors"] = True
+
+    return {"tool": selected["tool"], "entrypoint": entrypoint,
+            "execution": {"step_id": step_id, "requests_sent": None,
+                          "request_budget": selected["max_requests"],
+                          "budget_enforced_by_shared_transport": True,
+                          "return_code": return_code, "timed_out": timed_out,
+                          **status,
+                          "arguments_recorded": False,
+                          "response_bodies_recorded": False}}
+
+
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     """Keep a confirmed target origin from redirecting active scenario traffic."""
 
@@ -1001,6 +1090,17 @@ def main(argv=None):
     workflow.add_argument("--campaign-id", help="Stable campaign identifier; required with --state-db")
     workflow.add_argument("--retry-interrupted", action="store_true",
                           help="Explicitly permit retry after reviewing an interrupted/failed step")
+    cli = subparsers.add_parser("run-cli", help="run a registered scanner with shared request-budget enforcement")
+    cli.add_argument("--manifest", required=True)
+    cli.add_argument("--step", required=True)
+    cli.add_argument("--confirm-target", required=True,
+                     help="Exact origin confirmation; must match the selected step")
+    cli.add_argument("--state-db", required=True)
+    cli.add_argument("--campaign-id", required=True)
+    cli.add_argument("--retry-interrupted", action="store_true",
+                     help="Explicitly permit retry after reviewing an interrupted/failed step")
+    cli.add_argument("tool_args", nargs=argparse.REMAINDER,
+                     help="Arguments for the fixed scanner entrypoint; separate them with --")
     status = subparsers.add_parser("campaign-status", help="show campaign counters and step states")
     status.add_argument("--state-db", required=True)
     status.add_argument("--campaign-id", required=True)
@@ -1022,6 +1122,48 @@ def main(argv=None):
             result = validate_manifest(_read_json(args.manifest))
             if args.knowledge_db:
                 result = enrich_plan_with_knowledge(result, args.knowledge_db, args.engagement)
+        elif args.command == "run-cli":
+            manifest = _read_json(args.manifest)
+            plan = validate_manifest(manifest)
+            selected = next((step for step in plan["steps"] if step["id"] == args.step), None)
+            if selected is None or selected["tool"] not in TOOL_ENTRYPOINTS:
+                raise CampaignError("selected step has no registered campaign-gated CLI entrypoint")
+            if canonical_origin(args.confirm_target) != selected["origin"]:
+                raise CampaignError("--confirm-target must exactly match the selected step's in-scope origin")
+            if selected["depends_on"] and not args.state_db:
+                raise CampaignError("steps with dependencies require the campaign ledger")
+            tool_args = list(args.tool_args)
+            if tool_args and tool_args[0] == "--":
+                tool_args = tool_args[1:]
+            ledger = CampaignLedger(args.state_db, args.campaign_id)
+            step_started = False
+            try:
+                ledger.bind(manifest)
+                ledger.start_step(args.step, args.retry_interrupted)
+                step_started = True
+                previous_used = next(item["requests_used"] for item in ledger.summary()["steps"]
+                                     if item["step_id"] == args.step)
+                result = execute_registered_cli_step(
+                    manifest, args.step, args.confirm_target, args.state_db,
+                    args.campaign_id, tool_args)
+                updated = ledger.summary()
+                requests_used = next(item["requests_used"] for item in updated["steps"]
+                                     if item["step_id"] == args.step)
+                result["execution"]["requests_sent"] = requests_used - previous_used
+                execution = result["execution"]
+                run_status = ("failed" if execution.get("return_code") != 0
+                              or execution.get("timed_out")
+                              or execution.get("budget_exhausted")
+                              or execution.get("off_origin_requests_blocked")
+                              or execution.get("gate_errors") else "completed")
+                ledger.finish_step(args.step, run_status)
+                result["execution"]["campaign_budget"] = ledger.summary()
+            except Exception:
+                if step_started:
+                    ledger.finish_step(args.step, "failed")
+                raise
+            finally:
+                ledger.close()
         elif args.command in ("run-workflow", "run-step"):
             if bool(args.state_db) != bool(args.campaign_id):
                 raise CampaignError("--state-db and --campaign-id must be supplied together")

@@ -1,8 +1,9 @@
 # Assessment campaign v1
 
-`assessment_campaign.py` provides an offline campaign planner/result evaluator
-and bounded executors for an existing operator-authored business workflow,
-single-origin technology fingerprinting, and anonymous API discovery.
+`assessment_campaign.py` provides an offline campaign planner/result evaluator,
+bounded native adapters for an existing operator-authored business workflow,
+single-origin technology fingerprinting, and anonymous API discovery, plus a
+registered CLI runner for selected existing scanners.
 Planning and reporting never make network requests. An operator can review
 exact scope,
 roles, test order, state-change intent, cleanup, and request budget before
@@ -50,13 +51,25 @@ tools retain their own exact-key cache/reuse rules.
 
 ## Execute supported steps
 
-Three native adapters currently execute: `business_workflow`,
-`tech_fingerprint`, and anonymous `api_discovery`. Fingerprinting checks only
+Three native adapters execute: `business_workflow`, `tech_fingerprint`, and
+anonymous `api_discovery`. The `run-cli` command also executes the registered
+entrypoints for `cloud_detector`, `api_authz`, `web_crawl`, `web_sqli`,
+`web_xss`, and `web_idor`. Those CLIs use the pipeline's shared
+`_common.scoped_urlopen` transport, which reserves each initial request and
+same-origin redirect in the same SQLite ledger. The runner invokes a fixed
+Python entrypoint without a shell, requires the exact confirmed origin, and
+fails closed on off-origin requests or exhausted budgets. It records no CLI
+arguments, URLs, credentials, response bodies, or payloads. Fingerprinting checks only
 the declared target host. API discovery runs serially, blocks off-origin URLs,
 disables Wayback lookups and potentially state-changing method probes, and
 reserves each in-scope request against the campaign ledger. Both scanner
 adapters return allowlisted summaries without raw response headers or bodies.
-Other registered tool identifiers remain planned until native adapters exist.
+`chain_analysis` and `report` remain operator-attested because they do not
+perform target HTTP probing.
+
+In campaign mode, `cloud_detector` is restricted to one scoped HTTP header
+probe; DNS/CNAME and IP WHOIS lookups are skipped because those network paths
+do not use the shared HTTP gate.
 
 The workflow adapter validates the scenario and declared request budget before
 reading credentials or sending a request. Execution also requires the
@@ -75,10 +88,11 @@ completed step cannot be replayed. A crashed or failed step requires explicit
 review and `--retry-interrupted`; retry can repeat side effects, so use only
 after checking the target and prior result. The ledger records step states and
 counts, never request URLs, credentials, response bodies, or payload values.
-It also enforces declared step dependencies. Until a scanner has a native
-campaign adapter, run that registered tool separately and record its completion
-with an operator note; the ledger stores only a digest of that note, not its
-text, and the attestation is not independent proof of the tool's outcome.
+It also enforces declared step dependencies. For the registered scanner CLI
+entrypoints, use `run-cli` so requests are counted as they leave the shared
+transport. Other registered non-network tools can be marked complete with an
+operator note; the ledger stores only a digest of that note, not its text, and
+the attestation is not independent proof of the tool's outcome.
 
 ```powershell
 python scripts/assessment_campaign.py run-step `
@@ -105,6 +119,15 @@ python scripts/assessment_campaign.py run-workflow `
   --campaign-id assessment-2026-11 `
   --output targets/fixture/checkout-result.json
 
+python scripts/assessment_campaign.py run-cli `
+  --manifest targets/fixture/campaign.json `
+  --step crawl `
+  --confirm-target https://app.example.test `
+  --state-db targets/fixture/campaign-state.sqlite `
+  --campaign-id assessment-2026-11 `
+  -- --target https://app.example.test --depth 1 --max-pages 25 `
+  --output targets/fixture/crawl.json
+
 python scripts/assessment_campaign.py campaign-status `
   --state-db targets/fixture/campaign-state.sqlite `
   --campaign-id assessment-2026-11
@@ -118,10 +141,13 @@ python scripts/assessment_campaign.py campaign-record-step `
 ```
 
 Keep the SQLite file local to the engagement and protect it like assessment
-metadata. The aggregate counter covers runs that use the campaign ledger and
-one of the three native adapters. Independent scanner CLIs do not currently
-participate in it. Their operator attestation completes dependency tracking but
-does not charge the campaign request counter.
+metadata. The aggregate counter covers the three native adapters and the six
+fixed CLI entrypoints above, provided their network traffic uses the shared
+`_common.scoped_urlopen` transport. Directly launching a scanner, a copied skill
+without the repository gate module, or a tool using a separate HTTP client or
+external network executable is outside the counter; such CLIs still require
+individual integration or operator attestation. The gate counts redirected
+HTTP requests and rejects requests outside the selected step's origin.
 
 ```powershell
 python scripts/assessment_campaign.py run-workflow `

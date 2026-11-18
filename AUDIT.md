@@ -1097,3 +1097,26 @@ Full Ruff, compileall (`skills scripts tests tools`), common-sync, CLI-doc
 checker (**10 skill docs / 116 references / 63 CLIs**), and `git diff --check`
 pass. Tests use synthetic/offline data and loopback fixtures; this work made no
 external target requests.
+
+## 2026-11-18 addendum — campaign request accounting for registered scanners
+
+The previous campaign audit recorded that independent scanner CLIs were not
+charged to the SQLite aggregate. That gap is narrowed: `run-cli` now launches
+fixed entrypoints for cloud detection, API authorization, web crawling, SQLi,
+XSS, and IDOR. Their shared `_common.scoped_urlopen` transport reserves each
+request transactionally; the gate checks the selected origin, running step,
+persisted step limit, and campaign limit, and charges same-origin redirects.
+Denied scope/budget requests mark the run failed even if a tester handles the
+transport error and exits successfully. Arguments and request data are not
+stored. Existing campaign databases migrate the registry with each step's
+declared request ceiling. The runner forces cloud detection into HTTP-header-
+only mode, skipping DNS/CNAME and WHOIS probes outside the shared transport.
+
+This is not a universal network sandbox. Direct scanner invocations, isolated
+skill copies, third-party HTTP clients, and external network executables remain
+outside the shared gate and must be explicitly integrated before their requests
+can be counted. Authz tester source and API breaker tests were not modified.
+Only the loopback regression fixture was used; no external target was contacted.
+Validation: full pytest **949 passed + 143 subtests**; focused campaign/gate
+matrix **49 passed + 7 subtests**; Ruff, compileall, common-sync, CLI-docs
+(**10/116/63**), and diff checks passed.

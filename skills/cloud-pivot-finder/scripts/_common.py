@@ -32,6 +32,7 @@ import ssl
 import urllib.error
 import urllib.parse
 import urllib.request
+import os
 
 
 def _http_origin(url):
@@ -68,6 +69,13 @@ def same_origin_url(base_url, candidate):
         return None
 
 
+def _reserve_campaign_request(url, method="GET"):
+    """Reserve through the repository campaign gate when campaign mode is active."""
+    if os.environ.get("CATUS_CAMPAIGN_GATE_DB"):
+        from campaign_request_gate import reserve_from_environment
+        reserve_from_environment(url, method)
+
+
 class SameOriginRedirectHandler(urllib.request.HTTPRedirectHandler):
     """Allow redirects only when scheme, host, and effective port stay fixed."""
 
@@ -75,6 +83,7 @@ class SameOriginRedirectHandler(urllib.request.HTTPRedirectHandler):
         self.expected_origin = _http_origin(initial_url)
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
+        _reserve_campaign_request(newurl, req.get_method())
         if not self.expected_origin or _http_origin(newurl) != self.expected_origin:
             raise urllib.error.HTTPError(req.full_url, code, "cross-origin redirect blocked", headers, fp)
         return super().redirect_request(req, fp, code, msg, headers, newurl)
@@ -85,6 +94,8 @@ def scoped_urlopen(request, timeout=10, context=None):
     url = request.full_url if isinstance(request, urllib.request.Request) else request
     if not _http_origin(url):
         raise ValueError("only credential-free HTTP(S) request URLs are allowed")
+    method = request.get_method() if isinstance(request, urllib.request.Request) else "GET"
+    _reserve_campaign_request(url, method)
     opener = urllib.request.build_opener(
         SameOriginRedirectHandler(url),
         urllib.request.HTTPSHandler(context=context or ssl.create_default_context()),

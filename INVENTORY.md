@@ -9,6 +9,23 @@ Inventory structure originated at `f870a85`. Coverage status was refreshed
 and commit are recorded in the latest dated addendum below. Earlier checkpoints
 remain historical snapshots; `git log -1` is the source of truth for the tip.
 
+## 2026-11-18 addendum — shared campaign request gate
+
+Campaign-launched registered scanner CLIs now reserve request counts through a
+central SQLite gate integrated at the five network skills' common
+`scoped_urlopen` boundary. `run-cli` currently covers cloud detection, API
+authorization, web crawling, SQLi, XSS, and IDOR with fixed script entrypoints.
+The gate validates exact origin, active step state, persisted step budget, and
+campaign budget; same-origin redirects consume budget too. Direct standalone
+runs, copied skill installations, external HTTP clients/executables, and
+non-scanning chain/report tools remain outside the aggregate counter. No authz
+tester source or API breaker tests were changed.
+Campaign cloud detection uses only the in-scope HTTP header probe; DNS/CNAME
+and WHOIS lookups are suppressed.
+Validation: **949 pytest tests + 143 subtests**; focused campaign/gate matrix
+**49 + 7 subtests**; Ruff, compileall, common-sync, CLI-docs (**10/116/63**),
+and diff checks pass. No external target was contacted.
+
 ## 2026-11-18 addendum — coordinated campaign foundations (#1–#6)
 
 Added an offline campaign manifest/planner, scoped role/object matrix evaluator,

@@ -4,6 +4,30 @@ Living status note for the ongoing CatusMythos-Lounge improvement work. Keep it
 current; it records what has and has **not** been deeply reviewed so later work
 doesn't mistake uneven coverage for uniform coverage.
 
+## 2026-11-18 addendum — shared campaign request gate
+
+`scripts/campaign_request_gate.py` now lets campaign-launched scanner CLIs
+reserve each HTTP request through the existing SQLite ledger. The five network
+skills' synchronized `_common.scoped_urlopen` helpers invoke the gate only when
+campaign environment is present; ordinary standalone use is unchanged. It
+checks the selected exact origin, running step, persisted per-step ceiling, and
+campaign-wide ceiling, and also counts same-origin redirects. A registered
+`run-cli` command safely launches fixed entrypoints for cloud detection, API
+authorization, web crawling, SQLi, XSS, and IDOR; it uses no shell and does not
+persist scanner arguments or request data. `campaign_step_registry` stores the
+declared step ceiling, including migration for existing ledger files.
+Campaign cloud detection is deliberately limited to its scoped HTTP header
+probe; DNS/CNAME and WHOIS lookups are suppressed because they bypass the gate.
+
+Coverage remains intentionally bounded: directly launched/copy-installed
+skills, separate HTTP clients, external network executables, and report/chain
+analysis commands are outside this gate. Authentication tester implementation
+and its tests were not modified. Focused campaign and gate regressions pass;
+final validation: **949 pytest tests + 143 subtests**; focused campaign/gate
+matrix: **49 tests + 7 subtests**. Ruff, compileall, common-sync, CLI-docs
+(**10 docs / 116 references / 63 CLIs**), and diff checks pass. No external
+target was contacted.
+
 ## 2026-11-18 addendum — assessment campaign and evidence foundations (#1–#6)
 
 New offline infrastructure: `scripts/assessment_campaign.py` validates explicit
