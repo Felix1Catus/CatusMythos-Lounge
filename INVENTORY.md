@@ -18,6 +18,12 @@ not replace valid role credentials, object ownership evidence, or a labeled
 fixture benchmark. A before/after detection baseline is still needed to measure
 accuracy improvement.
 
+The loopback-only benchmark fixture in `tests/fixtures/assessment_benchmark_app.py`
+provides labeled BOLA, BFLA, and workflow-skip scenarios. Regression tests run
+the actual API authorization and workflow discovery functions against it. BOLA
+is expected to validate from object identity; bare BFLA/workflow responses stay
+candidates for human impact verification.
+
 ## 2026-11-18 addendum — default OS network containment
 
 Registered campaign scanner commands run behind a temporary nftables IPv4

@@ -24,12 +24,14 @@ authorization, and stateful-workflow signals; it never changes case results,
 confirms findings, or skips tests. The existing coverage evaluator remains the
 benchmark metric path and continues to require explicit gold labels/provenance.
 
-Offline regression: **126 tests + 34 subtests** across assessment intelligence,
-browser audit, workflow discovery, and target knowledge. Full suite: **966
+Offline regression: **128 tests + 34 subtests** across assessment intelligence,
+browser audit, workflow discovery, and target knowledge. Full suite: **968
 tests + 143 subtests**. Ruff, compileall, common-sync, CLI-docs (**10 docs /
 117 references / 63 CLIs**) passed. No live target was contacted. A dedicated
-vulnerable fixture application and a
-before/after detection-rate baseline remain required to quantify accuracy gains.
+loopback-only benchmark app now contains labeled BOLA, BFLA, and workflow-skip
+behaviors. Its regressions validate BOLA and keep BFLA/workflow results as
+candidates. The suite does not measure internet-wide recall; broader apps and
+before/after baselines are needed to quantify accuracy gains.
 
 ## 2026-11-18 addendum — WSL network namespace isolation
 
