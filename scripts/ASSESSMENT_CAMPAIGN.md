@@ -17,6 +17,9 @@ Create a JSON manifest with:
 - `scope.origins`: exact credential-free HTTP(S) origins.
 - `scope.request_budget`: sum of the maximum request allocations declared by
   the steps. `allow_state_changes` defaults to false.
+- Optional `scope.network_endpoints`: explicit `{host, protocol, ports}` tuples
+  for bounded TCP/UDP probes that do not use an HTTP origin, such as one DNS
+  resolver or one Nmap port. These do not widen the HTTP origin list.
 - `targets`: each target URL must resolve to one of the exact scoped origins.
   Optional roles use labels and environment-variable *names* only. Planning
   never reads credentials; `run-workflow` reads the selected role's named
@@ -52,11 +55,12 @@ tools retain their own exact-key cache/reuse rules.
 ## Execute supported steps
 
 Three native adapters execute: `business_workflow`, `tech_fingerprint`, and
-anonymous `api_discovery`. The `run-cli` command also executes the registered
-entrypoints for `cloud_detector`, `api_authz`, `web_crawl`, `web_sqli`,
-`web_xss`, and `web_idor`. Those CLIs use the pipeline's shared
-`_common.scoped_urlopen` transport, which reserves each initial request and
-same-origin redirect in the same SQLite ledger. The runner invokes a fixed
+anonymous `api_discovery`. The `run-cli` command executes registered entrypoints
+for `cloud_detector`, `api_authz`, `web_crawl`, `web_sqli`, `web_xss`,
+`web_idor`, `web_dom_xss`, `web_cache`, four AI/LLM testers, and `chain_execute`.
+Shared-transport requests, direct `requests`/urllib clients, and upload tester
+TCP connections reserve against the same ledger. API authz campaign runs require
+the injected gate context and reject mutation-write mode. The runner invokes a fixed
 Python entrypoint without a shell, requires the exact confirmed origin, and
 fails closed on off-origin requests or exhausted budgets. It records no CLI
 arguments, URLs, credentials, response bodies, or payloads. Fingerprinting checks only
@@ -70,6 +74,15 @@ perform target HTTP probing.
 In campaign mode, `cloud_detector` is restricted to one scoped HTTP header
 probe; DNS/CNAME and IP WHOIS lookups are skipped because those network paths
 do not use the shared HTTP gate.
+
+For external network tools, `run-external` supports a small set of bounded
+single-operation adapters: one curl HTTP(S) request without URL globbing,
+redirects, proxies, or retries; one `dig` query for the selected hostname
+through one explicitly scoped resolver; or one Nmap TCP connect probe to a
+literal IP and explicitly scoped port. Nmap is rewritten to `-sT -Pn -n` with
+zero retries. Add the resolver and/or non-origin port to
+`scope.network_endpoints`; each operation consumes one campaign request unit.
+Other network executables and shell commands fail closed.
 
 The workflow adapter validates the scenario and declared request budget before
 reading credentials or sending a request. Execution also requires the
@@ -89,8 +102,10 @@ review and `--retry-interrupted`; retry can repeat side effects, so use only
 after checking the target and prior result. The ledger records step states and
 counts, never request URLs, credentials, response bodies, or payload values.
 It also enforces declared step dependencies. For the registered scanner CLI
-entrypoints, use `run-cli` so requests are counted as they leave the shared
-transport. Other registered non-network tools can be marked complete with an
+entrypoints, use `run-cli` or `run-external` so supported requests are charged
+as they leave the adapted transport. Python helpers consult the gate only when
+campaign environment is set. A copied skill without the central gate module is
+not a supported campaign execution environment. Other registered non-network tools can be marked complete with an
 operator note; the ledger stores only a digest of that note, not its text, and
 the attestation is not independent proof of the tool's outcome.
 

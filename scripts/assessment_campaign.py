@@ -11,6 +11,7 @@ import contextlib
 import hashlib
 import importlib.util
 import io
+import ipaddress
 import json
 import os
 import re
@@ -46,14 +47,21 @@ TOOLS = {
     "web_sqli": {"skill": "webapp-exploit-hunter", "stateful": False},
     "web_xss": {"skill": "webapp-exploit-hunter", "stateful": False},
     "web_idor": {"skill": "webapp-exploit-hunter", "stateful": False},
+    "web_dom_xss": {"skill": "webapp-exploit-hunter", "stateful": False},
+    "web_cache": {"skill": "web-cache-auditor", "stateful": False},
+    "llm_prompt_injection": {"skill": "16-ai-llm-security", "stateful": False},
+    "llm_rag_security": {"skill": "16-ai-llm-security", "stateful": False},
+    "llm_unbounded_consumption": {"skill": "16-ai-llm-security", "stateful": False},
+    "llm_mcp_security": {"skill": "16-ai-llm-security", "stateful": False},
+    "chain_execute": {"skill": "vuln-chain-composer", "stateful": False},
+    "external_probe": {"skill": "recon-dominator", "stateful": False},
     "business_workflow": {"skill": "webapp-exploit-hunter", "stateful": True},
     "chain_analysis": {"skill": "vuln-chain-composer", "stateful": False},
     "report": {"skill": "vuln-chain-composer", "stateful": False},
 }
 
-# These entrypoints cover the registered standalone scanners that share the
-# guarded _common.scoped_urlopen transport. The authorization entrypoint is
-# only referenced here; its implementation and tests remain independently owned.
+# Fixed CLI entrypoints; network calls use a campaign-aware shared helper or
+# an explicit per-transport reservation before each request/probe.
 TOOL_ENTRYPOINTS = {
     "api_authz": ("api-breaker", "authz_tester.py"),
     "cloud_detector": ("cloud-pivot-finder", "cloud_detector.py"),
@@ -61,6 +69,13 @@ TOOL_ENTRYPOINTS = {
     "web_sqli": ("webapp-exploit-hunter", "sqli_tester.py"),
     "web_xss": ("webapp-exploit-hunter", "xss_tester.py"),
     "web_idor": ("webapp-exploit-hunter", "idor_tester.py"),
+    "web_dom_xss": ("webapp-exploit-hunter", "dom_xss_auditor.py"),
+    "web_cache": ("web-cache-auditor", "cache_audit.py"),
+    "llm_prompt_injection": ("16-ai-llm-security", "prompt_injection_tester.py"),
+    "llm_rag_security": ("16-ai-llm-security", "rag_security_tester.py"),
+    "llm_unbounded_consumption": ("16-ai-llm-security", "unbounded_consumption_tester.py"),
+    "llm_mcp_security": ("16-ai-llm-security", "mcp_security_tester.py"),
+    "chain_execute": ("vuln-chain-composer", "execute_chain.py"),
 }
 CLI_TIMEOUT_SECONDS = 1800
 
@@ -116,6 +131,55 @@ def _bounded_int(value, label, minimum, maximum):
     return value
 
 
+def _normalize_network_host(value):
+    if not isinstance(value, str) or not value or len(value) > 253 or any(
+            char.isspace() or ord(char) < 33 or char in "/\\@?#" for char in value):
+        raise CampaignError("network endpoint host must be a bare IP address or DNS name")
+    host = value.strip("[]").rstrip(".")
+    try:
+        return ipaddress.ip_address(host).compressed.lower()
+    except ValueError:
+        try:
+            host = host.encode("idna").decode("ascii").lower()
+        except UnicodeError as exc:
+            raise CampaignError("network endpoint host is invalid") from exc
+        labels = host.split(".")
+        if (not host or len(host) > 253 or any(
+                not label or len(label) > 63 or label.startswith("-") or label.endswith("-")
+                or not re.fullmatch(r"[a-z0-9-]+", label) for label in labels)):
+            raise CampaignError("network endpoint host is invalid")
+        return host
+
+
+def _validate_network_endpoints(value):
+    if not isinstance(value, list) or len(value) > 500:
+        raise CampaignError("scope.network_endpoints must be a list of at most 500 entries")
+    normalized, seen, total_ports = [], set(), 0
+    for item in value:
+        if not isinstance(item, dict):
+            raise CampaignError("each network endpoint must be an object")
+        host = _normalize_network_host(item.get("host"))
+        protocol = item.get("protocol")
+        if protocol not in ("tcp", "udp"):
+            raise CampaignError("network endpoint protocol must be tcp or udp")
+        ports = item.get("ports")
+        if not isinstance(ports, list) or not ports or len(ports) > 256:
+            raise CampaignError("network endpoint ports must be a list of 1 to 256 ports")
+        checked_ports = [_bounded_int(port, "network endpoint port", 1, 65535) for port in ports]
+        if len(set(checked_ports)) != len(checked_ports):
+            raise CampaignError("network endpoint ports must be unique")
+        total_ports += len(checked_ports)
+        if total_ports > 10000:
+            raise CampaignError("scope.network_endpoints may contain at most 10000 host/protocol/port tuples")
+        for port in checked_ports:
+            key = (host, protocol, port)
+            if key in seen:
+                raise CampaignError("scope.network_endpoints contains a duplicate host/protocol/port")
+            seen.add(key)
+        normalized.append({"host": host, "protocol": protocol, "ports": sorted(checked_ports)})
+    return normalized
+
+
 def _role_cases(target_id, target, objects):
     module_path = Path(__file__).resolve().parent / "role_matrix.py"
     spec = importlib.util.spec_from_file_location("catus_role_matrix", module_path)
@@ -148,6 +212,7 @@ def validate_manifest(manifest):
     allow_mutations = scope.get("allow_state_changes", False)
     if not isinstance(allow_mutations, bool):
         raise CampaignError("scope.allow_state_changes must be boolean")
+    network_endpoints = _validate_network_endpoints(scope.get("network_endpoints", []))
 
     targets = manifest.get("targets")
     if not isinstance(targets, list) or not targets or len(targets) > MAX_TARGETS:
@@ -262,7 +327,8 @@ def validate_manifest(manifest):
     context_assets = _validate_business_context(manifest.get("business_context"), normalized_origins)
     return {"schema_version": 1, "engagement": engagement.strip(),
             "scope": {"origins": normalized_origins, "request_budget": request_budget,
-                      "declared_request_budget": budget_used, "allow_state_changes": allow_mutations},
+                      "declared_request_budget": budget_used, "allow_state_changes": allow_mutations,
+                      "network_endpoints": network_endpoints},
             "targets": [{"id": item["id"], "url": item["url"], "origin": item["origin"],
                          "roles": list(item["roles"].values())} for item in targets_by_id.values()],
             "authorization_matrix": authorization_cases,
@@ -495,6 +561,13 @@ class CampaignLedger:
                     created_at INTEGER NOT NULL,
                     PRIMARY KEY (campaign_id, step_id)
                 );
+                CREATE TABLE IF NOT EXISTS campaign_network_endpoints (
+                    campaign_id TEXT NOT NULL,
+                    host TEXT NOT NULL,
+                    protocol TEXT NOT NULL,
+                    port INTEGER NOT NULL,
+                    PRIMARY KEY (campaign_id, host, protocol, port)
+                );
             """)
             registry_columns = {row[1] for row in self.connection.execute(
                 "PRAGMA table_info(campaign_step_registry)")}
@@ -539,6 +612,12 @@ class CampaignLedger:
                         "INSERT OR IGNORE INTO campaign_step_dependencies "
                         "(campaign_id, step_id, dependency_id) VALUES (?, ?, ?)",
                         (self.campaign_id, step["id"], dependency_id))
+            for endpoint in plan["scope"]["network_endpoints"]:
+                for port in endpoint["ports"]:
+                    connection.execute(
+                        "INSERT OR IGNORE INTO campaign_network_endpoints"
+                        "(campaign_id, host, protocol, port) VALUES (?, ?, ?, ?)",
+                        (self.campaign_id, endpoint["host"], endpoint["protocol"], port))
             connection.commit()
         except Exception:
             connection.rollback()
@@ -1004,6 +1083,8 @@ def execute_registered_cli_step(manifest, step_id, confirm_target, state_databas
             os.pathsep + existing_pythonpath if existing_pythonpath else "")
         if selected["tool"] == "cloud_detector" and "--campaign-http-only" not in tool_args:
             tool_args.append("--campaign-http-only")
+        if selected["tool"] == "api_authz" and "--campaign-gate-required" not in tool_args:
+            tool_args.append("--campaign-gate-required")
         try:
             completed = subprocess.run(
                 [sys.executable, str(script_path), *tool_args], cwd=str(script_dir),
@@ -1101,6 +1182,16 @@ def main(argv=None):
                      help="Explicitly permit retry after reviewing an interrupted/failed step")
     cli.add_argument("tool_args", nargs=argparse.REMAINDER,
                      help="Arguments for the fixed scanner entrypoint; separate them with --")
+    external = subparsers.add_parser(
+        "run-external", help="run a supported network executable through its campaign adapter")
+    external.add_argument("--manifest", required=True)
+    external.add_argument("--step", required=True)
+    external.add_argument("--confirm-target", required=True)
+    external.add_argument("--state-db", required=True)
+    external.add_argument("--campaign-id", required=True)
+    external.add_argument("--retry-interrupted", action="store_true")
+    external.add_argument("tool_args", nargs=argparse.REMAINDER,
+                          help="One supported executable and its arguments; separate them with --")
     status = subparsers.add_parser("campaign-status", help="show campaign counters and step states")
     status.add_argument("--state-db", required=True)
     status.add_argument("--campaign-id", required=True)
@@ -1122,6 +1213,94 @@ def main(argv=None):
             result = validate_manifest(_read_json(args.manifest))
             if args.knowledge_db:
                 result = enrich_plan_with_knowledge(result, args.knowledge_db, args.engagement)
+        elif args.command == "run-external":
+            manifest = _read_json(args.manifest)
+            plan = validate_manifest(manifest)
+            selected = next((step for step in plan["steps"] if step["id"] == args.step), None)
+            if selected is None or selected["tool"] != "external_probe":
+                raise CampaignError("selected step is not registered for network executable probes")
+            if canonical_origin(args.confirm_target) != selected["origin"]:
+                raise CampaignError("--confirm-target must exactly match the selected step's in-scope origin")
+            command = list(args.tool_args)
+            if command and command[0] == "--":
+                command = command[1:]
+            if not command or os.path.basename(command[0]).lower().removesuffix(".exe") not in (
+                    "curl", "dig", "nmap"):
+                raise CampaignError("run-external supports only curl, dig, and nmap adapters")
+            ledger = CampaignLedger(args.state_db, args.campaign_id)
+            step_started = False
+            try:
+                ledger.bind(manifest)
+                ledger.start_step(args.step, args.retry_interrupted)
+                step_started = True
+                previous_used = next(item["requests_used"] for item in ledger.summary()["steps"]
+                                     if item["step_id"] == args.step)
+                status = {"budget_exhausted": False, "off_origin_requests_blocked": False,
+                          "gate_errors": False}
+                with tempfile.TemporaryDirectory(prefix="campaign-external-") as directory:
+                    status_path = Path(directory) / "gate-status.json"
+                    status_path.write_text(json.dumps(status), encoding="utf-8")
+                    env = os.environ.copy()
+                    env.update({
+                        "CATUS_CAMPAIGN_GATE_DB": str(Path(args.state_db).expanduser().resolve()),
+                        "CATUS_CAMPAIGN_GATE_CAMPAIGN": args.campaign_id,
+                        "CATUS_CAMPAIGN_GATE_STEP": args.step,
+                        "CATUS_CAMPAIGN_GATE_ORIGIN": selected["origin"],
+                        "CATUS_CAMPAIGN_GATE_STATUS": str(status_path),
+                    })
+                    existing_pythonpath = env.get("PYTHONPATH", "")
+                    env["PYTHONPATH"] = str(Path(__file__).resolve().parent) + (
+                        os.pathsep + existing_pythonpath if existing_pythonpath else "")
+                    gate_path = Path(__file__).resolve().parent / "campaign_request_gate.py"
+                    gate_spec = importlib.util.spec_from_file_location(
+                        "catus_campaign_external_gate", gate_path)
+                    gate_module = importlib.util.module_from_spec(gate_spec)
+                    gate_spec.loader.exec_module(gate_module)
+                    gate_names = tuple(key for key in env if key.startswith("CATUS_CAMPAIGN_GATE_"))
+                    old_gate_env = {key: os.environ.get(key) for key in gate_names}
+                    try:
+                        for key in gate_names:
+                            os.environ[key] = env[key]
+                        safe_command = gate_module.reserve_external_command_from_environment(command)
+                    finally:
+                        for key, value in old_gate_env.items():
+                            if value is None:
+                                os.environ.pop(key, None)
+                            else:
+                                os.environ[key] = value
+                    timed_out = False
+                    return_code = None
+                    try:
+                        completed = subprocess.run(
+                            safe_command, env=env, check=False, timeout=CLI_TIMEOUT_SECONDS)
+                        return_code = completed.returncode
+                    except subprocess.TimeoutExpired:
+                        timed_out = True
+                    try:
+                        recorded = json.loads(status_path.read_text(encoding="utf-8"))
+                        if isinstance(recorded, dict):
+                            status.update({key: recorded.get(key) is True for key in status})
+                    except (OSError, json.JSONDecodeError):
+                        status["gate_errors"] = True
+                updated = ledger.summary()
+                requests_used = next(item["requests_used"] for item in updated["steps"]
+                                     if item["step_id"] == args.step)
+                execution = {"step_id": args.step, "requests_sent": requests_used - previous_used,
+                             "request_budget": selected["max_requests"],
+                             "return_code": return_code, "timed_out": timed_out,
+                             "arguments_recorded": False, **status}
+                run_status = ("failed" if return_code != 0 or timed_out or any(status.values())
+                              else "completed")
+                ledger.finish_step(args.step, run_status)
+                execution["campaign_budget"] = ledger.summary()
+                result = {"tool": "external_probe", "executable": os.path.basename(command[0]),
+                          "execution": execution}
+            except Exception:
+                if step_started:
+                    ledger.finish_step(args.step, "failed")
+                raise
+            finally:
+                ledger.close()
         elif args.command == "run-cli":
             manifest = _read_json(args.manifest)
             plan = validate_manifest(manifest)
@@ -1135,6 +1314,10 @@ def main(argv=None):
             tool_args = list(args.tool_args)
             if tool_args and tool_args[0] == "--":
                 tool_args = tool_args[1:]
+            if selected["tool"] == "api_authz" and "--allow-mutation-write" in tool_args:
+                raise CampaignError("campaign run-cli does not enable mutation probes; use a reviewed workflow")
+            if selected["tool"] == "web_cache" and "--confirm-cache-replay" in tool_args:
+                raise CampaignError("campaign run-cli does not enable cache replay confirmation")
             ledger = CampaignLedger(args.state_db, args.campaign_id)
             step_started = False
             try:

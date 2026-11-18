@@ -3,6 +3,7 @@
 import argparse
 import importlib.util
 import json
+import os
 import sys
 import tempfile
 import threading
@@ -36,6 +37,11 @@ api_discovery = load_api_script("api_breaker_discovery_regressions", "api_discov
 api_report = load_api_script("api_breaker_report_regressions", "api_report.py")
 authz_tester = load_api_script("api_breaker_authz_regressions", "authz_tester.py")
 auth_analyzer = load_api_script("api_breaker_auth_regressions", "auth_analyzer.py")
+
+CAMPAIGN_SPEC = importlib.util.spec_from_file_location(
+    "api_breaker_campaign_regressions", REPO_ROOT / "scripts" / "assessment_campaign.py")
+campaign = importlib.util.module_from_spec(CAMPAIGN_SPEC)
+CAMPAIGN_SPEC.loader.exec_module(campaign)
 
 
 class ApiBreakerScopeTests(unittest.TestCase):
@@ -1867,6 +1873,83 @@ class AuthzMatrixTests(unittest.TestCase):
                 authz_tester.main()
             written = json.loads(output_path.read_text())
             self.assertEqual(written["meta"]["roles"], [])
+
+
+class AuthzCampaignGateTests(unittest.TestCase):
+    def test_campaign_required_cli_rejects_missing_gate_context(self):
+        names = (
+            "CATUS_CAMPAIGN_GATE_DB", "CATUS_CAMPAIGN_GATE_CAMPAIGN",
+            "CATUS_CAMPAIGN_GATE_STEP", "CATUS_CAMPAIGN_GATE_ORIGIN",
+        )
+        argv = ["authz_tester.py", "--api-base", "https://api.example.test",
+                "--token", "fixture-token", "--campaign-gate-required"]
+        with patch.dict(os.environ, {name: "" for name in names}):
+            with patch.object(sys, "argv", argv), patch.object(authz_tester, "http_request") as request:
+                with self.assertRaises(SystemExit) as error:
+                    authz_tester.main()
+        self.assertEqual(error.exception.code, 2)
+        request.assert_not_called()
+
+    def test_authz_http_request_reserves_campaign_budget(self):
+        class FixtureHandler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"ok")
+
+            def log_message(self, _format, *_args):
+                pass
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), FixtureHandler)
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        origin = "http://127.0.0.1:{}".format(server.server_port)
+        manifest = {
+            "schema_version": 1,
+            "engagement": "authz-gate-test",
+            "scope": {"origins": [origin], "request_budget": 1},
+            "targets": [{"id": "api", "url": origin, "roles": [{"name": "anonymous"}]}],
+            "steps": [{"id": "authz", "tool": "api_authz", "target": "api",
+                       "max_requests": 1}],
+        }
+        names = (
+            "CATUS_CAMPAIGN_GATE_DB", "CATUS_CAMPAIGN_GATE_CAMPAIGN",
+            "CATUS_CAMPAIGN_GATE_STEP", "CATUS_CAMPAIGN_GATE_ORIGIN",
+            "CATUS_CAMPAIGN_GATE_STATUS",
+        )
+        prior = {name: os.environ.get(name) for name in names}
+        script_root = str(REPO_ROOT / "scripts")
+        with tempfile.TemporaryDirectory() as directory:
+            ledger = campaign.CampaignLedger(Path(directory) / "state.sqlite", "authz-gate")
+            try:
+                ledger.bind(manifest)
+                ledger.start_step("authz")
+                status_path = Path(directory) / "status.json"
+                status_path.write_text("{}", encoding="utf-8")
+                os.environ.update({
+                    "CATUS_CAMPAIGN_GATE_DB": str(Path(directory) / "state.sqlite"),
+                    "CATUS_CAMPAIGN_GATE_CAMPAIGN": "authz-gate",
+                    "CATUS_CAMPAIGN_GATE_STEP": "authz",
+                    "CATUS_CAMPAIGN_GATE_ORIGIN": origin,
+                    "CATUS_CAMPAIGN_GATE_STATUS": str(status_path),
+                })
+                sys.path.insert(0, script_root)
+                status, _headers, body = authz_tester.http_request(origin + "/health")
+                self.assertEqual(status, 200)
+                self.assertEqual(body, "ok")
+                self.assertEqual(ledger.summary()["requests_used"], 1)
+            finally:
+                if script_root in sys.path:
+                    sys.path.remove(script_root)
+                for name, value in prior.items():
+                    if value is None:
+                        os.environ.pop(name, None)
+                    else:
+                        os.environ[name] = value
+                ledger.close()
+                server.shutdown()
+                server.server_close()
+                worker.join(timeout=2)
 
 
 if __name__ == "__main__":

@@ -34,6 +34,7 @@ triggered backtracks as a reference design).
 """
 import argparse
 import json
+import os
 import logging
 import random
 import sys
@@ -269,6 +270,9 @@ def send(url: str, field: str, payload: str, headers: dict, resp_path: str,
             "run `python3 -m pip install -r requirements.txt`"
         )
     body = {field: payload}
+    if os.environ.get("CATUS_CAMPAIGN_GATE_DB"):
+        from campaign_request_gate import reserve_from_environment
+        reserve_from_environment(url, "POST")
     r = requests.post(url, json=body, headers=headers, timeout=timeout, allow_redirects=False)
     r.raise_for_status()
     ctype = r.headers.get("content-type", "")

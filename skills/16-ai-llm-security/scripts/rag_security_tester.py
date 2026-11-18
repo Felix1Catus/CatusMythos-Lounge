@@ -86,6 +86,7 @@ what a test harness monkeypatches instead of hitting the network.
 import argparse
 import json
 import logging
+import os
 import re
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -139,6 +140,9 @@ def _post(url: str, body: dict, headers: dict, timeout: int):
     unbounded_consumption_tester.py's own _post())."""
     if requests is None:
         return None, {}, None, None, "optional dependency 'requests' is missing; run `python3 -m pip install -r requirements.txt`"
+    if os.environ.get("CATUS_CAMPAIGN_GATE_DB"):
+        from campaign_request_gate import reserve_from_environment
+        reserve_from_environment(url, "POST")
     try:
         r = requests.post(url, json=body, headers=headers, timeout=timeout, allow_redirects=False)
     except requests.exceptions.Timeout:

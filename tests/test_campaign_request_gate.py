@@ -2,7 +2,9 @@
 
 import json
 import os
+import shutil
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import threading
@@ -27,6 +29,12 @@ class _FixtureHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b"<html><body>fixture</body></html>")
 
+    def do_POST(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(b'{"ok":true}')
+
     def log_message(self, _format, *_args):
         pass
 
@@ -35,7 +43,11 @@ def _manifest(origin, max_requests=60):
     return {
         "schema_version": 1,
         "engagement": "campaign-gate-fixture",
-        "scope": {"origins": [origin], "request_budget": max_requests},
+        "scope": {"origins": [origin], "request_budget": max_requests,
+                  "network_endpoints": [
+                      {"host": "127.0.0.1", "protocol": "tcp", "ports": [int(origin.rsplit(":", 1)[1])]},
+                      {"host": "127.0.0.1", "protocol": "udp", "ports": [53]},
+                  ]},
         "targets": [{"id": "fixture", "url": origin + "/", "roles": [{"name": "anonymous"}]}],
         "steps": [{"id": "crawl", "tool": "web_crawl", "target": "fixture",
                    "max_requests": max_requests}],
@@ -123,6 +135,53 @@ class CampaignRequestGateTests(unittest.TestCase):
         self.assertEqual(self.ledger.summary()["requests_used"], 60)
         self.assertTrue(json.loads(self.status.read_text(encoding="utf-8"))["budget_exhausted"])
 
+    def test_socket_probe_and_curl_are_metered_but_unadapted_network_binaries_fail_closed(self):
+        gate = self._gate_module()
+        gate.reserve_socket_from_environment("127.0.0.1", self.server.server_port)
+        self.assertEqual(self.ledger.summary()["requests_used"], 1)
+        gate.reserve_external_command_from_environment(["curl", self.origin + "/one"])
+        self.assertEqual(self.ledger.summary()["requests_used"], 2)
+        with self.assertRaisesRegex(gate.CampaignGateError, "redirects"):
+            gate.reserve_external_command_from_environment(["curl", "-L", self.origin + "/redirect"])
+        with self.assertRaisesRegex(gate.CampaignGateError, "retries"):
+            gate.reserve_external_command_from_environment(
+                ["curl", "--retry", "4", self.origin + "/retry"])
+        with self.assertRaisesRegex(gate.CampaignGateError, "globbing"):
+            gate.reserve_external_command_from_environment(["curl", self.origin + "/item/{1,2}"])
+        safe_nmap = gate.reserve_external_command_from_environment(
+            ["nmap", "-p", str(self.server.server_port), "127.0.0.1"])
+        self.assertEqual(safe_nmap[1:5], ["-sT", "-Pn", "-n", "--max-retries"])
+        self.assertEqual(self.ledger.summary()["requests_used"], 3)
+        with self.assertRaisesRegex(gate.CampaignGateError, "out-of-scope network endpoint"):
+            gate.reserve_external_command_from_environment(["nmap", "-p", "9000", "127.0.0.1"])
+        with self.assertRaisesRegex(gate.CampaignGateError, "one scoped hostname"):
+            gate.reserve_external_command_from_environment(["dig", "CNAME", "127.0.0.1"])
+        safe_dig = gate.reserve_external_command_from_environment(
+            ["dig", "CNAME", "127.0.0.1", "@127.0.0.1", "+short"])
+        self.assertIn("+tries=1", safe_dig)
+        self.assertIn("+time=3", safe_dig)
+        self.assertEqual(self.ledger.summary()["requests_used"], 4)
+        with self.assertRaisesRegex(gate.CampaignGateError, "one scoped hostname"):
+            gate.reserve_external_command_from_environment(
+                ["dig", "CNAME", "127.0.0.1", "TXT", "@127.0.0.1"])
+        with self.assertRaisesRegex(gate.CampaignGateError, "whois adapter is unavailable"):
+            gate.reserve_external_command_from_environment(["whois", "127.0.0.1"])
+
+    def test_python_child_blocks_external_network_binary_before_launch(self):
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(ROOT / "scripts") + os.pathsep + env.get("PYTHONPATH", "")
+        code = (
+            "import subprocess; "
+            "from campaign_request_gate import CampaignGateError; "
+            "try_run = False; "
+            "\ntry:\n subprocess.run(['nmap','--top-ports','100','127.0.0.1'])"
+            "\nexcept CampaignGateError:\n try_run = True\n"
+            "assert try_run"
+        )
+        result = subprocess.run([sys.executable, "-c", code], env=env,
+                                capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_common_transport_counts_same_origin_redirects(self):
         import importlib.util
         common_path = ROOT / "skills" / "webapp-exploit-hunter" / "scripts" / "_common.py"
@@ -197,6 +256,101 @@ class CampaignRequestGateTests(unittest.TestCase):
             self.assertEqual(ledger.summary()["steps"][0]["status"], "completed")
         finally:
             ledger.close()
+
+    def test_run_external_executes_metered_curl_against_loopback(self):
+        if not shutil.which("curl"):
+            self.skipTest("curl executable is unavailable")
+        manifest = _manifest(self.origin, max_requests=2)
+        manifest["steps"][0].update({"id": "external", "tool": "external_probe"})
+        database = self.root / "external.sqlite"
+        manifest_path = self.root / "external-manifest.json"
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        self._restore_environment()
+        result = campaign.main([
+            "run-external", "--manifest", str(manifest_path), "--step", "external",
+            "--confirm-target", self.origin, "--state-db", str(database),
+            "--campaign-id", "external-fixture", "--", "curl", "--silent", self.origin + "/",
+        ])
+        self.assertEqual(result, 0)
+        ledger = campaign.CampaignLedger(database, "external-fixture")
+        try:
+            self.assertEqual(ledger.summary()["requests_used"], 1)
+            self.assertEqual(ledger.summary()["steps"][0]["status"], "completed")
+        finally:
+            ledger.close()
+
+    def test_api_authz_registered_cli_requires_and_uses_campaign_gate(self):
+        manifest = _manifest(self.origin, max_requests=100)
+        manifest["scope"]["request_budget"] = 100
+        manifest["steps"][0].update({"id": "authz", "tool": "api_authz", "max_requests": 100})
+        database = self.root / "authz.sqlite"
+        ledger = campaign.CampaignLedger(database, "authz-cli-fixture")
+        ledger.bind(manifest)
+        manifest_path = self.root / "authz-manifest.json"
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        output_path = self.root / "authz.json"
+        self._restore_environment()
+        try:
+            result = campaign.main([
+                "run-cli", "--manifest", str(manifest_path), "--step", "authz",
+                "--confirm-target", self.origin, "--state-db", str(database),
+                "--campaign-id", "authz-cli-fixture", "--", "--api-base", self.origin,
+                "--token", "fixture-token", "--output", str(output_path),
+            ])
+            self.assertEqual(result, 0)
+            self.assertEqual(ledger.summary()["requests_used"], 68)
+            self.assertEqual(ledger.summary()["steps"][0]["status"], "completed")
+            self.assertTrue(output_path.is_file())
+        finally:
+            ledger.close()
+
+    def test_direct_http_client_adapters_reserve_each_request(self):
+        import importlib.util
+
+        script_root = str(ROOT / "scripts")
+        sys.path.insert(0, script_root)
+        loaded = []
+        try:
+            specs = [
+                ("gate_cache_direct", ROOT / "skills" / "web-cache-auditor" / "scripts" / "cache_audit.py"),
+                ("gate_dom_direct", ROOT / "skills" / "webapp-exploit-hunter" / "scripts" / "dom_xss_auditor.py"),
+                ("gate_prompt_direct", ROOT / "skills" / "16-ai-llm-security" / "scripts" / "prompt_injection_tester.py"),
+                ("gate_rag_direct", ROOT / "skills" / "16-ai-llm-security" / "scripts" / "rag_security_tester.py"),
+                ("gate_consumption_direct", ROOT / "skills" / "16-ai-llm-security" / "scripts" / "unbounded_consumption_tester.py"),
+                ("gate_mcp_direct", ROOT / "skills" / "16-ai-llm-security" / "scripts" / "mcp_security_tester.py"),
+            ]
+            for name, path in specs:
+                spec = importlib.util.spec_from_file_location(name, path)
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                loaded.append(module)
+            if any(getattr(module, "requests", None) is None for module in loaded[2:]):
+                self.skipTest("optional requests dependency is needed for direct-client gate coverage")
+
+            loaded[0].request_get(self.origin + "/cache")
+            loaded[1].fetch_text(self.origin + "/document")
+            loaded[2].send(self.origin + "/llm", "message", "probe", {}, "", timeout=2)
+            loaded[3]._post(self.origin + "/rag", {}, {}, 2)
+            loaded[4]._post(self.origin + "/usage", {}, {}, 2)
+            loaded[5].send_jsonrpc(self.origin + "/mcp", "tools/list", {}, {}, 2)
+            self.assertEqual(self.ledger.summary()["requests_used"], 6)
+        finally:
+            sys.path.remove(script_root)
+
+    def test_registered_authz_cli_rejects_mutation_mode(self):
+        manifest = _manifest(self.origin, max_requests=100)
+        manifest["scope"]["request_budget"] = 100
+        manifest["steps"][0].update({"id": "authz", "tool": "api_authz", "max_requests": 100})
+        manifest_path = self.root / "authz-mutation.json"
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        with self.assertRaises(SystemExit) as error:
+            campaign.main([
+                "run-cli", "--manifest", str(manifest_path), "--step", "authz",
+                "--confirm-target", self.origin, "--state-db", str(self.root / "reject.sqlite"),
+                "--campaign-id", "reject-mutation", "--", "--api-base", self.origin,
+                "--token", "fixture-token", "--allow-mutation-write",
+            ])
+        self.assertEqual(error.exception.code, 2)
 
 
 if __name__ == "__main__":

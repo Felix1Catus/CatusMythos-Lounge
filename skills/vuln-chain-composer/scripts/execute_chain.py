@@ -10,6 +10,7 @@ import argparse
 import hashlib
 import ipaddress
 import json
+import os
 import re
 import urllib.error
 import urllib.parse
@@ -132,6 +133,9 @@ def _parse_headers(values):
 
 
 def _http_get(url, headers, timeout):
+    if os.environ.get("CATUS_CAMPAIGN_GATE_DB"):
+        from campaign_request_gate import reserve_from_environment
+        reserve_from_environment(url, "GET")
     request = urllib.request.Request(url, headers=headers, method="GET")
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
     try:

@@ -9,6 +9,7 @@ import argparse
 import importlib.util
 import json
 import math
+import os
 import re
 import time
 import urllib.request
@@ -638,6 +639,7 @@ def main():
              "role's cookie.",
     )
     parser.add_argument("--api-base", required=True, help="Trusted API base URL for endpoint scoping")
+    parser.add_argument("--campaign-gate-required", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--knowledge-db", help="Opt-in shared SQLite target-knowledge file")
     parser.add_argument("--engagement", help="Required engagement namespace when knowledge is enabled")
     parser.add_argument("--delay", type=parse_delay, default=0,
@@ -648,6 +650,11 @@ def main():
         help="Enable POST/PUT/PATCH/DELETE authorization probes that can change target state",
     )
     args = parser.parse_args()
+
+    if args.campaign_gate_required and any(not os.environ.get(name) for name in (
+            "CATUS_CAMPAIGN_GATE_DB", "CATUS_CAMPAIGN_GATE_CAMPAIGN",
+            "CATUS_CAMPAIGN_GATE_STEP", "CATUS_CAMPAIGN_GATE_ORIGIN")):
+        parser.error("campaign request gate is required but its environment is incomplete")
 
     if args.knowledge_db and not args.engagement:
         parser.error("--knowledge-db requires --engagement")

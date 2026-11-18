@@ -4,6 +4,25 @@ Living status note for the ongoing CatusMythos-Lounge improvement work. Keep it
 current; it records what has and has **not** been deeply reviewed so later work
 doesn't mistake uneven coverage for uniform coverage.
 
+## 2026-11-18 addendum — direct-client, API authz, and external-tool gate coverage
+
+Expanded campaign gating to the DOM XSS auditor, cache auditor, four AI/LLM
+HTTP clients, chain executor, upload tester TCP connections, and API authz.
+`authz_tester.py` now requires campaign context when launched through the
+campaign runner; campaign authz runs also reject mutation-write mode. Its
+regressions cover missing context, real loopback request accounting, and a
+campaign CLI run. `run-external` supports one curl request, one scoped `dig`
+query, or one single-port Nmap TCP connect probe. Resolver and non-origin
+network endpoints must be declared under `scope.network_endpoints`; retries,
+redirects, URL globbing, query fan-out, shell commands, and unsupported network
+tools are rejected. This remains a campaign runner guard, not a universal OS
+network sandbox; isolated copied skill folders are not a supported campaign
+environment. Full validation: **957 pytest tests + 143 subtests**; focused
+campaign/authz suite: **115 tests + 29 subtests**. Ruff, compileall,
+`check_common_sync.py`, `check_skill_cli_docs.py` (**10 docs / 116 references /
+63 CLIs**), and `git diff --check` passed. Integration tests used loopback
+fixtures only; no external target was contacted. Push status follows below.
+
 ## 2026-11-18 addendum — shared campaign request gate
 
 `scripts/campaign_request_gate.py` now lets campaign-launched scanner CLIs

@@ -176,6 +176,9 @@ def request_get(url, headers=None, timeout=8.0):
     )
     started = time.monotonic()
     try:
+        if os.environ.get("CATUS_CAMPAIGN_GATE_DB"):
+            from campaign_request_gate import reserve_from_environment
+            reserve_from_environment(url, "GET")
         with opener.open(request, timeout=timeout) as response:
             body, truncated = _read_body(response)
             status = response.status

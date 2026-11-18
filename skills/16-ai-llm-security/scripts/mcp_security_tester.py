@@ -71,6 +71,7 @@ import base64
 import hashlib
 import json
 import logging
+import os
 import re
 import sys
 import time
@@ -453,6 +454,9 @@ def send_jsonrpc(url: str, method: str, params: dict, headers: dict, timeout: in
     body = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params or {}}
     if requests is None:
         return None, None, "optional dependency 'requests' is missing; run `python3 -m pip install -r requirements.txt`"
+    if os.environ.get("CATUS_CAMPAIGN_GATE_DB"):
+        from campaign_request_gate import reserve_from_environment
+        reserve_from_environment(url, "POST")
     try:
         r = requests.post(url, json=body, headers=headers, timeout=timeout, allow_redirects=False)
     except requests.exceptions.Timeout:

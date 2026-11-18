@@ -4,6 +4,21 @@ Structural inventory of every skill: intended use, CLIs and their purpose,
 dependencies, test coverage, scope controls, integrations, overlaps, and the
 clearest coverage gaps. This is a map for prioritizing deeper per-skill review;
 it is not itself a line-by-line doc-vs-code audit (that happens per skill).
+
+## 2026-11-18 addendum — expanded campaign integrations
+
+The shared request gate now includes direct HTTP clients in DOM XSS, cache,
+four AI/LLM testers, and the chain executor, plus upload tester TCP probes and
+API authz. The authz CLI has campaign-required context validation, and tests
+exercise it through loopback and the registered runner. The external adapter
+supports bounded curl, single-query dig, and one-port Nmap connect probes with
+explicit endpoint declarations. Other variable-volume network executables,
+shell-mediated commands, and isolated copied skill folders remain outside the
+supported campaign runner boundary. Validation: **957 pytest tests + 143
+subtests**; focused campaign/authz suite **115 + 29 subtests**; Ruff,
+compileall, common-sync, CLI-docs (**10/116/63**), and diff checks passed.
+Loopback fixtures only; no external target was contacted. Commit and push SHA
+are recorded in the latest dated handover addendum.
 Inventory structure originated at `f870a85`. Coverage status was refreshed
 2026-11-16 through the scoped closeout in `HANDOVER.md`; the final verification
 and commit are recorded in the latest dated addendum below. Earlier checkpoints
