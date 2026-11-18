@@ -76,6 +76,44 @@ def test_baseline_failure_skips_cases_and_cleanup_runs():
     assert result["validated"] is False
 
 
+def test_declared_impact_oracle_auto_confirms_only_after_baseline_and_readback():
+    scenario = sample()
+    scenario["cases"][0]["impact_assertions"] = [
+        {"pointer": "/coupon_count", "equals": 2, "safe_value": 1}]
+
+    def vulnerable_request(url, method, data, headers):
+        if url.endswith("/cart"):
+            return 200, {}, json.dumps({"coupon_count": 2})
+        if url.endswith("/checkout"):
+            return 200, {}, json.dumps({"coupon_count": 1})
+        return 200, {}, "{}"
+
+    result = business_scenario.execute_scenario(scenario, "http://localhost", vulnerable_request)
+    case = result["results"][1]
+    assert result["validated"] is True
+    assert result["confirmed_cases"] == ["repeat-coupon"]
+    assert case["validation_method"] == "declared_impact_assertions_after_valid_baseline"
+    assert case["proof"]["baseline_passed"] is True
+    assert case["proof"]["assertion_values_emitted"] is False
+
+
+def test_declared_impact_oracle_does_not_confirm_when_readback_is_safe():
+    scenario = sample()
+    scenario["cases"][0]["impact_assertions"] = [
+        {"pointer": "/coupon_count", "equals": 2, "safe_value": 1}]
+
+    def safe_request(url, method, data, headers):
+        if url.endswith("/cart"):
+            return 200, {}, json.dumps({"coupon_count": 1})
+        if url.endswith("/checkout"):
+            return 200, {}, json.dumps({"coupon_count": 1})
+        return 200, {}, "{}"
+
+    result = business_scenario.execute_scenario(scenario, "http://localhost", safe_request)
+    assert result["validated"] is False
+    assert result["confirmed_cases"] == []
+
+
 def test_throttle_stops_followup_requests():
     calls = []
 

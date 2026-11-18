@@ -47,12 +47,15 @@ class AssessmentBenchmarkTests(unittest.TestCase):
     def test_n_role_authorization_detects_fixture_bola_and_bfla(self):
         roles = authz.build_role_matrix([("alice", "alice"), ("member", "member"), ("admin", "admin")])
         bola = authz.test_bola_matrix(
-            self.base, [{"path": "/api/orders/101", "url": self.base + "/api/orders/101"}],
+            self.base, [{"path": "/api/orders", "url": self.base + "/api/orders"}],
             roles, delay=0)
         bfla = authz.test_bfla_matrix(self.base, roles, delay=0)
         self.assertTrue(any(item["type"] == "bola" and item["validated"] for item in bola))
-        self.assertTrue(any(item["type"] == "bfla_candidate" and item["role"] != "admin"
-                            and not item["validated"] for item in bfla))
+        self.assertTrue(any(item["type"] == "bfla" and item["role"] != "admin"
+                            and item["validated"] and item["control_passed"]
+                            and item["response_matches_privileged_control"] for item in bfla))
+        self.assertFalse(any(item["path"] == "/api/admin" for item in bfla),
+                         "properly enforced admin control route must not alert")
 
     def test_browser_observation_handoff_discovers_workflow_skip_candidate(self):
         report = {"pages": [{"url": self.base + "/checkout/start", "forms": [

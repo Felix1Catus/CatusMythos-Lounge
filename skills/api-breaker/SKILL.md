@@ -219,9 +219,13 @@ OpenAPI-style object path parameters are replaced with a bounded seed ID
 before the initial object read. A successful HTTP status alone is only a
 candidate: a BOLA GET is confirmed only when the response contains the exact
 object ID tested; successful mutations remain candidates until a controlled
-read-back verifies persisted impact. BFLA status and method-override responses
-are candidates until the returned data or action demonstrates privileged
-impact. Review candidate evidence before treating it as a confirmed finding.
+read-back verifies persisted impact. N-role BFLA sends the same read-only
+request as the highest-ranked role as a positive control. A lower role is
+automatically validated only when both requests succeed and return the same
+meaningful structured JSON after volatile fields are removed. A 2xx alone,
+HTML shell, empty body, denial envelope, or differing response remains a
+candidate. Write and method-override responses remain candidates until a
+controlled read-back verifies persisted impact.
 
 **N-role authorization matrix.** `--token`/`--token-b` test exactly two
 identities. Real RBAC bugs often only show up between a *specific* pair of

@@ -320,6 +320,27 @@ def test_bfla_matrix(base_url, roles, delay=0, allow_mutation_write=False, knowl
 
     max_rank = max(r["rank"] for r in roles)
     methods_to_test = HTTP_METHODS if allow_mutation_write else ["GET"]
+    admin_role = next(role for role in roles if role["rank"] == max_rank)
+
+    def semantic_signature(body):
+        try:
+            value = json.loads(body)
+        except (TypeError, ValueError):
+            return None
+        volatile = {"timestamp", "request_id", "trace_id", "csrf", "csrf_token", "nonce"}
+
+        def clean(item):
+            if isinstance(item, dict):
+                return {key: clean(value) for key, value in sorted(item.items())
+                        if key.lower() not in volatile}
+            if isinstance(item, list):
+                return [clean(value) for value in item]
+            return item
+
+        encoded = json.dumps(clean(value), sort_keys=True, separators=(",", ":"))
+        if re.search(r"(?i)unauthorized|forbidden|access denied|not authenticated|login required", encoded):
+            return None
+        return "json:" + encoded if isinstance(value, (dict, list)) and len(encoded) >= 20 else None
 
     for admin_path in ADMIN_PATTERNS:
         url = urllib.parse.urljoin(base_url, admin_path)
@@ -329,6 +350,11 @@ def test_bfla_matrix(base_url, roles, delay=0, allow_mutation_write=False, knowl
                 continue  # the top-ranked role reaching its own admin surface is expected
 
             for method in methods_to_test:
+                control_status, _control_headers, control_body = http_request(
+                    url, method=method, headers=dict(admin_role["headers"]))
+                if knowledge is not None:
+                    knowledge.record_auth_outcome(url, admin_role["name"], control_status,
+                                                  admin_role["headers"], "api-breaker/authz_tester")
                 data = None
                 req_headers = dict(role["headers"])
                 if method in ("POST", "PUT", "PATCH"):
@@ -346,13 +372,26 @@ def test_bfla_matrix(base_url, roles, delay=0, allow_mutation_write=False, knowl
                 if status not in (200, 201, 204):
                     continue
 
+                control_ok = control_status in (200, 201, 204)
+                control_signature = semantic_signature(control_body) if control_ok else None
+                low_signature = semantic_signature(body)
+                matched_privileged_response = bool(
+                    method == "GET" and control_signature and low_signature
+                    and control_signature == low_signature)
+
                 gap = max_rank - role["rank"]
                 severity = "critical" if role["rank"] == 0 else ("high" if gap > 1 else "medium")
                 has_data = len(body) > 20
-                log(f"BFLA candidate: role '{role['name']}' (rank {role['rank']}/{max_rank}) "
-                    f"reached {method} {admin_path} with status {status}; privileged impact unverified")
+                validated = matched_privileged_response
+                finding_type = "bfla" if validated else "bfla_candidate"
+                message = (f"BFLA: role '{role['name']}' received the same protected response as "
+                           f"the highest-ranked role at {method} {admin_path}"
+                           if validated else
+                           f"BFLA candidate: role '{role['name']}' (rank {role['rank']}/{max_rank}) "
+                           f"reached {method} {admin_path} with status {status}; impact not proven")
+                (vuln if validated else log)(message)
                 findings.append({
-                    "type": "bfla_candidate",
+                    "type": finding_type,
                     "severity": severity,
                     "method": method,
                     "path": admin_path,
@@ -363,7 +402,13 @@ def test_bfla_matrix(base_url, roles, delay=0, allow_mutation_write=False, knowl
                     "role_rank": role["rank"],
                     "max_rank": max_rank,
                     "response_preview": safe_response_preview(body),
-                    "validated": False,
+                    "validated": validated,
+                    "control_role": admin_role["name"],
+                    "control_status": control_status,
+                    "control_passed": control_ok,
+                    "response_matches_privileged_control": matched_privileged_response,
+                    "verification_method": "same_semantic_read_response_as_privileged_role"
+                    if validated else "candidate_without_semantic_control_match",
                 })
 
     return findings

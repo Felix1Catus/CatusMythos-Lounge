@@ -1788,6 +1788,22 @@ class AuthzMatrixTests(unittest.TestCase):
         self.assertIn("anonymous", roles_flagged)
         self.assertIn("viewer", roles_flagged)
 
+    def test_bfla_matrix_requires_matching_successful_privileged_control_to_confirm(self):
+        matrix = authz_tester.build_role_matrix([("viewer", "TOK1"), ("admin", "TOK2")])
+
+        def differential(_url, method="GET", headers=None, **_kwargs):
+            if (headers or {}).get("Authorization") == "Bearer TOK2":
+                return 200, {"Content-Type": "application/json"}, '{"reports":["sensitive"]}'
+            return 200, {"Content-Type": "application/json"}, '{"message":"public shell"}'
+
+        with patch.object(authz_tester, "http_request", side_effect=differential):
+            findings = authz_tester.test_bfla_matrix("https://api.example.test", matrix, delay=0)
+
+        self.assertTrue(findings)
+        self.assertTrue(all(item["type"] == "bfla_candidate" and not item["validated"]
+                            and item["control_passed"]
+                            and not item["response_matches_privileged_control"] for item in findings))
+
     def test_bfla_matrix_severity_scales_with_rank_gap(self):
         matrix = authz_tester.build_role_matrix(
             [("anonymous", ""), ("viewer", "TOK1"), ("editor", "TOK2"), ("admin", "TOK3")])

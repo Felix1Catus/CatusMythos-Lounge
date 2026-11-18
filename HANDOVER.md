@@ -27,13 +27,25 @@ authorization, and stateful-workflow signals; it never changes case results,
 confirms findings, or skips tests. The existing coverage evaluator remains the
 benchmark metric path and continues to require explicit gold labels/provenance.
 
+N-role BFLA now sends a successful highest-privilege read control and can
+auto-validate lower-role access only when meaningful structured JSON matches
+after volatile-field removal; the `/api/admin` denied-role fixture remains a
+negative control. Guided scenarios accept explicit `impact_assertions` that
+must differ from a safe baseline value and match a final GET/HEAD read-back;
+those cases return redacted proof metadata and can auto-validate without a
+per-finding human review.
+
 Offline regression: **128 tests + 34 subtests** across assessment intelligence,
-browser audit, workflow discovery, and target knowledge. Full suite: **968
+browser audit, workflow discovery, and target knowledge. The BFLA/stateful
+proof slice passed **123 tests + 29 subtests**. Full suite: **971
 tests + 143 subtests**. Ruff, compileall, common-sync, CLI-docs (**10 docs /
 117 references / 63 CLIs**) passed. No live target was contacted. A dedicated
 loopback-only benchmark app now contains labeled BOLA, BFLA, and workflow-skip
-behaviors. Its regressions validate BOLA and keep BFLA/workflow results as
-candidates. The suite does not measure internet-wide recall; broader apps and
+behaviors plus a protected-route negative control. BOLA and BFLA positive
+controls auto-validate from reproduced object identity / matching structured
+admin-role JSON; workflow step-skip remains a candidate absent state-transition
+proof. The suite does not measure
+internet-wide recall; broader apps and
 before/after baselines are needed to quantify accuracy gains.
 
 ## 2026-11-18 addendum — WSL network namespace isolation

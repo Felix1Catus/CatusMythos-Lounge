@@ -92,6 +92,10 @@ request, caps response bodies at 2 MiB, and counts each outbound request
 against the selected step's budget. A 429 or `Retry-After` stops follow-up
 work; cleanup is then reported as skipped. The result contains
 statuses/assertion booleans, never response bodies or auth values.
+Scenarios may declare per-case `impact_assertions` with an unsafe `equals`
+value and a `safe_value` already proven by the baseline. The case is
+auto-validated only when its final GET/HEAD read-back matches the unsafe value
+and differs from the baseline; un-oracled cases remain candidates.
 
 For durable, resumable execution, pass a local SQLite state file and a stable
 campaign ID. The first run binds that ID to the engagement, manifest hash, and
