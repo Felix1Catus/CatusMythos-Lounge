@@ -53,5 +53,21 @@ def test_unnamed_submit_and_non_get_forms_do_not_change_action_url():
 
     assert form_controls.build_form_targets({"forms": [unnamed, post]}, ("submit",)) == [
         {"url": "https://lab.test/search", "param": "q", "value": "abc", "method": "GET"},
-        {"url": "https://lab.test/save", "param": "q", "value": "abc", "method": "POST"},
+        {"url": "https://lab.test/save", "param": "q", "value": "abc", "method": "POST",
+         "form_data": {"Submit": "Save"}},
+    ]
+
+
+def test_post_targets_preserve_sibling_and_selected_submit_controls():
+    form = {"url": "https://lab.test/guestbook", "method": "POST", "inputs": [
+        {"name": "txtName", "type": "text", "value": ""},
+        {"name": "mtxMessage", "type": "textarea", "value": ""},
+        {"name": "btnSign", "type": "submit", "value": "Sign"},
+        {"name": "btnClear", "type": "submit", "value": "Clear"},
+    ]}
+    targets = form_controls.build_form_targets({"forms": [form]}, ("submit",))
+    message_targets = [target for target in targets if target["param"] == "mtxMessage"]
+    assert [target["form_data"] for target in message_targets] == [
+        {"txtName": "", "btnSign": "Sign"},
+        {"txtName": "", "btnClear": "Clear"},
     ]

@@ -1251,3 +1251,40 @@ the URL query intact while adding the selected control. POST bodies and their
 other controls are deliberately unchanged/out of scope. The isolated
 regression matrix is `tests/test_get_form_submit_controls.py`. Validation and
 the authorized DVWA reproducer results are recorded in the audit addendum.
+
+
+## 2026-11-18 addendum — form-context coverage and evidence thresholds
+
+The full DVWA follow-up found three more confirmed challenge modules
+(command injection via actual POST form, CSRF password change via GET, and
+open redirect) and confirmed stored XSS in an isolated same-origin browser
+check. The first unauthenticated crawl had not exposed the authenticated
+challenge menu. POST test targets now retain safe sibling controls, hidden
+tokens, and distinct selected submit actions; password/file values are not
+replayed as sibling form data. XSS POST probing checks the subsequent GET and
+labels persistence only as a candidate. SSTI arithmetic probes now use unique
+wrappers so reflected expressions cannot be mistaken for evaluation. SSRF
+body-size deltas and IDOR status/body differences are candidates unless
+fetch/ownership evidence exists. Focused regression results are recorded in
+AUDIT.md. Remaining authenticated DVWA modules require a dedicated coverage
+matrix and per-module validators; not yet claimed as tested.
+
+
+## 2026-11-18 addendum — command-injection proof tester
+
+Added `skills/webapp-exploit-hunter/scripts/command_injection_tester.py`.
+It selects command-shaped parameters from crawler results, preserves POST form
+context, and sends bounded `printf` marker probes only. It confirms execution
+only when a formatted output marker absent from the submitted payload appears
+in the response. Authenticated Pentest-Ground DVWA run confirmed the `/exec/`
+POST `ip` command injection with `validated: true`. Five offline regression
+cases cover payload construction, reflection rejection, form control
+preservation, marker validation, and confirmation. Current full suite and
+standard validation results are recorded in AUDIT.md. No API-breaker authz
+files were changed.
+
+
+Validation for the 2026-11-18 follow-up: full pytest **857 passed + 128
+subtests**; full Ruff, compileall (`skills`, `scripts`, `tests`, `tools`),
+common-sync, CLI docs (**10/114/61**), and diff checks passed. The command
+injection CLI also confirmed the DVWA `/exec/` POST path with a harmless marker.

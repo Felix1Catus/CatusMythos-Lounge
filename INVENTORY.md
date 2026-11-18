@@ -76,19 +76,21 @@ specific fixes, test themes, browser limitations, and the latest verification.
 ### webapp-exploit-hunter — `[PARTIAL TESTS]`
 - **Use:** active web vuln scanning + PoC from domains/URLs — SQLi, XSS, SSRF,
   IDOR, SSTI, auth bypass, upload bypass, race, WAF/rate-limit bypass, LFI/XXE,
-  DOM XSS (static + browser), plus browser runtime auditor.
-- **CLIs (16):** `crawler`, `auth_tester`, `sqli_tester`, `xss_tester`,
+  DOM XSS (static + browser), command injection, plus browser runtime auditor.
+- **CLIs (17):** `crawler`, `auth_tester`, `sqli_tester`, `xss_tester`,
   `dom_xss_auditor`, `ssrf_tester`, `ssti_tester`, `idor_tester`, `lfi_tester`,
   `upload_tester` (largest, 1201 ln), `race_tester`, `waf_bypass_tester`,
   `workflow_tester` (new 2026-11-16), `browser_security_auditor`,
-  `generate_poc`, `vuln_report`. `_common.py` (162); new support module
+  `generate_poc`, `vuln_report`, `command_injection_tester`. `_common.py` (162); new support module
   `_waf_escalation.py` (2026-11-17, not a CLI — see below).
 - **Deps:** stdlib + playwright (browser auditor only).
-- **Coverage:** `tests/test_webapp_legacy_testers.py` adds an 87-test offline
+- **Coverage:** `tests/test_webapp_legacy_testers.py` adds a 92-test offline
   matrix for LFI, upload, race, SSRF, SSTI, IDOR, XSS, and WAF-bypass logic;
   network calls are mocked. Browser auditor has pure-function and local
   Playwright/Chromium integration coverage; DOM reviewer, crawler, redirect
   helper, and selected auth/SQLi/PoC/report paths have targeted coverage.
+  `command_injection_tester` has a dedicated five-case offline matrix and a
+  harmless marker-confirmed DVWA integration result.
   **Still partial:** auth_tester/sqli_tester's remaining network workflows
   (boolean/time-based), generate_poc, vuln_report, browser state/redaction
   boundaries, and full multi-step upload paths are not exhaustively exercised.
@@ -137,11 +139,19 @@ specific fixes, test themes, browser limitations, and the latest verification.
   unverified observations. Explicit JSON-pointer captures can feed later
   same-run paths, headers, JSON bodies, and cleanup; values remain in memory
   and are excluded from reports. Scenario rules are not inferred or persisted.
-- **GET form submit-control preservation (2026-11-17).** SQLi and XSS targets
-  generated from crawler results now retain named GET submit-button values;
-  forms with multiple named submit controls create distinct action variants.
-  This ensures routes that only process a request after an explicit submit
-  control are actually tested. POST body context remains a follow-up.
+- **Crawler-derived form context for SQLi/XSS (2026-11-18).** GET submit
+  controls remain in generated query variants; POST targets now carry safe
+  sibling fields, hidden tokens, and one selected named submit button per
+  variant while omitting password/file sibling values. POST XSS checks the
+  resulting page on a follow-up GET and reports persistence as an unverified
+  candidate until browser execution is confirmed.
+- **DVWA coverage follow-up (2026-11-18).** Authenticated crawling is needed
+  to expose DVWA's full vulnerability menu. The target-knowledge campaign
+  confirmed 11/15 menu modules after targeted browser and manual follow-up.
+  SSTI reflected-payload false positives were fixed with unique evaluation
+  wrappers; SSRF response-size changes and IDOR response/status differences
+  now remain candidates without fetch or ownership proof. See the dated audit
+  addendum and external scan report for module results and remaining coverage.
 - **Baseline-exclusion false-positive fixes (2026-11-16): ssrf_tester.py,
   ssti_tester.py.** Real bugs, not just hardening — `ssrf_tester.py`'s
   `SSRF_SUCCESS_PATTERNS["localhost"]` included a bare `r"<html"` (matches

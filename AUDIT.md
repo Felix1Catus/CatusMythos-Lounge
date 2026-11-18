@@ -908,3 +908,80 @@ force, or other Pentest-Ground services were tested. Full repository
 validation: **846 pytest tests + 128 subtests passed**; Ruff, compileall,
 common-sync, CLI docs (10 docs / 113 references / 60 CLIs), and `git diff
 --check` passed. Focused form-control and legacy tester matrix: **90 passed**.
+
+
+## 2026-11-18 addendum — DVWA coverage and false-positive follow-up
+
+Target was limited to the scan-permitted DVWA app at
+`https://pentest-ground.com:4280/`. Authenticated crawling with the lab's
+published `admin/password` training credentials surfaced the challenge menu
+that the original unauthenticated crawl missed. Confirmed modules now include
+error-based SQLi, blind SQLi, file inclusion, reflected XSS, stored XSS,
+command injection (harmless echo marker through the actual POST form), CSRF
+(password changed to its existing value via GET; no token present), and an
+off-origin open redirect. Runtime confirmation for stored/reflected XSS used
+harmless JavaScript markers; the stored guestbook canary was left for the
+lab's documented periodic reset. No other Pentest-Ground port/app was touched.
+
+This follow-up exposed scanner gaps: POST probes omitted sibling controls and
+selected submit values; unauthenticated crawling hid authenticated challenge
+routes; SSTI detection accepted reflected expressions; SSRF treated response
+size changes as proof; and IDOR promoted changed responses without establishing
+resource ownership. POST form context is now preserved for SQLi/XSS target
+construction. SSTI uses unique evaluation wrappers. SSRF deltas and generic
+IDOR response differences are INFO candidates unless fetch/ownership evidence
+is present. Regression coverage lives in `tests/test_get_form_submit_controls.py`
+and `tests/test_webapp_legacy_testers.py`.
+
+The inventory baseline is 18 current upstream DVWA challenge menu entries;
+7 are confirmed so far (about 39%). This is an observed-module coverage rate,
+not a claim that every challenge or hidden bug has been exhaustively tested.
+Still requiring concrete module-specific checks: brute-force rate controls,
+insecure CAPTCHA, weak session IDs, DOM XSS, CSP bypass, JavaScript attacks,
+authorization bypass under a non-admin principal, cryptography, and API. The
+stored-XSS browser auditor's built-in generic text canary did not itself
+confirm execution; a dedicated safe execution marker did. Direct race testing
+was not meaningful without a single-use transaction fixture. Full repository
+validation is pending after the current code changes.
+
+
+## 2026-11-18 follow-up — command injection and module coverage
+
+Expanded the same authorized DVWA assessment after correcting POST form
+context. Added `command_injection_tester.py`; it used a harmless `printf`
+output transform and confirmed the `/vulnerabilities/exec/` POST `ip`
+parameter. Authenticated browser checks additionally confirmed DOM XSS at
+`/vulnerabilities/xss_d/`, stored XSS at `/vulnerabilities/xss_s/`, and
+previously confirmed reflected XSS; the stored-XSS browser auditor itself
+needs a payload that actually executes, because a plain text canary is not
+proof. Four sequential `dvwaSession` values confirmed the Weak Session IDs
+challenge. Confirmed module count is now 11/15 (about 73%), adding DOM XSS,
+stored XSS, command injection, CSRF, open redirect, and weak session IDs to
+the original SQLi, blind SQLi, LFI, and reflected XSS results.
+
+Implemented evidence and form coverage changes: POST target construction now
+keeps sibling controls, hidden tokens and the selected named submit action;
+password/file values are omitted. XSS checks follow POST with same-origin GET
+and distinguish stored candidates. SSTI uses unique arithmetic wrappers,
+preventing reflection from satisfying evaluation evidence. SSRF response-size
+deltas and IDOR status/body differences are unverified candidates absent
+independent fetch/ownership evidence. Tests added to
+`tests/test_get_form_submit_controls.py`,
+`tests/test_webapp_legacy_testers.py`, and
+`tests/test_command_injection_tester.py`.
+
+The remaining active modules in this deployment are upload execution, CSP
+bypass, and JavaScript attacks. The CAPTCHA route is present but inoperative
+because the reCAPTCHA key is missing. API, Cryptography, and Authorization
+Bypass were not exposed in this instance menu. A direct race challenge is not
+present in the deployed menu. Additional module-specific validation remains
+follow-up work, so 11/15 is not an assertion of exhaustive bug discovery.
+
+
+Validation for the 2026-11-18 follow-up: full pytest **857 passed + 128
+subtests**; full-repository Ruff clean; compileall clean for `skills`, `scripts`,
+`tests`, and `tools`; shared-helper sync passed; CLI docs checked **10 skill
+docs / 114 command references / 61 CLIs**; `git diff --check` passed. The
+command-injection checker has five dedicated offline regression tests, and
+SQLi/XSS POST form context has regression coverage. No API-breaker authz files
+were changed.

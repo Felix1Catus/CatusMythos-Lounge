@@ -220,8 +220,9 @@ class TestIdorHorizontal(unittest.TestCase):
             findings = idor.test_horizontal_idor(
                 "https://t.test/api?user_id=100", "user_id", "100", "numeric", delay=0)
         self.assertTrue(findings)
-        self.assertEqual(findings[0]["type"], "idor")
-        self.assertEqual(findings[0]["severity"], "HIGH")
+        self.assertEqual(findings[0]["type"], "idor_candidate")
+        self.assertEqual(findings[0]["severity"], "INFO")
+        self.assertFalse(findings[0]["validated"])
 
     def test_error_page_body_not_flagged(self):
         def fake(url, method="GET", data=None, headers=None, timeout=10):
@@ -296,10 +297,33 @@ class TestSsrf(unittest.TestCase):
         self.assertTrue(findings[0]["confirmed_against_baseline"])
 
     def test_detect_ssrf_indicators_returns_every_hit(self):
-        hits = ssrf.detect_ssrf_indicators("AccessKeyId and also <html> present")
+        hits = ssrf.detect_ssrf_indicators("AccessKeyId and <title>Welcome</title> present")
         categories = {h["category"] for h in hits}
         self.assertIn("cloud_metadata", categories)
         self.assertIn("localhost", categories)
+
+    def test_echoed_metadata_path_is_not_ssrf_proof(self):
+        import urllib.parse
+
+        def fake(url, method="GET", data=None, headers=None, timeout=10):
+            payload = urllib.parse.parse_qs(urllib.parse.urlparse(url).query).get("url", [""])[0]
+            return 200, {}, f"<html><body>{payload}</body></html>"
+
+        with patched(ssrf, "http_request", fake):
+            findings = ssrf.test_ssrf("https://t.test/fetch?url=x", "url", delay=0)
+        self.assertEqual(findings, [])
+
+    def test_body_size_difference_is_only_an_unverified_candidate(self):
+        def fake(url, method="GET", data=None, headers=None, timeout=10):
+            if "127.0.0.1" in url:
+                return 200, {}, "response changed " + ("x" * 300)
+            return 200, {}, "ordinary baseline"
+
+        with patched(ssrf, "http_request", fake):
+            findings = ssrf.test_ssrf("https://t.test/fetch?url=x", "url", delay=0)
+        self.assertTrue(findings)
+        self.assertEqual(findings[0]["type"], "ssrf_candidate")
+        self.assertFalse(findings[0]["validated"])
 
 
 # ---------------------------------------------------------------------------
@@ -318,16 +342,30 @@ class TestSsti(unittest.TestCase):
             self.assertFalse(ssti.test_reflection("https://t.test/?q=1", "q"))
 
     def test_engine_fingerprint_jinja(self):
+        import urllib.parse
+
         def fake(url, method="GET", data=None, headers=None, timeout=10):
-            if "7%2A7" in url or "7*7" in url:  # {{7*7}} urlencoded
-                return 200, {}, "result: 49"
+            value = urllib.parse.parse_qs(urllib.parse.urlparse(url).query).get("q", [""])[0]
+            if "CATUSdeadbeefcafeA" in value:
+                return 200, {}, "result: CATUSdeadbeefcafeA49ZdeadbeefcafeEND"
             return 200, {}, "nope"
 
-        with patched(ssti, "http_request", fake):
+        with patched(ssti, "http_request", fake), patched(ssti.secrets, "token_hex", lambda _n: "deadbeefcafe"):
             findings = ssti.fingerprint_engine("https://t.test/?q=1", "q", delay=0)
         self.assertTrue(findings)
         self.assertEqual(findings[0]["engine_detected"], "Jinja2")
         self.assertEqual(findings[0]["severity"], "CRITICAL")
+
+    def test_reflected_template_expression_is_not_execution(self):
+        import urllib.parse
+
+        def fake(url, method="GET", data=None, headers=None, timeout=10):
+            value = urllib.parse.parse_qs(urllib.parse.urlparse(url).query).get("q", [""])[0]
+            return 200, {}, f"<main>{value}</main>"
+
+        with patched(ssti, "http_request", fake), patched(ssti.secrets, "token_hex", lambda _n: "deadbeefcafe"):
+            findings = ssti.fingerprint_engine("https://t.test/?q=1", "q", delay=0)
+        self.assertEqual(findings, [])
 
     def test_engine_error_message_also_confirms(self):
         # Baseline (the plain, unmodified GET -- queried exactly once, with
@@ -612,6 +650,25 @@ class TestXssPayloads(unittest.TestCase):
         self.assertFalse(f["validated"])
         self.assertEqual(f["confidence"], "low")
 
+    def test_post_payload_preserves_form_context_and_reports_candidate(self):
+        calls = []
+
+        def fake(url, method="GET", data=None, headers=None, timeout=10):
+            calls.append(data)
+            return 200, {}, "<p><img src=x onerror=alert('0r1z0n')></p>"
+
+        with patched(xss, "http_request", fake):
+            findings = xss.test_xss_payloads(
+                "https://t.test/guestbook", "message", ["html_body"], "POST",
+                form_data={"name": "Catus", "Sign": "Sign"},
+            )
+        self.assertTrue(findings)
+        self.assertEqual(findings[0]["type"], "stored_xss_candidate")
+        self.assertIn("name=Catus", calls[0])
+        self.assertIn("Sign=Sign", calls[0])
+        self.assertIn("name=Catus", findings[0]["poc_curl"])
+        self.assertIn("Sign=Sign", findings[0]["poc_curl"])
+
     def test_encoded_reflection_not_flagged(self):
         def fake(url, method="GET", data=None, headers=None, timeout=10):
             return 200, {}, "&lt;script&gt;alert(&#39;0r1z0n&#39;)&lt;/script&gt;"
@@ -719,6 +776,14 @@ class TestSqliDetectErrors(unittest.TestCase):
 
     def test_clean_body(self):
         self.assertEqual(sqli.detect_sql_errors("welcome to the site"), [])
+
+    def test_post_form_payload_keeps_siblings_and_submit_action(self):
+        encoded = sqli._post_form_data(
+            "ip", "127.0.0.1'", {"Submit": "Submit", "token": "fixture-token"})
+        import urllib.parse
+        self.assertEqual(dict(urllib.parse.parse_qsl(encoded)), {
+            "Submit": "Submit", "token": "fixture-token", "ip": "127.0.0.1'",
+        })
 
 
 class TestSqliLooksBlocked(unittest.TestCase):
