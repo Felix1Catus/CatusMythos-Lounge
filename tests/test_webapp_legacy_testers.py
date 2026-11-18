@@ -519,24 +519,64 @@ class TestUploadMultipart(unittest.TestCase):
         self.assertIn(b'<?php echo 1; ?>', body)
         self.assertTrue(body.startswith(f"--{boundary}".encode()))
 
+    def test_body_preserves_hidden_and_submit_controls(self):
+        body, _ = upload.build_multipart_body(
+            "shell.php", "payload", "image/jpeg", "uploaded",
+            {"MAX_FILE_SIZE": "100000", "Upload": "Upload"},
+        )
+        self.assertIn(b'name="MAX_FILE_SIZE"', body)
+        self.assertIn(b'name="Upload"', body)
+        self.assertIn(b'name="uploaded"; filename="shell.php"', body)
+
+    def test_extract_dvwa_form_file_field_and_submit_context(self):
+        field, values = upload.extract_upload_form_fields(
+            '<input name="MAX_FILE_SIZE" value="100000" type="hidden">'
+            '<input name="uploaded" type="file">'
+            '<input type="submit" value="Upload" name="Upload">'
+            '<input type="password" name="password" value="do-not-copy">'
+        )
+        self.assertEqual(field, "uploaded")
+        self.assertEqual(values, {"MAX_FILE_SIZE": "100000", "Upload": "Upload"})
+
+    def test_extract_upload_form_context_from_page(self):
+        context = upload.extract_upload_form_context(
+            '<html><form action="#" method="POST">'
+            '<input name="uploaded" type="file">'
+            '<input name="Upload" value="Upload" type="submit">'
+            '</form></html>'
+        )
+        self.assertEqual(context, ("uploaded", {"Upload": "Upload"}))
+
     def test_extract_upload_path_json_and_location(self):
         paths = upload.extract_upload_path('{"url": "/uploads/x.php"}', {})
         self.assertEqual(paths, ["/uploads/x.php"])
         paths = upload.extract_upload_path("ok", {"Location": "/files/y.php"})
         self.assertEqual(paths, ["/files/y.php"])
 
+    def test_extract_dvwa_relative_upload_success_path(self):
+        paths = upload.extract_upload_path(
+            "<pre>../../hackable/uploads/probe.php succesfully uploaded!</pre>", {},
+        )
+        self.assertEqual(paths, ["../../hackable/uploads/probe.php"])
+
+    def test_extract_dvwa_impossible_level_upload_anchor(self):
+        paths = upload.extract_upload_path(
+            "<pre><a href='../../hackable/uploads/random.png'>random.png</a> uploaded</pre>", {},
+        )
+        self.assertEqual(paths, ["../../hackable/uploads/random.png"])
+
 
 class TestUploadCheckExecution(unittest.TestCase):
     _BASE = "https://t.test/upload"
 
     def test_executed(self):
-        with patched(upload, "http_request", resp4(200, "pre ORIZON_UPLOAD_TEST post")):
+        with patched(upload, "http_request", resp4(200, f"pre {upload.MARKER} post")):
             executed, url = upload.check_execution(self._BASE, ["/uploads/x.php"], {})
         self.assertTrue(executed)
         self.assertEqual(url, "https://t.test/uploads/x.php")
 
     def test_accessible_but_not_executed(self):
-        with patched(upload, "http_request", resp4(200, 'raw "<?php ORIZON_UPLOAD_TEST ?>"')):
+        with patched(upload, "http_request", resp4(200, f'raw "<?php {upload.MARKER} ?>"')):
             executed, _url = upload.check_execution(self._BASE, ["/uploads/x.php"], {})
         self.assertIs(executed, False)
 
@@ -545,6 +585,57 @@ class TestUploadCheckExecution(unittest.TestCase):
             executed, url = upload.check_execution(self._BASE, ["/uploads/x.php"], {})
         self.assertIsNone(executed)
         self.assertIsNone(url)
+
+    def test_dvwa_relative_upload_path_resolves_to_same_origin(self):
+        seen = []
+
+        def fake(url, method="GET", data=None, headers=None, timeout=10):
+            seen.append(url)
+            return 200, {}, f"echo {upload.MARKER}", 0.01
+
+        with patched(upload, "http_request", fake):
+            executed, url = upload.check_execution(
+                "https://t.test/vulnerabilities/upload/",
+                ["../../hackable/uploads/probe.php"],
+                {},
+            )
+        self.assertTrue(executed)
+        self.assertEqual(url, "https://t.test/hackable/uploads/probe.php")
+        self.assertEqual(seen, [url])
+
+    def test_external_upload_result_path_is_not_requested(self):
+        def fail_if_requested(*_args, **_kwargs):
+            raise AssertionError("external result URL must not be requested")
+
+        with patched(upload, "http_request", fail_if_requested):
+            executed, url = upload.check_execution(
+                self._BASE, ["https://outside.test/uploads/x.php"], {},
+            )
+        self.assertIsNone(executed)
+        self.assertIsNone(url)
+
+    def test_dvwa_upload_success_path_reaches_execution_check(self):
+        requested = []
+
+        def fake(url, method="GET", data=None, headers=None, timeout=10):
+            requested.append((url, method, data))
+            if method == "POST":
+                return (200, {}, "<pre>../../hackable/uploads/test.php succesfully uploaded!</pre>", 0.01)
+            return (200, {}, upload.MARKER, 0.01)
+
+        with patched(upload, "http_request", fake), patched(upload.time, "sleep", lambda _delay: None):
+            findings = upload.test_double_extension(
+                "https://t.test/vulnerabilities/upload/", {}, "uploaded", 0,
+                {"MAX_FILE_SIZE": "100000", "Upload": "Upload"},
+            )
+        self.assertEqual(findings[0]["type"], "upload_rce")
+        self.assertIn(
+            ("https://t.test/hackable/uploads/test.php", "GET", None),
+            requested,
+        )
+        post_body = next(data for _url, method, data in requested if method == "POST")
+        self.assertIn(b'name="Upload"', post_body)
+        self.assertIn(b'name="uploaded"; filename="test.php.jpg"', post_body)
 
 
 class TestUploadFastcgi(unittest.TestCase):

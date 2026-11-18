@@ -985,3 +985,67 @@ docs / 114 command references / 61 CLIs**; `git diff --check` passed. The
 command-injection checker has five dedicated offline regression tests, and
 SQLi/XSS POST form context has regression coverage. No API-breaker authz files
 were changed.
+
+
+## 2026-11-18 addendum — DVWA upload request-shape correction
+
+Reviewing the official DVWA source and the previous upload JSON uncovered a
+false-negative: the uploader sent a file part without the form's named
+`Upload=Upload` action, so DVWA returned its page without invoking the upload
+handler. The old 37 “accepted” alerts were HTTP 200s, not proof of upload, and
+the claimed zero-RCE result was invalid. The previous pass also failed to parse
+DVWA's relative success path, preventing the execution check from reaching the
+uploaded file.
+
+`upload_tester.py` now preserves safe hidden and submit controls, discovers the
+file input name, parses DVWA's prose/anchor upload paths, resolves paths on the
+same origin only, and uses a per-run PHP marker that deletes only its own file
+after execution. The authorized one-file reproduction submitted the actual
+`uploaded` field with `MAX_FILE_SIZE` and `Upload`, received its relative path,
+executed a unique harmless marker at that path, and then confirmed HTTP 404 on
+the same path after self-cleanup. This confirms DVWA's upload-to-PHP execution
+challenge. Confirmed deployment coverage is now 12/15 menu modules (80%).
+CAPTCHA remains disabled for missing reCAPTCHA keys; CSP bypass and the
+JavaScript challenge still need explicit module-level execution checks.
+
+Focused validation after the upload change: `tests/test_webapp_legacy_testers.py`
+passed **99 tests**. The final full suite passes **878 tests + 128 subtests**;
+full Ruff, compileall, common-sync, CLI docs (**10 / 116 / 63**), and
+`git diff --check` pass.
+
+Primary learning sources reviewed: [official DVWA README and setup notes](https://github.com/digininja/DVWA/blob/master/README.md), [DVWA upload handler](https://raw.githubusercontent.com/digininja/DVWA/master/vulnerabilities/upload/source/low.php), [DVWA upload form](https://raw.githubusercontent.com/digininja/DVWA/master/vulnerabilities/upload/index.php), [DVWA's level-by-level walkthrough](https://github.com/Akinloye3264/dvwa_walkthrough), and its [local-lab reproduction checklist](https://github.com/Akinloye3264/dvwa_walkthrough#reproducing-an-exercise).
+
+
+## 2026-11-18 addendum — JavaScript and CSP challenge reproduction
+
+The next two DVWA modules are now reproduced with safe proofs. The JavaScript
+challenge verifier computes the documented `low`, `medium`, or `high` token
+from the public client-side transform and sends one GET/POST pair. The live
+`low` challenge returned its success message. This is a purpose-built training
+exercise result, reported as INFO rather than a general authentication flaw.
+
+The CSP form verifier reads an explicit host from the response's `script-src`
+(or `default-src`) directive, submits it to the `include` form, and uses an
+isolated Chromium route to mock the allowlisted host response. All other
+off-origin browser traffic is aborted. On this instance the harmless marker
+executed from the mocked `pastebin.com` source and **zero external requests
+were sent**. This confirms the DVWA lesson without accessing the third-party
+host.
+
+`javascript_challenge_tester.py` and `csp_form_tester.py` provide reusable
+single-check CLIs; focused offline coverage is in
+`tests/test_dvwa_javascript_challenge.py` and `tests/test_csp_form_tester.py`.
+Together with the corrected upload proof, confirmed challenge coverage is now
+14/15 menu entries (about 93%). The only untestable entry is CAPTCHA, whose
+page reports missing reCAPTCHA keys. API, Cryptography, and Authorization
+Bypass are absent from the deployed menu and not in the denominator.
+
+Sources reviewed: official [DVWA README](https://github.com/digininja/DVWA/blob/master/README.md),
+[JavaScript challenge handler](https://raw.githubusercontent.com/digininja/DVWA/master/vulnerabilities/javascript/index.php),
+[low-level JavaScript transform](https://raw.githubusercontent.com/digininja/DVWA/master/vulnerabilities/javascript/source/low.php),
+[CSP challenge source](https://raw.githubusercontent.com/digininja/DVWA/master/vulnerabilities/csp/source/low.php),
+and the [public level-by-level walkthrough](https://github.com/Akinloye3264/dvwa_walkthrough).
+
+Final validation for this follow-up passes **878 pytest tests + 128 subtests**;
+Ruff, compileall, common-sync, CLI docs (**10 / 116 / 63**), and
+`git diff --check` pass.

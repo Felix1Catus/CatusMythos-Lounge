@@ -77,20 +77,24 @@ specific fixes, test themes, browser limitations, and the latest verification.
 - **Use:** active web vuln scanning + PoC from domains/URLs — SQLi, XSS, SSRF,
   IDOR, SSTI, auth bypass, upload bypass, race, WAF/rate-limit bypass, LFI/XXE,
   DOM XSS (static + browser), command injection, plus browser runtime auditor.
-- **CLIs (17):** `crawler`, `auth_tester`, `sqli_tester`, `xss_tester`,
+- **CLIs (19):** `crawler`, `auth_tester`, `sqli_tester`, `xss_tester`,
   `dom_xss_auditor`, `ssrf_tester`, `ssti_tester`, `idor_tester`, `lfi_tester`,
   `upload_tester` (largest, 1201 ln), `race_tester`, `waf_bypass_tester`,
   `workflow_tester` (new 2026-11-16), `browser_security_auditor`,
-  `generate_poc`, `vuln_report`, `command_injection_tester`. `_common.py` (162); new support module
+  `generate_poc`, `vuln_report`, `command_injection_tester`,
+  `javascript_challenge_tester`, `csp_form_tester`. `_common.py` (162); new support module
   `_waf_escalation.py` (2026-11-17, not a CLI — see below).
-- **Deps:** stdlib + playwright (browser auditor only).
-- **Coverage:** `tests/test_webapp_legacy_testers.py` adds a 92-test offline
+- **Deps:** stdlib + playwright (browser auditor and CSP form tester).
+- **Coverage:** `tests/test_webapp_legacy_testers.py` adds a 99-test offline
   matrix for LFI, upload, race, SSRF, SSTI, IDOR, XSS, and WAF-bypass logic;
   network calls are mocked. Browser auditor has pure-function and local
   Playwright/Chromium integration coverage; DOM reviewer, crawler, redirect
   helper, and selected auth/SQLi/PoC/report paths have targeted coverage.
   `command_injection_tester` has a dedicated five-case offline matrix and a
-  harmless marker-confirmed DVWA integration result.
+  harmless marker-confirmed DVWA integration result. The upload regression now
+  covers named submit/hidden controls and same-origin path resolution; live
+  DVWA proof confirmed self-cleaning PHP execution. The JavaScript and CSP
+  challenge verifiers each have focused tests and live lab confirmations.
   **Still partial:** auth_tester/sqli_tester's remaining network workflows
   (boolean/time-based), generate_poc, vuln_report, browser state/redaction
   boundaries, and full multi-step upload paths are not exhaustively exercised.

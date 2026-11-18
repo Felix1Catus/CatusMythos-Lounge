@@ -1288,3 +1288,36 @@ Validation for the 2026-11-18 follow-up: full pytest **857 passed + 128
 subtests**; full Ruff, compileall (`skills`, `scripts`, `tests`, `tools`),
 common-sync, CLI docs (**10/114/61**), and diff checks passed. The command
 injection CLI also confirmed the DVWA `/exec/` POST path with a harmless marker.
+
+
+## 2026-11-18 addendum — upload handler invocation and proof
+
+The prior DVWA upload result was not a valid negative: its multipart request
+omitted the `Upload=Upload` submit control and used `file` instead of the
+form's `uploaded` field. It received HTTP 200 without calling the handler. The
+tester now keeps safe hidden/submit values, parses the relative upload path in
+DVWA's success response, and follows only a same-origin path. Its unique PHP
+marker unlinks only itself after execution. One live authorized request
+confirmed execution and subsequent 404 cleanup. The generic lesson is to
+replay the actual successful form controls and validate the effect at the
+resource the response identifies; a status code is not a test result.
+Focused upload regressions passed; final full validation passes **878 tests +
+128 subtests**, with Ruff, compileall, common-sync, CLI docs (**10 / 116 / 63**),
+and diff checks clean. See AUDIT.md for source links and reproduction detail.
+
+
+## 2026-11-18 addendum — JavaScript and CSP challenge verifiers
+
+Added `javascript_challenge_tester.py` for the DVWA client-computed phrase
+token exercise and `csp_form_tester.py` for script-URL forms guarded by CSP.
+The former computes only the documented level-specific token and sends one
+request pair; its INFO finding is explicitly scoped to a training challenge.
+The latter uses Chromium to submit a mock script URL from the target's
+allowlist, locally fulfills the script response, and blocks all other external
+requests. The live target confirmed the JavaScript challenge and CSP form
+script execution with no third-party request. Dedicated regression tests are
+`tests/test_dvwa_javascript_challenge.py` and `tests/test_csp_form_tester.py`.
+Coverage is 14/15 deployed menu modules; CAPTCHA is the only unusable entry
+because the lab is missing reCAPTCHA keys. Full validation passes **878 tests
++ 128 subtests**; Ruff, compileall, common-sync, CLI docs (**10 / 116 / 63**),
+and diff checks are clean.
