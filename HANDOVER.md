@@ -1239,3 +1239,15 @@ misuse cases from running when baseline setup is incomplete. HTTP error bodies
 cannot supply captures or satisfy assertions. Regression coverage is in
 `tests/test_business_scenario.py`; full validation is recorded in the audit
 addendum.
+
+## 2026-11-17 addendum — GET form submit controls in SQLi/XSS targets
+
+Crawler-derived SQLi/XSS test targets now preserve named submit-button values
+for GET forms, generating separate variants when a form has multiple named
+submit buttons. Pentest-Ground DVWA's SQLi handlers require `Submit=Submit`;
+the former target builder discarded that control and could return the form
+page instead of invoking the handler. New `scripts/_form_controls.py` keeps
+the URL query intact while adding the selected control. POST bodies and their
+other controls are deliberately unchanged/out of scope. The isolated
+regression matrix is `tests/test_get_form_submit_controls.py`. Validation and
+the authorized DVWA reproducer results are recorded in the audit addendum.

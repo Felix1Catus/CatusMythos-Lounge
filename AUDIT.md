@@ -889,3 +889,22 @@ Full repository validation: **843 pytest tests + 128 subtests passed**;
 Ruff, compileall, helper-sync, CLI docs (10 docs / 113 references / 60 CLIs),
 and `git diff --check` passed. Focused scenario/workflow matrix: **50 passed**.
 No live targets were contacted.
+
+## 2026-11-17 addendum — GET form submit-control preservation
+
+An authorized scan of Pentest-Ground's expressly scan-permitted DVWA at
+`https://pentest-ground.com:4280` exposed a false-negative condition: the
+crawler recorded named GET submit controls, but the SQLi/XSS target builders
+dropped them. The lab's SQLi routes require `Submit=Submit`. Preserving it in
+the query results in two error-based SQLi findings for the `id` parameter
+(one on each SQLi page); direct baseline-vs-single-quote controls show no SQL
+error signature for `id=1` and a new generic SQL-syntax signature for `id=1'`.
+The lab's reflected-XSS `name` parameter also produced a candidate, and an
+isolated browser query probe confirmed controlled JavaScript execution. These
+scan results are written outside the repository. The implementation adds
+pure form target building for named GET submit controls in
+SQLi/XSS and a focused regression matrix. No destructive paths, auth brute
+force, or other Pentest-Ground services were tested. Full repository
+validation: **846 pytest tests + 128 subtests passed**; Ruff, compileall,
+common-sync, CLI docs (10 docs / 113 references / 60 CLIs), and `git diff
+--check` passed. Focused form-control and legacy tester matrix: **90 passed**.

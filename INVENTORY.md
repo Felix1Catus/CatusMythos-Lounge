@@ -137,6 +137,11 @@ specific fixes, test themes, browser limitations, and the latest verification.
   unverified observations. Explicit JSON-pointer captures can feed later
   same-run paths, headers, JSON bodies, and cleanup; values remain in memory
   and are excluded from reports. Scenario rules are not inferred or persisted.
+- **GET form submit-control preservation (2026-11-17).** SQLi and XSS targets
+  generated from crawler results now retain named GET submit-button values;
+  forms with multiple named submit controls create distinct action variants.
+  This ensures routes that only process a request after an explicit submit
+  control are actually tested. POST body context remains a follow-up.
 - **Baseline-exclusion false-positive fixes (2026-11-16): ssrf_tester.py,
   ssti_tester.py.** Real bugs, not just hardening — `ssrf_tester.py`'s
   `SSRF_SUCCESS_PATTERNS["localhost"]` included a bare `r"<html"` (matches

@@ -168,3 +168,19 @@ Append only, oldest first.
 **Changed:** `skills/webapp-exploit-hunter/scripts/business_scenario.py`, `skills/webapp-exploit-hunter/SKILL.md`, `tests/test_business_scenario.py`, `HANDOVER.md`, `INVENTORY.md`, `AUDIT.md`, and this mailbox.
 **Validation:** 843 pytest tests + 128 subtests passed; Ruff, compileall, helper-sync, CLI docs (10/113/60), and diff checks passed. Focused scenario/workflow matrix: 50 passed. No external targets contacted.
 **Note to the other agent:** Captures are explicit JSON-pointer strings/integers from successful 2xx JSON responses, limited to 2,048 chars and no control chars. They are lane-scoped, memory-only, substituted into path/header/body/cleanup, and omitted from output. Missing or unsafe values block dependent actions. No API-breaker authz files touched.
+
+## 2026-11-17T23:50:00Z
+
+**From:** Codex
+**Task:** Starting webapp form submit-control preservation fix discovered during Pentest-Ground DVWA baseline.
+**Changed:** No implementation files yet. Isolated worktree `E:\Mythos\codex-preserve-get-submit-controls`, branch `codex/preserve-get-submit-controls`, based on current `origin/main`.
+**Planned:** Preserve named submit-button values when building GET-form targets for SQLi/XSS from crawl data; add focused helper and integration-builder regression tests; validate, update docs, commit and push.
+**Note to the other agent:** This is only GET form submit control context; no authz files or unrelated form/write handling are in scope.
+
+## 2026-11-18T01:10:00Z
+
+**From:** Codex
+**Task:** GET form submit-control preservation fix complete.
+**Changed:** `skills/webapp-exploit-hunter/scripts/_form_controls.py` (new), `sqli_tester.py`, `xss_tester.py`, `tests/test_get_form_submit_controls.py` (new), `skills/webapp-exploit-hunter/SKILL.md`, `HANDOVER.md`, `INVENTORY.md`, `AUDIT.md`, and this mailbox.
+**Validation:** 846 pytest tests + 128 subtests passed; Ruff, compileall, common-sync, CLI docs (10/113/60), and diff checks passed. Focused regression matrix: 90 passed. The exact crawl-to-SQLi path against the permitted DVWA lab reproduced two findings; no destructive or auth brute-force routes were tested.
+**Note to the other agent:** The `Submit=Submit` GET controls that gate DVWA's SQLi handlers are now preserved from crawl input. Multiple named submit buttons create separate variants. POST form-body context remains deferred. No API-breaker authz files touched.
