@@ -17,6 +17,7 @@ KINDS = ('technology', 'waf', 'auth', 'rate_limit', 'payload_failure', 'cloud_pr
 CONFIDENCES = ('observed', 'confirmed', 'hypothesis')
 MAX_BUNDLE_BYTES = 10 * 1024 * 1024
 MAX_BUNDLE_ROWS = 5000
+MAX_HISTORY_ROWS_PER_ENGAGEMENT = 20000
 MAX_TTL = {'technology': 86400, 'waf': 3600, 'auth': 900, 'rate_limit': 900,
            'payload_failure': 900, 'cloud_provider': 3600, 'api_inventory': 900}
 _SAFE_RATE_HEADERS = ('ratelimit-limit', 'ratelimit-remaining', 'ratelimit-reset',
@@ -50,8 +51,9 @@ def request_context(url, method, headers, parameter, original_value, baseline):
 class KnowledgeStore:
     """Each operation uses its own connection; SQLite transactions serialize writers.
 
-    Last observation wins for an identical key/context. Expired observations never
-    justify reuse; query(include_expired=True) is inspection only.
+    The current view keeps the latest observation for an identical key/context;
+    every write, migration snapshot, and deletion is retained in a local history
+    table for audit. Expired observations never justify reuse.
     """
     request_context = staticmethod(request_context)
     digest = staticmethod(digest)
@@ -67,7 +69,7 @@ class KnowledgeStore:
         # Require an existing parent so a typo cannot silently select another engagement directory.
         with self.connection() as db:
             version = db.execute('PRAGMA user_version').fetchone()[0]
-            if version not in (0, 1):
+            if version not in (0, 1, 2):
                 raise ValueError('unsupported target-knowledge schema version')
             db.execute('''CREATE TABLE IF NOT EXISTS observations (
                 engagement TEXT NOT NULL, origin TEXT NOT NULL, resource TEXT NOT NULL,
@@ -75,7 +77,41 @@ class KnowledgeStore:
                 value TEXT NOT NULL, source TEXT NOT NULL, confidence TEXT NOT NULL,
                 observed_at REAL NOT NULL, expires_at REAL NOT NULL,
                 PRIMARY KEY (engagement, origin, resource, kind, fact_key, context))''')
-            db.execute('PRAGMA user_version = 1')
+            db.execute('''CREATE TABLE IF NOT EXISTS observation_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                engagement TEXT NOT NULL, origin TEXT NOT NULL, resource TEXT NOT NULL,
+                kind TEXT NOT NULL, fact_key TEXT NOT NULL, context TEXT NOT NULL,
+                value TEXT NOT NULL, source TEXT NOT NULL, confidence TEXT NOT NULL,
+                observed_at REAL NOT NULL, expires_at REAL NOT NULL,
+                event TEXT NOT NULL, recorded_at REAL NOT NULL)''')
+            db.execute('''CREATE INDEX IF NOT EXISTS observation_history_lookup
+                ON observation_history (engagement, origin, resource, kind, fact_key, context, id)''')
+            db.execute('''CREATE INDEX IF NOT EXISTS observation_history_prune
+                ON observation_history (engagement, id DESC)''')
+            if version < 2:
+                db.execute('''INSERT INTO observation_history
+                    (engagement, origin, resource, kind, fact_key, context, value, source,
+                     confidence, observed_at, expires_at, event, recorded_at)
+                    SELECT engagement, origin, resource, kind, fact_key, context, value, source,
+                           confidence, observed_at, expires_at, 'migration_snapshot', observed_at
+                    FROM observations AS current
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM observation_history AS history
+                        WHERE history.engagement = current.engagement
+                          AND history.origin = current.origin
+                          AND history.resource = current.resource
+                          AND history.kind = current.kind
+                          AND history.fact_key = current.fact_key
+                          AND history.context = current.context
+                          AND history.event = 'migration_snapshot')''')
+            self._trim_history(db)
+            db.execute('PRAGMA user_version = 2')
+
+    def _trim_history(self, db):
+        """Bound local audit growth while retaining the newest engagement events."""
+        db.execute('''DELETE FROM observation_history WHERE engagement = ? AND id NOT IN (
+            SELECT id FROM observation_history WHERE engagement = ? ORDER BY id DESC LIMIT ?)''',
+                   (self.engagement, self.engagement, MAX_HISTORY_ROWS_PER_ENGAGEMENT))
 
     @contextmanager
     def connection(self):
@@ -99,12 +135,18 @@ class KnowledgeStore:
             raise ValueError('observation exceeds 64 KiB')
         now = self.clock()
         with self.connection() as db:
+            record = (self.engagement, canonical_origin(url), resource, kind, key, context,
+                      encoded, source, confidence, now, now + ttl)
+            db.execute('''INSERT INTO observation_history
+                (engagement, origin, resource, kind, fact_key, context, value, source,
+                 confidence, observed_at, expires_at, event, recorded_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'observe', ?)''', (*record, now))
             db.execute('''INSERT INTO observations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (engagement, origin, resource, kind, fact_key, context)
                 DO UPDATE SET value=excluded.value, source=excluded.source,
                 confidence=excluded.confidence, observed_at=excluded.observed_at, expires_at=excluded.expires_at''',
-                (self.engagement, canonical_origin(url), resource, kind, key, context,
-                 encoded, source, confidence, now, now + ttl))
+                record)
+            self._trim_history(db)
 
     def query(self, url, kind=None, key=None, context=None, resource=None, include_expired=False):
         conditions = ['engagement = ?', 'origin = ?']
@@ -121,6 +163,19 @@ class KnowledgeStore:
                               + ' ORDER BY kind, resource, fact_key, context', values).fetchall()
         return [dict(dict(row), value=json.loads(row['value'])) for row in rows]
 
+    def history(self, url, kind=None, key=None, context=None, resource=None):
+        """Return append-only local observation history, including expired/superseded facts."""
+        conditions = ['engagement = ?', 'origin = ?']
+        values = [self.engagement, canonical_origin(url)]
+        for column, value in [('kind', kind), ('fact_key', key), ('context', context), ('resource', resource)]:
+            if value is not None:
+                conditions.append(column + ' = ?')
+                values.append(value)
+        with self.connection() as db:
+            rows = db.execute('SELECT * FROM observation_history WHERE ' + ' AND '.join(conditions)
+                              + ' ORDER BY id', values).fetchall()
+        return [dict(dict(row), value=json.loads(row['value'])) for row in rows]
+
     def forget(self, url, kind, key=None, context=None, resource=None):
         """Delete selected observations for an explicitly refreshed target."""
         if kind not in KINDS:
@@ -132,7 +187,18 @@ class KnowledgeStore:
                 conditions.append(column + ' = ?')
                 values.append(value)
         with self.connection() as db:
+            rows = db.execute('SELECT * FROM observations WHERE ' + ' AND '.join(conditions), values).fetchall()
+            now = self.clock()
+            for row in rows:
+                db.execute('''INSERT INTO observation_history
+                    (engagement, origin, resource, kind, fact_key, context, value, source,
+                     confidence, observed_at, expires_at, event, recorded_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'forget', ?)''',
+                            tuple(row[column] for column in ('engagement', 'origin', 'resource', 'kind',
+                                                             'fact_key', 'context', 'value', 'source',
+                                                             'confidence', 'observed_at', 'expires_at')) + (now,))
             cursor = db.execute('DELETE FROM observations WHERE ' + ' AND '.join(conditions), values)
+            self._trim_history(db)
             return cursor.rowcount
 
     def record_auth_outcome(self, url, role, status, headers=None, source='unknown', ttl=900, resource=None):
@@ -406,6 +472,11 @@ class KnowledgeStore:
         imported = 0
         with self.connection() as db:
             for record in prepared:
+                db.execute('''INSERT INTO observation_history
+                    (engagement, origin, resource, kind, fact_key, context, value, source,
+                     confidence, observed_at, expires_at, event, recorded_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'import', ?)''',
+                           (*record, now))
                 cursor = db.execute('''INSERT INTO observations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT (engagement, origin, resource, kind, fact_key, context)
                     DO UPDATE SET value=excluded.value, source=excluded.source,
@@ -413,6 +484,7 @@ class KnowledgeStore:
                     WHERE excluded.observed_at > observations.observed_at''',
                                     record)
                 imported += cursor.rowcount
+            self._trim_history(db)
         return imported
 
     def record_fingerprint(self, result):
@@ -448,11 +520,8 @@ class KnowledgeStore:
                    for row in rows)
 
     def forget_failed_payload(self, url, context, payload):
-        with self.connection() as db:
-            db.execute('DELETE FROM observations WHERE engagement=? AND origin=? AND resource=? '
-                       'AND kind=? AND fact_key=? AND context=?',
-                       (self.engagement, canonical_origin(url), urlsplit(url).path or '/',
-                        'payload_failure', digest(payload), context))
+        self.forget(url, 'payload_failure', digest(payload), context,
+                    urlsplit(url).path or '/')
 
     def record_failed_payload(self, url, context, payload, status):
         if not 200 <= status < 300:
@@ -470,12 +539,15 @@ def main():
     parser.add_argument('--target', required=True, help='Exact HTTP(S) origin or URL')
     parser.add_argument('--kind', choices=KINDS)
     parser.add_argument('--include-expired', action='store_true', help='Inspection only; expired facts are never reused')
+    parser.add_argument('--history', action='store_true', help='Inspect bounded local history, including expired and superseded observations')
     transfer = parser.add_mutually_exclusive_group()
     transfer.add_argument('--export', metavar='PATH', help='Write an allowlisted offline bundle for --target')
     transfer.add_argument('--import', dest='import_path', metavar='PATH', help='Import a validated offline bundle for --target')
     args = parser.parse_args()
     try:
         store = KnowledgeStore(args.db, args.engagement)
+        if args.history and (args.export or args.import_path):
+            parser.error('--history cannot be combined with --export or --import')
         if args.export:
             bundle = store.export_bundle(args.target)
             encoded = json.dumps(bundle, indent=2, allow_nan=False).encode('utf-8')
@@ -492,6 +564,8 @@ def main():
             imported = store.import_bundle(bundle, args.target)
             print(json.dumps({'imported': imported, 'engagement': args.engagement,
                               'origin': canonical_origin(args.target)}))
+        elif args.history:
+            print(json.dumps(store.history(args.target, args.kind), indent=2))
         else:
             print(json.dumps(store.query(args.target, args.kind, include_expired=args.include_expired), indent=2))
     except (OSError, ValueError, sqlite3.Error) as exc:

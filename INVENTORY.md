@@ -9,6 +9,26 @@ Inventory structure originated at `f870a85`. Coverage status was refreshed
 and commit are recorded in the latest dated addendum below. Earlier checkpoints
 remain historical snapshots; `git log -1` is the source of truth for the tip.
 
+## 2026-11-18 addendum — coordinated campaign foundations (#1–#6)
+
+Added an offline campaign manifest/planner, scoped role/object matrix evaluator,
+coverage registry and evaluator, common finding evidence review, and contextual
+business-document scope validation. The planner can read sanitized target
+knowledge and emits an ordered plan; a single gated executor runs the existing
+business-scenario workflow through an injected, no-redirect, request-budgeted
+transport. General scanner CLI orchestration remains deferred. Existing
+testers retain their independent probe behavior and request controls.
+
+The shared target-knowledge store now migrates schema-v1 databases to schema v2
+and retains the newest 20,000 local history events per engagement for auditing;
+current lookups remain latest-value views. New tests cover campaign scope,
+role/state policy, knowledge migration/history, report integration, and labeled
+coverage metrics. Full suite: **930 passed + 143 subtests**; focused matrix:
+**192 passed + 50 subtests**. Ruff, compileall, common-sync, CLI docs
+(**10/116/63**), and diff checks pass. See `scripts/ASSESSMENT_CAMPAIGN.md`
+and the corresponding dated handover/audit records for explicit execution and
+accuracy limits.
+
 ## Shape of the toolkit
 
 A `recon -> exploit -> chain -> report` pipeline plus specialized side skills.

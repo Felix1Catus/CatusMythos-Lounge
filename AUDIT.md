@@ -1049,3 +1049,49 @@ and the [public level-by-level walkthrough](https://github.com/Akinloye3264/dvwa
 Final validation for this follow-up passes **878 pytest tests + 128 subtests**;
 Ruff, compileall, common-sync, CLI docs (**10 / 116 / 63**), and
 `git diff --check` pass.
+
+## 2026-11-18 addendum — assessment campaign foundations (#1–#6)
+
+**Architecture changes.** Added an offline campaign planner and explicit JSON
+contracts in `scripts/assessment_campaign.py`, `scripts/role_matrix.py`, and
+`scripts/finding_evidence.py`. Campaign inputs require exact credential-free
+HTTP(S) origins, explicit targets/roles, ordered dependencies, bounded declared
+request totals, and an explicit mutation/cleanup declaration for workflow
+steps. The planner accepts registered tool identifiers only; it does not run
+arbitrary commands or launch general scanner CLIs. Its `run-workflow` adapter
+executes only the existing operator-authored business-scenario runner after an
+exact-origin confirmation and request-budget preflight.
+
+**Shared state and evidence.** Target knowledge schema v2 keeps the latest
+observation as the query view and adds a bounded local history of up to 20,000
+events per engagement; schema-v1 rows are copied as migration snapshots.
+History covers writes, imports, and explicit deletion. Portable bundles still
+contain current observations only. A common finding review reports lifecycle
+state and proof completeness without promoting results; report and importer
+outputs preserve the original `validated` / chainability claims. Role/object
+matrices require explicit authorization policy, and a 2xx/status-only
+cross-role response remains a candidate until identity, owner control, object
+identity, and unauthorized data are independently evidenced.
+
+**Coverage and context.** Coverage output separates executed test coverage from
+precision/recall. Those metrics are omitted unless the manifest has provenance-
+backed expected labels; blocked, candidate, conflicting, and untested cases do
+not become negatives. Campaign business-context input is validated against
+scoped hostnames and stays compatible with the existing contextual severity
+path.
+
+**Boundary / remaining uncertainty.** Planning and reporting are offline;
+`run-workflow` is the only active adapter. Campaigns do not yet persist
+resumable events or enforce a single request budget across heterogeneous
+scanner CLIs. Existing per-tool limits are not equivalent to a campaign-wide
+cap. Automatic hypothesis generation,
+dynamic business-context inference, and full benchmark labels across DVWA
+levels and another vulnerable application remain follow-up work. These files
+make no live-target claims.
+
+**Validation.** Final exact-code full pytest: **930 passed + 143 subtests**.
+Focused campaign/knowledge/evidence matrix: **192 passed + 50 subtests**. Full
+Ruff, compileall (`skills scripts tests tools`), common-sync, CLI-doc checker
+(**10 skill docs / 116 references / 63 CLIs**), and `git diff --check` pass.
+Tests use synthetic/offline data and existing local fixtures; this work made no
+live target requests.

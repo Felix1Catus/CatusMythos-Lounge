@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "id": "replace-with-case-id",
+      "behavior": "describe one testable security behavior",
+      "tool": "web_sqli",
+      "role": "member",
+      "configuration": "replace-with-lab-level-or-build",
+      "preconditions": ["describe required route, data, and account state"],
+      "expected_evidence": ["describe independent control and impact evidence expected"],
+      "expected": "unknown",
+      "gold_source": ""
+    }
+  ]
+}

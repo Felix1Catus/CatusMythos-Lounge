@@ -96,6 +96,61 @@ class KnowledgeTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]['value'], {'name': 'apache'})
         self.assertEqual(rows[0]['source'], 'new-source')
+        history = self.store.history(self.url, 'technology', 'stack')
+        self.assertEqual([row['value'] for row in history], [{'name': 'nginx'}, {'name': 'apache'}])
+        self.assertEqual([row['event'] for row in history], ['observe', 'observe'])
+
+    def test_v1_database_migrates_current_facts_into_auditable_history(self):
+        legacy = Path(self.temp.name) / 'legacy-v1.sqlite'
+        with contextlib.closing(sqlite3.connect(str(legacy))) as db:
+            with db:
+                db.execute('''CREATE TABLE observations (
+                engagement TEXT NOT NULL, origin TEXT NOT NULL, resource TEXT NOT NULL,
+                kind TEXT NOT NULL, fact_key TEXT NOT NULL, context TEXT NOT NULL,
+                value TEXT NOT NULL, source TEXT NOT NULL, confidence TEXT NOT NULL,
+                observed_at REAL NOT NULL, expires_at REAL NOT NULL,
+                PRIMARY KEY (engagement, origin, resource, kind, fact_key, context))''')
+                db.execute('''INSERT INTO observations VALUES
+                ('engagement-a', 'https://app.example.test:443', '/item', 'technology',
+                 'stack', '', '{"name":"nginx"}', 'legacy', 'observed', 900, 2000)''')
+                db.execute('PRAGMA user_version = 1')
+        migrated = kb.KnowledgeStore(legacy, 'engagement-a', clock=lambda: 1000)
+        history = migrated.history(self.url, 'technology', 'stack')
+        self.assertEqual(len(history), 1)
+        self.assertEqual(history[0]['event'], 'migration_snapshot')
+        self.assertEqual(history[0]['source'], 'legacy')
+        migrated.observe(self.url, 'technology', 'stack', {'name': 'apache'}, 'fresh')
+        self.assertEqual([row['value'] for row in migrated.history(self.url, 'technology', 'stack')],
+                         [{'name': 'nginx'}, {'name': 'apache'}])
+
+    def test_forget_records_removed_observations_without_leaking_to_current_view(self):
+        self.observe()
+        self.assertEqual(self.store.forget(self.url, 'technology', 'stack'), 1)
+        self.assertEqual(self.store.query(self.url, 'technology'), [])
+        self.assertEqual(self.store.history(self.url, 'technology', 'stack')[-1]['event'], 'forget')
+
+    def test_history_is_bounded_per_engagement_without_pruning_current_facts(self):
+        original_limit = kb.MAX_HISTORY_ROWS_PER_ENGAGEMENT
+        kb.MAX_HISTORY_ROWS_PER_ENGAGEMENT = 2
+        try:
+            for index in range(3):
+                self.store.observe(self.url, 'waf', 'event-{}'.format(index),
+                                   {'name': 'waf-{}'.format(index)}, 'fixture')
+            self.assertEqual(len(self.store.history(self.url, 'waf')), 2)
+            self.assertEqual(len(self.store.query(self.url, 'waf')), 3)
+        finally:
+            kb.MAX_HISTORY_ROWS_PER_ENGAGEMENT = original_limit
+
+    def test_history_cli_inspects_superseded_rows_without_network(self):
+        self.observe()
+        self.now += 1
+        self.store.observe(self.url, 'technology', 'stack', {'name': 'apache'}, 'fresh')
+        result = subprocess.run([
+            sys.executable, str(ROOT / 'scripts' / 'target_knowledge.py'), '--db', str(self.path),
+            '--engagement', 'engagement-a', '--target', self.url, '--kind', 'technology', '--history'],
+            capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([row['source'] for row in json.loads(result.stdout)], ['fixture', 'fresh'])
 
     def test_invalid_ttl_kind_confidence_and_oversize_are_rejected(self):
         for ttl in [0, -1, float('nan'), float('inf')]:

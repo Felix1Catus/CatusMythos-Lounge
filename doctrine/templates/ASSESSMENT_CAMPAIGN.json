@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "engagement": "replace-with-engagement-label",
+  "scope": {
+    "origins": ["https://app.example.test"],
+    "request_budget": 40,
+    "allow_state_changes": false
+  },
+  "targets": [
+    {
+      "id": "app",
+      "url": "https://app.example.test/",
+      "roles": [
+        {"name": "anonymous"},
+        {"name": "member", "credential_env": "APP_MEMBER_AUTHORIZATION", "credential_header": "Authorization"},
+        {"name": "admin", "credential_env": "APP_ADMIN_AUTHORIZATION", "credential_header": "Authorization"}
+      ]
+    }
+  ],
+  "steps": [
+    {"id": "crawl", "tool": "web_crawl", "target": "app", "role": "anonymous", "max_requests": 20},
+    {"id": "sqli", "tool": "web_sqli", "target": "app", "role": "member",
+     "depends_on": ["crawl"], "max_requests": 20}
+  ],
+  "authorization_matrices": [
+    {
+      "target": "app",
+      "objects": [
+        {"id": "fixture-object-1", "owner_role": "member", "allowed_roles": ["member", "admin"]}
+      ]
+    }
+  ],
+  "business_context": {"schema_version": 1, "assets": []}
+}

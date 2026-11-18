@@ -4,6 +4,50 @@ Living status note for the ongoing CatusMythos-Lounge improvement work. Keep it
 current; it records what has and has **not** been deeply reviewed so later work
 doesn't mistake uneven coverage for uniform coverage.
 
+## 2026-11-18 addendum — assessment campaign and evidence foundations (#1–#6)
+
+New offline infrastructure: `scripts/assessment_campaign.py` validates explicit
+origin scope, engagement, registered tools, role labels, step dependencies,
+per-step/global declared budgets, and state-change cleanup gates. It emits an
+ordered plan, can attach allowlisted exact-origin knowledge as advisory data,
+evaluates role/object observations, and reports coverage separately from
+precision/recall. Only provenance-backed labeled cases feed those metrics;
+conflicting confirmed/negative results remain conflicts.
+
+`scripts/role_matrix.py` builds role × object cases from operator-declared
+ownership and access policy. Status-only cross-role success is a candidate;
+confirmation requires verified role identity, owner control, object identity,
+and unauthorized-data proof. No credential or request execution is performed.
+The API authz tester and its regression file were not changed.
+
+`scripts/finding_evidence.py` adds a shared, non-promoting proof review for
+candidate/validated/confirmed state. It requires baseline, negative-control,
+effect, reproduction, and impact evidence metadata for a complete proof record.
+Vuln-report JSON and normalized vuln-chain imports include the review while
+preserving existing validation and chainability fields.
+
+`scripts/target_knowledge.py` migrates schema v1 to v2 and retains a bounded
+20,000-row-per-engagement local history for observations, imports, migration
+snapshots, and explicit deletion. The latest-value query behavior is unchanged;
+`--history` provides read-only inspection. The campaign planner attaches only
+portable/sanitized target knowledge and never suppresses vulnerability tests.
+Business-context documents are validated against campaign scope and remain
+compatible with `context_severity.py` / `calculate_impact.py`.
+
+Templates and usage: `doctrine/templates/ASSESSMENT_CAMPAIGN.json`,
+`doctrine/templates/ASSESSMENT_COVERAGE.json`, and
+`scripts/ASSESSMENT_CAMPAIGN.md`. `run-workflow` executes one existing
+operator-authored business scenario after exact-origin confirmation, stateful
+gate and scenario-budget preflight; the no-redirect transport enforces its
+per-step request cap. General scanner execution, universal cross-tool request
+enforcement, durable campaign resume, and fully automatic discovery/reasoning
+remain deferred because current scanner CLIs do not share enforceable budget
+interfaces. Tests use offline data and loopback only; no external target was
+contacted. Final validation: **930 pytest tests + 143 subtests passed**;
+focused campaign/knowledge/evidence matrix: **192 tests + 50 subtests passed**.
+Full Ruff, compileall (`skills scripts tests tools`), common-sync, CLI docs
+(**10 / 116 / 63**), and `git diff --check` passed.
+
 ## 2026-11-17 addendum — supervised improvement #6: automatic bounded WAF escalation
 
 New `skills/webapp-exploit-hunter/scripts/_waf_escalation.py`. Previously, an

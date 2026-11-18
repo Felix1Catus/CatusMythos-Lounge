@@ -13,6 +13,24 @@ import re as _re
 from pathlib import Path
 from datetime import datetime, timezone
 
+_EVIDENCE_REVIEWER = None
+
+
+def _review_evidence(finding):
+    """Load the cross-cutting evidence contract from the full plugin checkout."""
+    global _EVIDENCE_REVIEWER
+    if _EVIDENCE_REVIEWER is None:
+        module_path = Path(__file__).resolve().parents[3] / "scripts" / "finding_evidence.py"
+        if not module_path.is_file():
+            return {"schema_version": 1, "assessment_state": "unavailable",
+                    "promotion_performed": False,
+                    "limitations": "Shared evidence review module is absent from this checkout."}
+        spec = importlib.util.spec_from_file_location("catus_finding_evidence", module_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _EVIDENCE_REVIEWER = module.review_finding
+    return _EVIDENCE_REVIEWER(finding)
+
 
 def _finding_blob(finding):
     """All the free-text fields on a RAW (pre-normalize) finding dict worth
@@ -198,6 +216,7 @@ def normalize_finding(finding, source_tool):
         "requires": [],
         "raw": finding,
     }
+    normalized["evidence_review"] = _review_evidence(finding)
     # Preserve operator-supplied, evidence-linked application context so the
     # correlation stage can carry it forward to impact assessment.
     if "business_context" in finding:

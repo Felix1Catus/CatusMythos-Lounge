@@ -1,4 +1,4 @@
-# Shared target knowledge — local v2
+# Shared target knowledge — local schema v2
 
 `target_knowledge.py` is stdlib-only, cross-cutting infrastructure. It never
 sends network requests or executes probes. SQLite transactions and a 10-second
@@ -20,6 +20,7 @@ From the repository root, inspect fresh observations without issuing probes:
 ```bash
 python3 scripts/target_knowledge.py --db targets/assessment/knowledge.sqlite --engagement assessment --target https://app.example.test --kind technology
 python3 scripts/target_knowledge.py --db targets/assessment/knowledge.sqlite --engagement assessment --target https://app.example.test --include-expired
+python3 scripts/target_knowledge.py --db targets/assessment/knowledge.sqlite --engagement assessment --target https://app.example.test --kind technology --history
 ```
 
 Targets must be credential-free HTTP(S) URLs. Scheme, IDNA hostname, and
@@ -28,10 +29,16 @@ facts. Engagement names partition records even within one database. Facts
 also carry a resource path, kind, key, optional hashed request context, source,
 confidence, observed-at time, and expires-at time (Unix seconds UTC). Queries
 exclude expired records by default. `--include-expired` is inspection only.
-The last observation of an identical key/context replaces that observation;
-v1 does not maintain a historical event log. Unknown schema versions or
-unreadable/corrupt databases fail explicitly instead of silently disabling
-coordination or resetting state.
+The query view returns the latest observation for an identical key/context.
+Schema v2 also keeps a bounded, append-only local history of observations,
+imports, v1 migration snapshots, and explicit deletes, so callers can inspect
+superseded or conflicting evidence with `KnowledgeStore.history(url, ...)` or
+the read-only `--history` CLI option.
+History is capped at 20,000 events per engagement, retaining the newest events;
+it is not exported in portable bundles. Existing schema-v1 databases are
+migrated in place, and the current query contract remains unchanged. Unknown
+schema versions or unreadable/corrupt databases fail explicitly instead of
+silently disabling coordination or resetting state.
 
 ## Eight integration points
 
