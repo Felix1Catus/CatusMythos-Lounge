@@ -283,6 +283,19 @@ python skills/webapp-exploit-hunter/scripts/workflow_tester.py `
   --api-base https://app.example.test
 ```
 
+For authenticated skip-ahead coverage, repeat `--role NAME:HEADER:ENV_VAR`;
+the tester reads each credential value from the named environment variable,
+probes each role independently, and labels candidate results by role without
+writing credential material to the report:
+
+```powershell
+python skills/webapp-exploit-hunter/scripts/workflow_tester.py `
+  --browser-audit targets/fixture/browser-audit.json `
+  --api-base https://app.example.test `
+  --role member:Authorization:MEMBER_TOKEN `
+  --role admin:Authorization:ADMIN_TOKEN
+```
+
 ## Current v1 boundary
 
 The planner validates and emits the ordered plan. The fingerprint, API

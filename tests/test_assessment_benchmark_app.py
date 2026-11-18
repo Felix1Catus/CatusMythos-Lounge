@@ -62,9 +62,12 @@ class AssessmentBenchmarkTests(unittest.TestCase):
         crawl = workflow.browser_report_to_crawl(report, self.base)
         flows = workflow.discover_workflows(crawl)
         self.assertTrue(flows)
+        roles = [{"name": "member", "headers": {"Authorization": "Bearer member"}},
+                 {"name": "admin", "headers": {"Authorization": "Bearer admin"}}]
         candidates = [finding for flow in flows for finding in
-                      workflow.test_step_skip(flow, delay=0)]
+                      workflow.test_workflow_roles(flow, roles, delay=0)]
         self.assertTrue(any(item["type"] == "workflow_step_skip_candidate" for item in candidates))
+        self.assertEqual({item["role"] for item in candidates}, {"member", "admin"})
 
 
 if __name__ == "__main__":

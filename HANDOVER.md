@@ -18,7 +18,10 @@ its existing identity/object evidence checks before reporting access findings.
 Browser audit output now carries bounded same-origin links and form action,
 method, and field-name/type metadata, with no field values or URL query data.
 `workflow_tester.py --browser-audit ... --api-base ...` converts that browser
-map into its existing workflow discovery graph. The campaign `prioritize`
+map into its existing workflow discovery graph. Repeatable `--role
+NAME:HEADER:ENV_VAR` checks discovered step-skip candidates independently under
+named authenticated identities, reading secrets from the environment and
+labeling output by role. The campaign `prioritize`
 command orders unresolved labeled cases using explicit candidate/blocked,
 authorization, and stateful-workflow signals; it never changes case results,
 confirms findings, or skips tests. The existing coverage evaluator remains the
