@@ -298,7 +298,18 @@ def reserve_external_command_from_environment(command, *, shell=False):
         tcp = "+tcp" in safe_options
         reserve_network_endpoint_from_environment(resolvers[0], 53, "tcp" if tcp else "udp")
         query_type = requested_types[0] if requested_types else "A"
-        return [values[0], "-r", "@" + resolvers[0], question, query_type, "+tries=1", "+time=3",
+        resolved_resolvers = {}
+        try:
+            resolved_resolvers = json.loads(os.environ.get(
+                "CATUS_CAMPAIGN_GATE_ENDPOINT_ADDRESSES", "{}"))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            pass
+        resolver_addresses = resolved_resolvers.get(_normalize_network_host(resolvers[0]), [])
+        try:
+            resolver_host = str(ipaddress.ip_address(resolver_addresses[0]))
+        except (IndexError, TypeError, ValueError):
+            resolver_host = resolvers[0]
+        return [values[0], "-r", "@" + resolver_host, question, query_type, "+tries=1", "+time=3",
                 *safe_options]
     if executable == "curl":
         if any(value in values for value in (
@@ -332,7 +343,23 @@ def reserve_external_command_from_environment(command, *, shell=False):
             if value in ("-X", "--request"):
                 method = values[index + 1].upper()
         reserve_from_environment(urls[0], method)
-        return [values[0], "--disable", "--noproxy", "*", *values[1:]]
+        result = [values[0], "--disable", "--noproxy", "*", *values[1:]]
+        try:
+            resolved_origin = json.loads(os.environ.get(
+                "CATUS_CAMPAIGN_GATE_ORIGIN_ADDRESSES", "[]"))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            resolved_origin = []
+        parsed_url = urlsplit(urls[0])
+        if isinstance(resolved_origin, list) and resolved_origin and parsed_url.hostname:
+            port = parsed_url.port or (443 if parsed_url.scheme.lower() == "https" else 80)
+            try:
+                resolved_address = str(ipaddress.ip_address(resolved_origin[0]))
+            except (TypeError, ValueError):
+                resolved_address = ""
+            if resolved_address:
+                result.extend(("--resolve", "{}:{}:{}".format(
+                    parsed_url.hostname, port, resolved_address)))
+        return result
     if executable == "whois":
         _mark_status("gate_errors")
         raise CampaignGateError("campaign whois adapter is unavailable until its referral behavior can be bounded")

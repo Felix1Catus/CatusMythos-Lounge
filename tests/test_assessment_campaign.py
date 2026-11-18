@@ -416,7 +416,7 @@ class CampaignManifestTests(unittest.TestCase):
             manifest_path.write_text(json.dumps(value), encoding="utf-8")
             self.assertEqual(campaign.main(["run-workflow", "--manifest", str(manifest_path),
                                             "--step", "workflow", "--confirm-target", base,
-                                            "--output", str(output_path)]), 0)
+                                            "--output", str(output_path), "--process-only"]), 0)
             result = json.loads(output_path.read_text(encoding="utf-8"))
         self.assertEqual(result["execution"]["requests_sent"], 2)
         self.assertEqual(result["execution"]["request_budget"], 4)
@@ -456,7 +456,7 @@ class CampaignManifestTests(unittest.TestCase):
             self.assertEqual(campaign.main([
                 "run-step", "--manifest", str(manifest_path), "--step", "fingerprint",
                 "--confirm-target", base, "--state-db", str(state_path),
-                "--campaign-id", "fingerprint-run", "--output", str(output_path),
+                "--campaign-id", "fingerprint-run", "--output", str(output_path), "--process-only",
             ]), 0)
             result = json.loads(output_path.read_text(encoding="utf-8"))
         self.assertIn("WordPress", result["technologies"])
@@ -498,7 +498,7 @@ class CampaignManifestTests(unittest.TestCase):
             self.assertEqual(campaign.main([
                 "run-step", "--manifest", str(manifest_path), "--step", "api-discovery",
                 "--confirm-target", base, "--state-db", str(state_path),
-                "--campaign-id", "api-run", "--output", str(output_path),
+                "--campaign-id", "api-run", "--output", str(output_path), "--process-only",
             ]), 0)
             result = json.loads(output_path.read_text(encoding="utf-8"))
             ledger = campaign.CampaignLedger(state_path, "api-run")

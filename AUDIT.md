@@ -1145,3 +1145,24 @@ boundary and require host-level isolation. Full pytest passed **957 tests +
 Ruff, compileall, common-sync, CLI-docs (**10/116/63**), and diff checks passed.
 Only loopback fixtures were used. No external target was contacted. The
 follow-up is pushed to `main`.
+
+## 2026-11-18 addendum — default OS kernel network allowlist
+
+Campaign scan commands now use OS-level packet filtering by default. On Windows
+the helper runs in WSL; on Linux it uses the local network namespace. It
+resolves the selected origin and explicit endpoint
+hosts before setup, then installs temporary nftables rules that allow only
+those IPv4 addresses and declared ports. It drops IPv6 and all other forwarding,
+blocks namespace access to unrelated WSL host services, runs the scanner as
+`nobody` without Linux capabilities, and cleans up the namespace, veth, nft
+table, and forwarding setting. This does not change the Windows firewall.
+
+The feature requires root plus `iproute2`, `nftables`, and `setpriv`; this
+workspace's Ubuntu-24.04 distro had `iproute2`/`setpriv`, and `nftables` was
+installed (three packages, 1.46 MB). Local WSL fixture tests verified one
+budgeted curl request and a 68-request API authz run, and verified that a
+second undeclared port is blocked. No external target was contacted. Full
+pytest passed **961 tests + 143 subtests**; focused campaign/namespace passed
+**59 tests + 7 subtests**. Ruff, compileall, common-sync, and CLI-docs passed.
+A regression confirms OS isolation is selected by default; `--process-only`
+remains an explicit opt-out. No external target was contacted.

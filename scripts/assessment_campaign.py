@@ -1110,6 +1110,46 @@ def execute_registered_cli_step(manifest, step_id, confirm_target, state_databas
                           "response_bodies_recorded": False}}
 
 
+def execute_os_isolated_command(command_args, distro="Ubuntu-24.04", environment=None):
+    """Run a campaign command inside a temporary Linux network namespace."""
+    helper = Path(__file__).resolve().with_name("campaign_wsl_sandbox.py")
+    request = json.dumps({"distro": distro, "argv": command_args,
+                          "environment": environment or {}}, allow_nan=False)
+    if os.name != "nt":
+        command = [sys.executable, str(helper), "--request-stdin"]
+    else:
+        def as_wsl_path(path):
+            mapped = subprocess.run(
+                ["wsl.exe", "--distribution", distro, "--user", "root", "--exec",
+                 "wslpath", "-u", str(path)],
+                capture_output=True, text=True, check=False, timeout=30,
+            )
+            if mapped.returncode:
+                raise CampaignError("cannot map campaign files into the selected WSL distro")
+            return mapped.stdout.strip()
+
+        command = [
+            "wsl.exe", "--distribution", distro, "--user", "root", "--exec", "python3",
+            as_wsl_path(helper), "--request-stdin",
+        ]
+    try:
+        completed = subprocess.run(command, input=request, capture_output=True, text=True,
+                                   check=False, timeout=CLI_TIMEOUT_SECONDS + 600)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise CampaignError("cannot start the required OS network namespace: {}".format(exc)) from exc
+    if completed.returncode:
+        detail = (completed.stderr or "").strip()[-1200:]
+        raise CampaignError("WSL network isolation failed{}".format(
+            ": " + detail if detail else ""))
+    try:
+        result = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise CampaignError("WSL sandbox returned invalid result JSON") from exc
+    if not isinstance(result, dict):
+        raise CampaignError("WSL sandbox result must be a JSON object")
+    return result
+
+
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     """Keep a confirmed target origin from redirecting active scenario traffic."""
 
@@ -1144,6 +1184,16 @@ def _read_json(path):
         raise CampaignError("cannot read JSON file: {}".format(exc)) from exc
 
 
+def _add_network_isolation_options(parser):
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--wsl-netns", dest="wsl_netns", action="store_true", default=True,
+                       help="run in a temporary OS network namespace (default)")
+    group.add_argument("--process-only", dest="wsl_netns", action="store_false",
+                       help="opt out of OS isolation; use only in a trusted local environment")
+    parser.add_argument("--wsl-distro", default="Ubuntu-24.04",
+                        help="WSL distro used for OS isolation on Windows")
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -1171,6 +1221,7 @@ def main(argv=None):
     workflow.add_argument("--campaign-id", help="Stable campaign identifier; required with --state-db")
     workflow.add_argument("--retry-interrupted", action="store_true",
                           help="Explicitly permit retry after reviewing an interrupted/failed step")
+    _add_network_isolation_options(workflow)
     cli = subparsers.add_parser("run-cli", help="run a registered scanner with shared request-budget enforcement")
     cli.add_argument("--manifest", required=True)
     cli.add_argument("--step", required=True)
@@ -1178,6 +1229,8 @@ def main(argv=None):
                      help="Exact origin confirmation; must match the selected step")
     cli.add_argument("--state-db", required=True)
     cli.add_argument("--campaign-id", required=True)
+    _add_network_isolation_options(cli)
+    cli.add_argument("--output", help="Optional JSON output path")
     cli.add_argument("--retry-interrupted", action="store_true",
                      help="Explicitly permit retry after reviewing an interrupted/failed step")
     cli.add_argument("tool_args", nargs=argparse.REMAINDER,
@@ -1190,6 +1243,8 @@ def main(argv=None):
     external.add_argument("--state-db", required=True)
     external.add_argument("--campaign-id", required=True)
     external.add_argument("--retry-interrupted", action="store_true")
+    _add_network_isolation_options(external)
+    external.add_argument("--output", help="Optional JSON output path")
     external.add_argument("tool_args", nargs=argparse.REMAINDER,
                           help="One supported executable and its arguments; separate them with --")
     status = subparsers.add_parser("campaign-status", help="show campaign counters and step states")
@@ -1207,7 +1262,50 @@ def main(argv=None):
     record.add_argument("--output", help="Optional JSON output path")
     args = parser.parse_args(argv)
     try:
-        if args.command == "plan":
+        if args.command in ("run-cli", "run-external", "run-workflow", "run-step") and args.wsl_netns:
+            manifest = _read_json(args.manifest)
+            plan = validate_manifest(manifest)
+            selected = next((step for step in plan["steps"] if step["id"] == args.step), None)
+            expected_tool = "external_probe" if args.command == "run-external" else None
+            if selected is None or (expected_tool and selected["tool"] != expected_tool):
+                raise CampaignError("selected step is not registered for the requested isolated runner")
+            if args.command == "run-cli" and selected["tool"] not in TOOL_ENTRYPOINTS:
+                raise CampaignError("selected step has no registered campaign-gated CLI entrypoint")
+            if args.command in ("run-workflow", "run-step") and selected["tool"] not in (
+                    "business_workflow", "tech_fingerprint", "api_discovery"):
+                raise CampaignError("selected step has no registered native campaign adapter")
+            if canonical_origin(args.confirm_target) != selected["origin"]:
+                raise CampaignError("--confirm-target must exactly match the selected step's in-scope origin")
+            isolated_args = [args.command, "--manifest", args.manifest, "--step", args.step,
+                             "--confirm-target", args.confirm_target]
+            if args.state_db:
+                isolated_args.extend(["--state-db", args.state_db])
+            if args.campaign_id:
+                isolated_args.extend(["--campaign-id", args.campaign_id])
+            if getattr(args, "retry_interrupted", False):
+                isolated_args.append("--retry-interrupted")
+            environment = {}
+            if args.command in ("run-workflow", "run-step"):
+                isolated_args.extend(["--output", args.output])
+                target = next(item for item in plan["targets"] if item["id"] == selected["target"])
+                role = next(item for item in target["roles"] if item["name"] == selected["role"])
+                credential_name = role.get("credential_env")
+                if credential_name and credential_name in os.environ:
+                    environment[credential_name] = os.environ[credential_name]
+                tool_args = []
+            else:
+                tool_args = list(args.tool_args)
+                if tool_args and tool_args[0] == "--":
+                    tool_args = tool_args[1:]
+            if args.command == "run-cli":
+                if selected["tool"] == "api_authz" and "--allow-mutation-write" in tool_args:
+                    raise CampaignError("campaign run-cli does not enable mutation probes")
+                if selected["tool"] == "web_cache" and "--confirm-cache-replay" in tool_args:
+                    raise CampaignError("campaign run-cli does not enable cache replay confirmation")
+            if tool_args:
+                isolated_args.extend(["--", *tool_args])
+            result = execute_os_isolated_command(isolated_args, args.wsl_distro, environment)
+        elif args.command == "plan":
             if bool(args.knowledge_db) != bool(args.engagement):
                 raise CampaignError("--knowledge-db and --engagement must be supplied together")
             result = validate_manifest(_read_json(args.manifest))

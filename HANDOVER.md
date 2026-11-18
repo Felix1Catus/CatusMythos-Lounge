@@ -4,6 +4,29 @@ Living status note for the ongoing CatusMythos-Lounge improvement work. Keep it
 current; it records what has and has **not** been deeply reviewed so later work
 doesn't mistake uneven coverage for uniform coverage.
 
+## 2026-11-18 addendum — WSL network namespace isolation
+
+Campaign scan commands (`run-cli`, `run-external`, `run-step`, and
+`run-workflow`) now use a temporary Linux network namespace by default. It
+installs an nftables allowlist for the confirmed origin's
+resolved IPv4 addresses and manifest-declared protocol/port endpoints. IPv6
+and every other egress route are dropped. The scan runs as `nobody` with no
+Linux capabilities; temporary veth, nftables rules, and IP-forwarding state are
+removed/restored after execution. It does not modify the Windows firewall.
+On Windows WSL needs root access; on Linux the runner needs root access. Both
+need `iproute2`, `nftables`, and `setpriv`. IPv6-only and loopback targets are
+unsupported in this mode; target hostnames are resolved and pinned before
+entering the namespace. `--process-only` explicitly opts out and uses the
+weaker process-level gate.
+Direct skill invocations outside the runner are still not contained.
+
+Live local WSL fixture checks succeeded: `run-external` curl reserved 1/1
+request; `run-cli` API authz completed at 68/100. A namespace test allowed its
+declared host/port and blocked a second port. No external target was contacted.
+Full pytest passed **961 tests + 143 subtests**; focused campaign/namespace
+passed **59 tests + 7 subtests**. Ruff, compileall, common-sync, and CLI-docs
+passed. A regression confirms OS isolation is selected by default.
+
 ## 2026-11-18 addendum — direct-client, API authz, and external-tool gate coverage
 
 Expanded campaign gating to the DOM XSS auditor, cache auditor, four AI/LLM

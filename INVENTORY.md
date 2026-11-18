@@ -5,6 +5,21 @@ dependencies, test coverage, scope controls, integrations, overlaps, and the
 clearest coverage gaps. This is a map for prioritizing deeper per-skill review;
 it is not itself a line-by-line doc-vs-code audit (that happens per skill).
 
+## 2026-11-18 addendum — default OS network containment
+
+Registered campaign scanner commands run behind a temporary nftables IPv4
+allowlist in a dedicated Linux network namespace by default (WSL on Windows).
+The scanner has
+no Linux capabilities, and non-target ports/IPv6 are blocked at the kernel
+network layer. `--process-only` explicitly opts out to the Python campaign
+guard. Direct skill execution outside the runner is not contained. The host
+must provide root access, `iproute2`, `nftables`, and `setpriv`.
+Local WSL fixture checks passed for budgeted curl (1/1), API authz (68/100),
+and blocking an undeclared port. Full pytest passed **961 tests + 143
+subtests**; the focused campaign/namespace run passed **59 tests + 7
+subtests**. Ruff, compileall, common-sync, and CLI-docs passed. No external
+target was contacted.
+
 ## 2026-11-18 addendum — expanded campaign integrations
 
 The shared request gate now includes direct HTTP clients in DOM XSS, cache,

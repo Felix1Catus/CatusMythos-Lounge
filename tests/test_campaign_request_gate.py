@@ -9,6 +9,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -71,7 +72,8 @@ class CampaignRequestGateTests(unittest.TestCase):
         self._old_env = {key: os.environ.get(key) for key in (
             "CATUS_CAMPAIGN_GATE_DB", "CATUS_CAMPAIGN_GATE_CAMPAIGN",
             "CATUS_CAMPAIGN_GATE_STEP", "CATUS_CAMPAIGN_GATE_ORIGIN",
-            "CATUS_CAMPAIGN_GATE_STATUS")}
+            "CATUS_CAMPAIGN_GATE_STATUS", "CATUS_CAMPAIGN_GATE_ORIGIN_ADDRESSES",
+            "CATUS_CAMPAIGN_GATE_ENDPOINT_ADDRESSES")}
         self._configure_gate()
 
     def tearDown(self):
@@ -89,6 +91,8 @@ class CampaignRequestGateTests(unittest.TestCase):
             "CATUS_CAMPAIGN_GATE_STEP": "crawl",
             "CATUS_CAMPAIGN_GATE_ORIGIN": self.origin,
             "CATUS_CAMPAIGN_GATE_STATUS": str(self.status),
+            "CATUS_CAMPAIGN_GATE_ORIGIN_ADDRESSES": json.dumps(["127.0.0.1"]),
+            "CATUS_CAMPAIGN_GATE_ENDPOINT_ADDRESSES": json.dumps({"127.0.0.1": ["127.0.0.1"]}),
         })
 
     def _restore_environment(self):
@@ -139,7 +143,12 @@ class CampaignRequestGateTests(unittest.TestCase):
         gate = self._gate_module()
         gate.reserve_socket_from_environment("127.0.0.1", self.server.server_port)
         self.assertEqual(self.ledger.summary()["requests_used"], 1)
-        gate.reserve_external_command_from_environment(["curl", self.origin + "/one"])
+        safe_curl = gate.reserve_external_command_from_environment(["curl", self.origin + "/one"])
+        self.assertIn("--disable", safe_curl)
+        self.assertIn("--noproxy", safe_curl)
+        resolve_index = safe_curl.index("--resolve")
+        self.assertEqual(safe_curl[resolve_index + 1],
+                         "127.0.0.1:{}:127.0.0.1".format(self.server.server_port))
         self.assertEqual(self.ledger.summary()["requests_used"], 2)
         with self.assertRaisesRegex(gate.CampaignGateError, "redirects"):
             gate.reserve_external_command_from_environment(["curl", "-L", self.origin + "/redirect"])
@@ -198,6 +207,23 @@ class CampaignRequestGateTests(unittest.TestCase):
                                 capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_python_child_uses_pinned_campaign_dns_and_blocks_other_names(self):
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(ROOT / "scripts") + os.pathsep + env.get("PYTHONPATH", "")
+        env["CATUS_CAMPAIGN_GATE_ORIGIN"] = "https://fixture.example.test"
+        env["CATUS_CAMPAIGN_GATE_ORIGIN_ADDRESSES"] = json.dumps(["203.0.113.18"])
+        code = (
+            "import socket; from campaign_request_gate import CampaignGateError; "
+            "rows = socket.getaddrinfo('fixture.example.test', 443, type=socket.SOCK_STREAM); "
+            "assert rows and {row[4][0] for row in rows} == {'203.0.113.18'}; blocked = False"
+            "\ntry:\n socket.getaddrinfo('other.example.test', 443)"
+            "\nexcept CampaignGateError:\n blocked = True\n"
+            "assert blocked"
+        )
+        result = subprocess.run([sys.executable, "-c", code], env=env,
+                                capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_common_transport_counts_same_origin_redirects(self):
         import importlib.util
         common_path = ROOT / "skills" / "webapp-exploit-hunter" / "scripts" / "_common.py"
@@ -240,7 +266,8 @@ class CampaignRequestGateTests(unittest.TestCase):
         result = campaign.main([
             "run-cli", "--manifest", str(manifest_path), "--step", "crawl",
             "--confirm-target", self.origin, "--state-db", str(self.database),
-            "--campaign-id", "gate-fixture", "--retry-interrupted", "--", "--target", self.origin,
+            "--campaign-id", "gate-fixture", "--retry-interrupted", "--process-only",
+            "--", "--target", self.origin,
             "--depth", "0", "--max-pages", "1", "--output", str(output_path),
         ])
         self.assertEqual(result, 0)
@@ -249,6 +276,21 @@ class CampaignRequestGateTests(unittest.TestCase):
         self.assertGreater(state["requests_used"], 0)
         self.assertLessEqual(state["requests_used"], 60)
         self.assertEqual(state["steps"][0]["status"], "completed")
+
+    def test_registered_cli_defaults_to_os_network_isolation(self):
+        manifest_path = self.root / "strict-manifest.json"
+        manifest_path.write_text(json.dumps(self.manifest), encoding="utf-8")
+        isolated_result = {"tool": "web_crawl", "execution": {"return_code": 0}}
+        with patch.object(campaign, "execute_os_isolated_command",
+                          return_value=isolated_result) as isolated:
+            result = campaign.main([
+                "run-cli", "--manifest", str(manifest_path), "--step", "crawl",
+                "--confirm-target", self.origin, "--state-db", str(self.database),
+                "--campaign-id", "strict-default-fixture",
+            ])
+        self.assertEqual(result, 0)
+        isolated.assert_called_once()
+        self.assertEqual(isolated.call_args.args[0][0], "run-cli")
 
     def test_cloud_cli_campaign_mode_uses_only_the_scoped_http_probe(self):
         manifest = _manifest(self.origin, max_requests=1)
@@ -264,7 +306,7 @@ class CampaignRequestGateTests(unittest.TestCase):
             result = campaign.main([
                 "run-cli", "--manifest", str(manifest_path), "--step", "cloud",
                 "--confirm-target", self.origin, "--state-db", str(database),
-                "--campaign-id", "cloud-fixture", "--", "--domain", "127.0.0.1",
+                "--campaign-id", "cloud-fixture", "--process-only", "--", "--domain", "127.0.0.1",
                 "--output", str(output_path),
             ])
             self.assertEqual(result, 0)
@@ -285,7 +327,8 @@ class CampaignRequestGateTests(unittest.TestCase):
         result = campaign.main([
             "run-external", "--manifest", str(manifest_path), "--step", "external",
             "--confirm-target", self.origin, "--state-db", str(database),
-            "--campaign-id", "external-fixture", "--", "curl", "--silent", self.origin + "/",
+            "--campaign-id", "external-fixture", "--process-only", "--", "curl", "--silent",
+            self.origin + "/",
         ])
         self.assertEqual(result, 0)
         ledger = campaign.CampaignLedger(database, "external-fixture")
@@ -310,7 +353,7 @@ class CampaignRequestGateTests(unittest.TestCase):
             result = campaign.main([
                 "run-cli", "--manifest", str(manifest_path), "--step", "authz",
                 "--confirm-target", self.origin, "--state-db", str(database),
-                "--campaign-id", "authz-cli-fixture", "--", "--api-base", self.origin,
+                "--campaign-id", "authz-cli-fixture", "--process-only", "--", "--api-base", self.origin,
                 "--token", "fixture-token", "--output", str(output_path),
             ])
             self.assertEqual(result, 0)

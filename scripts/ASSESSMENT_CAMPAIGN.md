@@ -113,6 +113,24 @@ central gate module is not a supported campaign execution environment. Other reg
 operator note; the ledger stores only a digest of that note, not its text, and
 the attestation is not independent proof of the tool's outcome.
 
+`run-cli`, `run-external`, `run-step`, and `run-workflow` use host-enforced
+network containment by default. On Windows this requires a root-enabled WSL
+distro with `iproute2`, `nftables`, and `setpriv`; on Linux it requires root
+plus those tools. The runner creates a temporary network
+namespace and veth, installs a temporary nftables allowlist for the selected
+origin's resolved IPv4 addresses and explicitly declared network endpoints,
+and drops the scan process to `nobody` with no Linux capabilities. Other
+IPv4/IPv6 egress is dropped. The namespace, firewall table, and temporary host
+IP-forwarding change are cleaned up after the command; a lock serializes these
+temporary firewall changes. The Windows firewall is not changed. Hostnames are
+resolved before entering the namespace and pinned to those addresses; IPv6-only
+targets and loopback targets are not supported in this mode. If namespace setup
+or firewall installation fails, the command fails rather than falling back to
+the process-only gate.
+Use `--process-only` only when you explicitly need the weaker process-level
+gate, such as for a local loopback fixture that cannot be reached from a
+separate namespace.
+
 ```powershell
 python scripts/assessment_campaign.py run-step `
   --manifest targets/fixture/campaign.json `

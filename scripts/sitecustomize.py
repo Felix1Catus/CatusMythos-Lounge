@@ -15,7 +15,8 @@ import urllib.request
 from urllib.parse import urlsplit
 
 
-if os.environ.get("CATUS_CAMPAIGN_GATE_DB"):
+if (os.environ.get("CATUS_CAMPAIGN_GATE_DB")
+        and not os.environ.get("CATUS_CAMPAIGN_GATE_SUPERVISOR")):
     try:
         from campaign_request_gate import (
             CampaignGateError,
@@ -89,13 +90,25 @@ if os.environ.get("CATUS_CAMPAIGN_GATE_DB"):
         _origin_host, _origin_port, _origin_addresses = "", 0, set()
 
     _original_getaddrinfo = socket.getaddrinfo
-    _original_gethostbyname = socket.gethostbyname
-    _original_gethostbyname_ex = socket.gethostbyname_ex
-    _original_gethostbyaddr = socket.gethostbyaddr
     _original_connect = socket.socket.connect
     _original_connect_ex = socket.socket.connect_ex
     _original_sendto = socket.socket.sendto
     _original_sendmsg = getattr(socket.socket, "sendmsg", None)
+
+    try:
+        _origin_addresses.update(
+            _normalize_network_host(item)
+            for item in json.loads(os.environ.get("CATUS_CAMPAIGN_GATE_ORIGIN_ADDRESSES", "[]"))
+            if isinstance(item, str)
+        )
+    except (TypeError, ValueError, json.JSONDecodeError):
+        pass
+
+    try:
+        _endpoint_addresses = json.loads(
+            os.environ.get("CATUS_CAMPAIGN_GATE_ENDPOINT_ADDRESSES", "{}"))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        _endpoint_addresses = {}
 
     if (_origin_host and not _origin_addresses
             and "_campaign_gate_import_error" not in globals()):
@@ -145,19 +158,41 @@ if os.environ.get("CATUS_CAMPAIGN_GATE_DB"):
             requested_port = _port_number(port)
             protocol = "udp" if type == socket.SOCK_DGRAM else "tcp"
             if normalized == _origin_host and (requested_port is None or requested_port == _origin_port):
-                pass
-            elif requested_port is None or not network_endpoint_is_scoped(
-                    normalized, requested_port, protocol):
+                addresses = _origin_addresses
+            elif (requested_port is not None
+                  and network_endpoint_is_scoped(normalized, requested_port, protocol)):
+                addresses = {_normalize_network_host(item) for item in
+                             _endpoint_addresses.get(normalized, []) if isinstance(item, str)}
+                if not addresses:
+                    return _original_getaddrinfo(host, port, family, type, proto, flags)
+            else:
                 _deny_network_escape()
+            numeric_results = []
+            for address in addresses:
+                try:
+                    numeric_results.extend(_original_getaddrinfo(
+                        address, port, family, type, proto, flags | socket.AI_NUMERICHOST))
+                except OSError:
+                    continue
+            if not numeric_results:
+                _deny_network_escape()
+            return numeric_results
         return _original_getaddrinfo(host, port, family, type, proto, flags)
 
     def _guard_gethostbyname(host):
-        _guard_getaddrinfo(host, _origin_port)
-        return _original_gethostbyname(host)
+        results = _guard_getaddrinfo(host, _origin_port, family=socket.AF_INET,
+                                     type=socket.SOCK_STREAM)
+        if not results:
+            raise OSError("campaign origin has no IPv4 address")
+        return results[0][4][0]
 
     def _guard_gethostbyname_ex(host):
-        _guard_getaddrinfo(host, _origin_port)
-        return _original_gethostbyname_ex(host)
+        results = _guard_getaddrinfo(host, _origin_port, family=socket.AF_INET,
+                                     type=socket.SOCK_STREAM)
+        addresses = sorted({row[4][0] for row in results})
+        if not addresses:
+            raise OSError("campaign origin has no IPv4 address")
+        return str(host), [], addresses
 
     def _guard_gethostbyaddr(address):
         _deny_network_escape()
