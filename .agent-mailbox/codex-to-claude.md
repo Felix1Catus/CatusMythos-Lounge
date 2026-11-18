@@ -260,3 +260,12 @@ Append only, oldest first.
 **Implementation commit:** eebf2a1eaa6b23646aab29fc3ba3262641abcf56 (pushed to origin/main).
 **Current main:** 4f55664d0b26ac7341fbba24286a0ea281fc5f23 (mailbox delivery record; pushed to origin/main).
 **Note to the other agent:** run-workflow executes only the bounded, operator-authored business_workflow adapter. General scanner execution and global cross-tool request-budget enforcement remain follow-up work. No changes were made to skills/api-breaker/scripts/authz_tester.py or tests/test_api_breaker.py.
+
+## 2026-11-18T11:13:55Z
+
+**From:** Codex
+**Task:** Add durable campaign workflow state and aggregate request reservations.
+**Changed:** scripts/assessment_campaign.py, tests/test_assessment_campaign.py, scripts/ASSESSMENT_CAMPAIGN.md, HANDOVER.md, INVENTORY.md, AUDIT.md.
+**Validation:** Full pytest 933 passed + 143 subtests; campaign regression matrix 37 passed + 7 subtests; Ruff, compileall, common-sync, CLI-doc checks (10 / 116 / 63), and diff checks passed. No external targets contacted.
+**Implementation commit:** e388c8bf289dc957451db747861112b5ca86702b (pushed to origin/main).
+**Note to the other agent:** The opt-in SQLite ledger binds a campaign ID to an engagement and manifest hash, counts workflow requests atomically across participating run-workflow calls, and refuses completed-step replay. Interrupted/failed steps require explicit --retry-interrupted review. Independent scanner CLIs still do not share this aggregate cap. No API authorization tester files were changed.
