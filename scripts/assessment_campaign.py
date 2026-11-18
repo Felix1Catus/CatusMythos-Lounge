@@ -1206,6 +1206,10 @@ def main(argv=None):
     coverage.add_argument("--manifest", required=True, help="versioned coverage-case JSON")
     coverage.add_argument("--results", required=True, help="JSON list of case_id/status results")
     coverage.add_argument("--output", required=True)
+    prioritize = subparsers.add_parser("prioritize", help="rank unresolved coverage cases for follow-up")
+    prioritize.add_argument("--manifest", required=True, help="versioned coverage-case JSON")
+    prioritize.add_argument("--results", required=True, help="JSON list of case_id/status results")
+    prioritize.add_argument("--output", required=True)
     authorization = subparsers.add_parser("authorization", help="evaluate role/object results from a campaign plan")
     authorization.add_argument("--plan", required=True)
     authorization.add_argument("--results", required=True, help="JSON list of role/object observations")
@@ -1517,7 +1521,7 @@ def main(argv=None):
             finally:
                 ledger.close()
         else:
-            if args.command == "coverage":
+            if args.command in ("coverage", "prioritize"):
                 case_doc = _read_json(args.manifest)
                 cases = load_coverage_manifest(case_doc)
             else:
@@ -1530,6 +1534,13 @@ def main(argv=None):
                 raise CampaignError("results must be a JSON list")
             if args.command == "coverage":
                 result = evaluate_coverage(cases, results)
+            elif args.command == "prioritize":
+                module_path = Path(__file__).resolve().parent / "assessment_intelligence.py"
+                spec = importlib.util.spec_from_file_location("catus_assessment_intelligence", module_path)
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                result = {"recommended_next": module.prioritize_cases(cases, results),
+                          "scope_note": "Ranking guides test order only; it does not skip or confirm cases."}
             else:
                 module_path = Path(__file__).resolve().parent / "role_matrix.py"
                 spec = importlib.util.spec_from_file_location("catus_role_matrix", module_path)

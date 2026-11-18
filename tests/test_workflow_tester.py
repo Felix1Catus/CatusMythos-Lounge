@@ -172,6 +172,17 @@ class TestLinearChains(unittest.TestCase):
 
 
 class TestDiscoverWorkflows(unittest.TestCase):
+    def test_browser_report_handoff_is_exact_origin_and_builds_form_edges(self):
+        report = {"pages": [
+            {"url": "https://t.test/checkout/start", "forms": [
+                {"action": "https://t.test/checkout/review", "method": "POST"}]},
+            {"url": "https://evil.test/checkout/confirm", "forms": []},
+        ]}
+        crawl = wf.browser_report_to_crawl(report, "https://t.test")
+        self.assertEqual(len(crawl["forms"]), 1)
+        self.assertEqual(crawl["forms"][0]["method"], "POST")
+        self.assertEqual(len(crawl["endpoints"]), 1)
+
     def test_combines_both_signals_when_distinct(self):
         # form_chain finds a (step1, step2, step3) checkout flow; the
         # endpoints list separately contains an unrelated signup flow that

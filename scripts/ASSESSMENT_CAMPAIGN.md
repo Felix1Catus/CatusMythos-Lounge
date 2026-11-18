@@ -249,6 +249,40 @@ same case has both a confirmed and negative result, it is marked `conflict`.
 The report also includes `coverage_by_dimension` summaries for tool, role, and
 configuration, so a high total can be checked for missing roles or test types.
 
+Use `prioritize` to rank unresolved cases for follow-up. Candidate, blocked,
+authorization, and stateful workflow cases receive transparent ranking reasons;
+the command does not change case status or skip tests:
+
+```powershell
+python scripts/assessment_campaign.py prioritize `
+  --manifest targets/fixture/coverage.json `
+  --results targets/fixture/coverage-results.json `
+  --output targets/fixture/next-tests.json
+```
+
+Import saved crawler, API discovery, or browser audit JSON into the shared
+engagement knowledge store. The importer keeps same-origin route paths,
+observed methods, and auth-required flags; it strips query strings and drops
+off-origin routes. Facts expire after 15 minutes and remain test leads, not
+confirmed findings:
+
+```powershell
+python scripts/target_knowledge.py `
+  --db targets/fixture/knowledge.sqlite --engagement fixture `
+  --target https://app.example.test `
+  --ingest targets/fixture/browser-audit.json
+```
+
+Browser audit reports now retain same-origin links and form actions/methods
+without field values or query strings. Workflow discovery can use these saved
+reports with an explicit origin boundary:
+
+```powershell
+python skills/webapp-exploit-hunter/scripts/workflow_tester.py `
+  --browser-audit targets/fixture/browser-audit.json `
+  --api-base https://app.example.test
+```
+
 ## Current v1 boundary
 
 The planner validates and emits the ordered plan. The fingerprint, API

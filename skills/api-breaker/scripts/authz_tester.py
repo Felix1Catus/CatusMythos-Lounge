@@ -698,6 +698,22 @@ def main():
         for ep in input_data.get("openapi_endpoints", []):
             endpoints.append(ep)
 
+    # Endpoint observations imported from crawler/browser runs share the same
+    # engagement store as API discovery. Treat them as test leads, not proof.
+    if knowledge is not None:
+        try:
+            inventory = knowledge.query(base_url, kind="api_inventory", key="observed_endpoints")
+            for row in inventory:
+                for item in row.get("value", []):
+                    path = item.get("path") if isinstance(item, dict) else None
+                    if isinstance(path, str) and path.startswith("/") and not any(
+                            isinstance(existing, dict) and existing.get("path") == path
+                            for existing in endpoints):
+                        endpoints.append({"path": path, "url": urllib.parse.urljoin(base_url, path),
+                                          "methods_tested": item.get("methods_tested", [])})
+        except (OSError, ValueError) as exc:
+            parser.error("could not reuse selected target knowledge: {}".format(exc))
+
     if not base_url:
         parser.error("--api-base or --input with base_url is required")
     validated_base_url = same_origin_url(base_url, base_url)

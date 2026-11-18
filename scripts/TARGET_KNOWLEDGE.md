@@ -23,6 +23,12 @@ python3 scripts/target_knowledge.py --db targets/assessment/knowledge.sqlite --e
 python3 scripts/target_knowledge.py --db targets/assessment/knowledge.sqlite --engagement assessment --target https://app.example.test --kind technology --history
 ```
 
+Import a saved crawler, API discovery, or browser audit report into endpoint
+knowledge with `--ingest PATH`. The importer strips queries, keeps only routes
+on the supplied exact origin, and stores sanitized method/auth metadata for 15
+minutes. The result is advisory input for later tests, not a vulnerability
+conclusion.
+
 Targets must be credential-free HTTP(S) URLs. Scheme, IDNA hostname, and
 effective port define an exact origin; subdomains and ports never inherit
 facts. Engagement names partition records even within one database. Facts
@@ -40,7 +46,7 @@ migrated in place, and the current query contract remains unchanged. Unknown
 schema versions or unreadable/corrupt databases fail explicitly instead of
 silently disabling coordination or resetting state.
 
-## Eight integration points
+## Integrated pipeline points
 
 1. `recon-dominator/scripts/tech_fingerprint.py`: publishes technologies,
    advertised component versions, and positive WAF fingerprints (1-hour TTL).
@@ -89,6 +95,10 @@ silently disabling coordination or resetting state.
 8. `webapp-exploit-hunter/scripts/idor_tester.py`: displays fresh matching
    auth/rate observations in its output as advisory context. It does not skip
    or alter the requested IDOR probes.
+9. `scripts/assessment_intelligence.py` imports saved crawler, API discovery,
+   and browser audit routes after exact-origin filtering. The shared API
+   inventory is available to later authz tests as a test lead. Imported
+   observations expire after 15 minutes and never establish access control.
 
 Auth/rate observations expire after 15 minutes. Auth role labels describe only
 the operator-declared test identity; they do not independently establish that

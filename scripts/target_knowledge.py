@@ -3,6 +3,7 @@
 import argparse
 import email.utils
 import hashlib
+import importlib.util
 import json
 import math
 import re
@@ -540,14 +541,17 @@ def main():
     parser.add_argument('--kind', choices=KINDS)
     parser.add_argument('--include-expired', action='store_true', help='Inspection only; expired facts are never reused')
     parser.add_argument('--history', action='store_true', help='Inspect bounded local history, including expired and superseded observations')
+    parser.add_argument('--ingest', metavar='PATH', help='Ingest saved crawler, API discovery, or browser audit JSON as sanitized endpoint knowledge')
     transfer = parser.add_mutually_exclusive_group()
     transfer.add_argument('--export', metavar='PATH', help='Write an allowlisted offline bundle for --target')
     transfer.add_argument('--import', dest='import_path', metavar='PATH', help='Import a validated offline bundle for --target')
     args = parser.parse_args()
     try:
         store = KnowledgeStore(args.db, args.engagement)
-        if args.history and (args.export or args.import_path):
-            parser.error('--history cannot be combined with --export or --import')
+        if args.history and (args.export or args.import_path or args.ingest):
+            parser.error('--history cannot be combined with export, import, or ingest')
+        if args.ingest and (args.export or args.import_path):
+            parser.error('--ingest cannot be combined with export or import')
         if args.export:
             bundle = store.export_bundle(args.target)
             encoded = json.dumps(bundle, indent=2, allow_nan=False).encode('utf-8')
@@ -564,6 +568,21 @@ def main():
             imported = store.import_bundle(bundle, args.target)
             print(json.dumps({'imported': imported, 'engagement': args.engagement,
                               'origin': canonical_origin(args.target)}))
+        elif args.ingest:
+            source = Path(args.ingest)
+            if source.stat().st_size > MAX_BUNDLE_BYTES:
+                parser.error('observation input exceeds 10 MiB')
+            document = json.loads(source.read_text(encoding='utf-8'))
+            module_path = Path(__file__).resolve().with_name('assessment_intelligence.py')
+            spec = importlib.util.spec_from_file_location('catus_assessment_intelligence', module_path)
+            intelligence = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(intelligence)
+            inventory = intelligence.normalize_observations(document, canonical_origin(args.target))
+            if inventory:
+                store.observe(args.target, 'api_inventory', 'observed_endpoints', inventory,
+                              'assessment_intelligence/import', confidence='observed', ttl=900)
+            print(json.dumps({'ingested': len(inventory), 'engagement': args.engagement,
+                              'origin': canonical_origin(args.target), 'ttl_seconds': 900}))
         elif args.history:
             print(json.dumps(store.history(args.target, args.kind), indent=2))
         else:

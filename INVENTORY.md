@@ -5,6 +5,19 @@ dependencies, test coverage, scope controls, integrations, overlaps, and the
 clearest coverage gaps. This is a map for prioritizing deeper per-skill review;
 it is not itself a line-by-line doc-vs-code audit (that happens per skill).
 
+## 2026-11-18 addendum — discovery handoff and evidence-led execution
+
+Saved crawl, API discovery, and browser reports can be imported as bounded,
+same-origin endpoint observations through `target_knowledge.py --ingest`.
+Authorization testing can consume those learned routes; browser links and form
+actions can seed workflow discovery. `assessment_campaign.py prioritize`
+orders unresolved coverage cases by candidate status, blocked setup, role/object
+evidence, and stateful-flow evidence without suppressing any test. These
+integrations reduce repeated discovery and improve follow-up selection, but do
+not replace valid role credentials, object ownership evidence, or a labeled
+fixture benchmark. A before/after detection baseline is still needed to measure
+accuracy improvement.
+
 ## 2026-11-18 addendum — default OS network containment
 
 Registered campaign scanner commands run behind a temporary nftables IPv4

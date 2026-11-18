@@ -4,6 +4,33 @@ Living status note for the ongoing CatusMythos-Lounge improvement work. Keep it
 current; it records what has and has **not** been deeply reviewed so later work
 doesn't mistake uneven coverage for uniform coverage.
 
+## 2026-11-18 addendum — application behavior handoff and test prioritization
+
+Added `scripts/assessment_intelligence.py` to normalize saved crawler, API
+discovery, and browser reports into short-lived, same-origin endpoint knowledge.
+The importer removes query/fragment data, drops out-of-origin routes, bounds
+the inventory, and retains only status, methods, content type/API type, and
+auth-required observations. `target_knowledge.py --ingest` imports that
+inventory into the selected engagement. `authz_tester.py` can add those learned
+routes to its test leads when `--knowledge-db` is enabled; it still relies on
+its existing identity/object evidence checks before reporting access findings.
+
+Browser audit output now carries bounded same-origin links and form action,
+method, and field-name/type metadata, with no field values or URL query data.
+`workflow_tester.py --browser-audit ... --api-base ...` converts that browser
+map into its existing workflow discovery graph. The campaign `prioritize`
+command orders unresolved labeled cases using explicit candidate/blocked,
+authorization, and stateful-workflow signals; it never changes case results,
+confirms findings, or skips tests. The existing coverage evaluator remains the
+benchmark metric path and continues to require explicit gold labels/provenance.
+
+Offline regression: **126 tests + 34 subtests** across assessment intelligence,
+browser audit, workflow discovery, and target knowledge. Full suite: **966
+tests + 143 subtests**. Ruff, compileall, common-sync, CLI-docs (**10 docs /
+117 references / 63 CLIs**) passed. No live target was contacted. A dedicated
+vulnerable fixture application and a
+before/after detection-rate baseline remain required to quantify accuracy gains.
+
 ## 2026-11-18 addendum — WSL network namespace isolation
 
 Campaign scan commands (`run-cli`, `run-external`, `run-step`, and
