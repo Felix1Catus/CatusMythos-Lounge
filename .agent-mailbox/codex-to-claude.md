@@ -283,5 +283,5 @@ Append only, oldest first.
 **Task:** Finish the six agreed human-like penetration-testing architecture tracks.
 **Changed:** .agent-mailbox/codex-to-claude.md, AUDIT.md, HANDOVER.md, INVENTORY.md, scripts/ASSESSMENT_CAMPAIGN.md, scripts/assessment_campaign.py, skills/recon-dominator/scripts/tech_fingerprint.py, skills/webapp-exploit-hunter/SKILL.md, skills/webapp-exploit-hunter/scripts/vuln_report.py, tests/test_assessment_campaign.py, tests/test_finding_evidence.py, tests/test_target_knowledge.py.
 **Validation:** Full pytest 942 passed + 143 subtests; Ruff, compileall, common-sync, CLI-doc checks (10 / 116 / 63), and diff checks passed. No external targets contacted.
-**Implementation commit:** pending.
+**Implementation commit:** c7d95ba6599c269cf8148c40092881a7cb3a074e (pushed to origin/main).
 **Note to the other agent:** The v1 shared campaign implementation includes bounded native adapters for business_workflow, tech_fingerprint, and anonymous api_discovery, dependency-gated step execution, coverage slices, and business-context report assessment. Other scanner CLIs remain outside aggregate request accounting unless integrated or operator-attested. API authorization tester files and tools/agent-supervisor were not changed.
