@@ -140,43 +140,31 @@ Alternatively, in a Claude Code session run:
 Choose the install scope, then start or reload the session. See the
 [Claude Code plugin installation guide](https://code.claude.com/docs/en/plugins/install).
 
-### Codex skills
+### Codex plugin
 
-This repository does not currently include a native Codex plugin manifest.
-Codex can load its individual skills from the standard project-local
-`.agents/skills/` directory ([Codex skill installation reference](https://developers.openai.com/api/reference/cli)).
-From the repository root in PowerShell:
-
-```powershell
-New-Item -ItemType Directory -Force .agents\skills | Out-Null
-Copy-Item .\skills\* .\.agents\skills\ -Recurse -Force
-```
-
-Or in Bash:
-
-```bash
-mkdir -p .agents/skills
-cp -R skills/. .agents/skills/
-```
-
-Open the repository as the Codex project so its `scripts/`, `doctrine/`, and
-other shared files remain available, then start a new session. For the full
-campaign CLI, run `scripts/assessment_campaign.py assess` from the repository
-root; copied skills alone do not install campaign infrastructure, hooks, or the
-`swarm-operator` agent entrypoint. Some bundled skill instructions still read
-`CLAUDE_PLUGIN_ROOT`; set it to this checkout when invoking those instructions
-from Codex:
+This repository includes a Codex-compatible plugin manifest and a local
+marketplace entry. From the repository root, register the checkout and install
+the plugin:
 
 ```powershell
-$env:CLAUDE_PLUGIN_ROOT = (Resolve-Path .).Path
+codex plugin marketplace add .
+codex plugin add catusmythos-lounge@catusmythos-lounge-local
 ```
 
-```bash
-export CLAUDE_PLUGIN_ROOT="$PWD"
-```
+Restart Codex or start a new session after installation. The plugin installs
+the skills together with their bundled `skills/<skill-name>/scripts/` and
+supporting files. Open this repository as the Codex project when a workflow
+uses shared repository data or the campaign runner. For the full campaign CLI,
+run `scripts/assessment_campaign.py assess` from the repository root; the
+plugin package does not include Claude Code hooks or the `swarm-operator`
+agent entrypoint. Codex uses the plugin's local executor for workflows that
+run bundled scripts.
 
-The full campaign runner still runs from the repository root; copying skills
-alone does not install the shared campaign scripts or doctrine files.
+You can confirm the install with:
+
+```powershell
+codex plugin list
+```
 
 ### Dependency setup
 

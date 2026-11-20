@@ -1,0 +1,20 @@
+{
+  "name": "catusmythos-lounge-local",
+  "interface": {
+    "displayName": "CatusMythos Lounge (local checkout)"
+  },
+  "plugins": [
+    {
+      "name": "catusmythos-lounge",
+      "source": {
+        "source": "local",
+        "path": "./"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer tools"
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "catusmythos-lounge",
+  "version": "0.3.0",
+  "description": "Authorized web, API, cloud, and AI application security assessment skills with bundled scripts.",
+  "author": {
+    "name": "Felix Catus",
+    "url": "https://github.com/Felix1Catus"
+  },
+  "homepage": "https://github.com/Felix1Catus/CatusMythos-Lounge",
+  "repository": "https://github.com/Felix1Catus/CatusMythos-Lounge",
+  "license": "MIT",
+  "keywords": ["security", "pentest", "web-security", "api-security", "cloud-security", "appsec"],
+  "extensions": {
+    "com.openai": {
+      "requires_local_executor": true,
+      "interface": {
+        "displayName": "CatusMythos Lounge",
+        "shortDescription": "Authorized application security assessment skills",
+        "longDescription": "A collection of security assessment skills and bundled scripts for authorized web, API, cloud, and AI application testing.",
+        "developerName": "Felix Catus",
+        "category": "Developer tools",
+        "websiteURL": "https://github.com/Felix1Catus/CatusMythos-Lounge"
+      }
+    }
+  }
+}
