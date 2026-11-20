@@ -121,18 +121,64 @@ protocols.
 
 ## Installation
 
-Clone the repository and run the dependency preflight from its root:
+### Claude Code plugin
+
+The repository includes a native plugin manifest and marketplace catalog. Add
+the marketplace, install the plugin, then start a new session:
 
 ```bash
-git clone https://github.com/Felix1Catus/CatusMythos-Lounge.git
-cd CatusMythos-Lounge
+claude plugin marketplace add Felix1Catus/CatusMythos-Lounge
+claude plugin install catusmythos-lounge@catusmythos-lounge-marketplace
+```
+
+### Codex skills
+
+This repository's native plugin package is for Claude Code. Codex can load its
+skills from the standard project-local `.agents/skills/` directory. From the
+repository root in PowerShell:
+
+```powershell
+New-Item -ItemType Directory -Force .agents\skills | Out-Null
+Copy-Item .\skills\* .\.agents\skills\ -Recurse -Force
+```
+
+Or in Bash:
+
+```bash
+mkdir -p .agents/skills
+cp -R skills/. .agents/skills/
+```
+
+Open the repository as the Codex project so its `scripts/`, `doctrine/`, and
+other shared files remain available, then start a new session. Codex discovers
+project skills under `.agents/skills/` ([Codex skill installation reference](https://developers.openai.com/api/reference/cli)).
+The existing skill instructions also use `CLAUDE_PLUGIN_ROOT` as the plugin
+root variable; set it to this checkout when running those instructions in
+Codex:
+
+```powershell
+$env:CLAUDE_PLUGIN_ROOT = (Resolve-Path .).Path
+```
+
+```bash
+export CLAUDE_PLUGIN_ROOT="$PWD"
+```
+
+The full campaign runner still runs from the repository root; copying skills
+alone does not install the shared campaign scripts or doctrine files.
+
+### Dependency setup
+
+After installing the plugin or skills, clone/open the repository and run the
+preflight from its root:
+
+```bash
 python3 scripts/bootstrap.py --strict
 ```
 
-The repository contains the `agents/`, `skills/`, and `scripts/` entrypoints.
-Load it with the plugin or skill mechanism supported by your agent host, or
-run the scripts directly. The strict preflight installs/verifies the complete
-managed tool stack and exits nonzero when a required dependency is unavailable.
+The strict preflight installs/verifies the complete managed tool stack and
+exits nonzero when a required dependency is unavailable. For one focused task,
+use a smaller preflight instead of installing every optional recon tool:
 
 For one focused task, use a smaller preflight instead of installing every
 optional recon tool:
