@@ -1383,13 +1383,16 @@ def _run_assessment(manifest_path, state_database, campaign_id, output_path,
                        "--step", step["id"], "--confirm-target", step["origin"],
                        "--state-db", str(Path(state_database).expanduser().resolve()),
                        "--campaign-id", campaign_id, "--output", str(wrapper_path)]
-            browser_uses_context_gate = step["tool"] == "web_browser" and os.name == "nt"
+            browser_uses_context_gate = step["tool"] == "web_browser" and os.name == "nt" and not process_only
+            step_isolation = ("browser_context_route" if browser_uses_context_gate else
+                              "process_only_explicit" if process_only else "os_network_namespace")
             if process_only or browser_uses_context_gate:
                 command.append("--process-only")
             else:
                 command.extend(["--wsl-distro", distro])
             command.extend(["--", *tool_args, "--output", str(artifact_path)])
         else:
+            step_isolation = "process_only_explicit" if process_only else "os_network_namespace"
             subcommand = "run-workflow" if step["tool"] == "business_workflow" else "run-step"
             command = [sys.executable, str(Path(__file__).resolve()), subcommand,
                        "--manifest", str(Path(manifest_path).expanduser().resolve()),
@@ -1437,6 +1440,7 @@ def _run_assessment(manifest_path, state_database, campaign_id, output_path,
         row.update({"status": step_status,
                     "requests_sent": execution.get("requests_sent"),
                     "request_budget": execution.get("request_budget", step["max_requests"]),
+                    "network_isolation": step_isolation,
                     "finding_count": len(findings), "finding_types": finding_types,
                     "artifact": str(artifact_path.relative_to(artifact_dir.parent))})
         if failure:

@@ -33,7 +33,9 @@ artifact, or fails makes the assessment `incomplete` and returns a nonzero
 status; this never means the target is safe. API authz uses `--role-env` so
 tokens come from environment variables rather than argv. Browser checks use
 their per-step request cap plus the campaign ledger and keep form writes off by
-default.
+default. On Windows, the managed Playwright browser uses the browser auditor's
+request-routing sandbox and is labeled `browser_context_route` in the summary;
+other tools still use the OS namespace unless `--process-only` is selected.
 
 ## Plan a campaign
 
