@@ -233,6 +233,15 @@ roles in a larger hierarchy, not the two you happened to provision -- use
 repeatable `--role NAME:TOKEN` instead, declared in ascending privilege order
 (lowest first):
 
+For campaign/orchestrated runs, use `--role-env NAME:ENV_VAR` so tokens are
+read from the process environment and never appear in command-line arguments
+or findings:
+
+```bash
+python3 scripts/authz_tester.py --api-base {api_url} --input {schema_file} \
+  --role anonymous: --role-env member:APP_MEMBER_TOKEN --role-env admin:APP_ADMIN_TOKEN
+```
+
 ```bash
 python3 scripts/authz_tester.py --input {schema_file} --api-base {api_url} \
   --role anonymous: --role viewer:{viewer_token} --role editor:{editor_token} --role admin:{admin_token}

@@ -685,6 +685,121 @@ class CoverageManifestTests(unittest.TestCase):
             self.assertIn("context only", target["knowledge_advisory"])
             self.assertEqual(len(plan["steps"]), len(manifest()["steps"]))
 
+    def test_assess_runs_core_steps_with_sanitized_coverage_summary(self):
+        class ExposureHandler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                if self.path == "/":
+                    content_type, body = "text/html", b"<html>safe root</html>"
+                elif self.path == "/.env":
+                    content_type, body = "text/plain", b"DB_PASSWORD=fixture-secret-value\n"
+                else:
+                    self.send_error(404)
+                    return
+                self.send_response(200)
+                self.send_header("Content-Type", content_type)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, fmt, *args):
+                pass
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), ExposureHandler)
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(worker.join, 2)
+        self.addCleanup(server.shutdown)
+        base = "http://127.0.0.1:{}/".format(server.server_address[1])
+        value = {"schema_version": 1, "engagement": "assess-local-fixture",
+                 "scope": {"origins": [base], "request_budget": 10},
+                 "targets": [{"id": "app", "url": base,
+                              "roles": [{"name": "anonymous"}]}],
+                 "steps": [{"id": "exposure", "tool": "web_exposure", "target": "app",
+                            "max_requests": 10}]}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest_path = root / "campaign.json"
+            report_path = root / "assessment.json"
+            manifest_path.write_text(json.dumps(value), encoding="utf-8")
+            result = campaign.main(["assess", "--manifest", str(manifest_path),
+                                     "--state-db", str(root / "ledger.sqlite"),
+                                     "--campaign-id", "assess-local-fixture",
+                                     "--output", str(report_path), "--process-only"])
+            self.assertEqual(result, 0)
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            self.assertEqual(report["status"], "complete")
+            self.assertEqual(report["steps"][0]["finding_types"], ["exposed_secret_configuration"])
+            self.assertNotIn("fixture-secret-value", json.dumps(report))
+
+    def test_assess_marks_missing_prerequisite_artifact_incomplete(self):
+        value = {"schema_version": 1, "engagement": "assess-missing-input",
+                 "scope": {"origins": ["https://app.example.test"], "request_budget": 2},
+                 "targets": [{"id": "app", "url": "https://app.example.test/",
+                              "roles": [{"name": "anonymous"}]}],
+                 "steps": [{"id": "sqli", "tool": "web_sqli", "target": "app",
+                            "max_requests": 2}]}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest_path = root / "campaign.json"
+            report_path = root / "assessment.json"
+            manifest_path.write_text(json.dumps(value), encoding="utf-8")
+            result = campaign.main(["assess", "--manifest", str(manifest_path),
+                                     "--state-db", str(root / "ledger.sqlite"),
+                                     "--campaign-id", "assess-missing-input",
+                                     "--output", str(report_path), "--process-only"])
+            self.assertEqual(result, 2)
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            self.assertEqual(report["status"], "incomplete")
+            self.assertEqual(report["steps"][0]["status"], "blocked")
+            self.assertEqual(report["coverage"]["completed_required_steps"], 0)
+
+    def test_core_profile_requires_each_mandatory_stage_and_both_test_phases(self):
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                body = b"<html><body>safe local app</body></html>"
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *_args):
+                pass
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(worker.join, 2)
+        self.addCleanup(server.shutdown)
+        origin = "http://127.0.0.1:{}/".format(server.server_address[1])
+        value = {"schema_version": 1, "assessment_profile": "core_web_api_v1",
+                 "engagement": "core-profile-gap",
+                 "scope": {"origins": [origin], "request_budget": 10},
+                 "targets": [{"id": "app", "url": origin,
+                              "roles": [{"name": "anonymous"},
+                                        {"name": "user-a", "credential_env": "USER_A_TOKEN",
+                                         "credential_header": "Authorization"},
+                                        {"name": "user-b", "credential_env": "USER_B_TOKEN",
+                                         "credential_header": "Authorization"}]}],
+                 "steps": [{"id": "public-files", "tool": "web_exposure", "target": "app",
+                            "role": "anonymous", "max_requests": 10}]}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest_path = root / "campaign.json"
+            output_path = root / "assessment.json"
+            manifest_path.write_text(json.dumps(value), encoding="utf-8")
+            result = campaign._run_assessment(
+                manifest_path, root / "ledger.sqlite", "core-profile-gap", output_path,
+                process_only=True)
+            self.assertEqual(result["assessment_profile"], "core_web_api_v1")
+            self.assertEqual(result["status"], "incomplete")
+            blocked_tools = {row["tool"] for row in result["steps"] if row["status"] == "blocked"}
+            self.assertIn("web_sqli", blocked_tools)
+            self.assertIn("api_authz", blocked_tools)
+            self.assertTrue(result["coverage"]["incomplete_required_steps"] > 0)
+
 
 if __name__ == "__main__":
     unittest.main()

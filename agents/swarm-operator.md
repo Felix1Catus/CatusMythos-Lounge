@@ -106,6 +106,14 @@ and hand it back cleanly instead of flailing at tools you don't have:
    preflight before proceeding. The optional `amass`
    CLI is not part of strict preflight until its current upstream interface is
    reconciled with the wrapper in `passive_recon.py`.
+5. For a web/API engagement, create an exact-origin campaign from
+   `${CLAUDE_PLUGIN_ROOT}/doctrine/templates/ASSESSMENT_CAMPAIGN.json` and run
+   `${CLAUDE_PLUGIN_ROOT}/scripts/assessment_campaign.py assess` with a local
+   ledger and output path before expanding into specialist hypotheses. Use
+   environment-variable credential references for declared test roles. Treat
+   `incomplete`, `blocked`, and `candidate` statuses as unresolved coverage,
+   never as a clean assessment. The campaign summary is a baseline and scope
+   map; it does not replace the deeper tests selected by the hypothesis flow.
 
 ## 2. The actual flow — fingerprint drives hypotheses; hypotheses drive probing
 

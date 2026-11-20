@@ -14,7 +14,8 @@ or update the report when intentionally testing newer images.
 
 - DVWA: official [DVWA project](https://github.com/digininja/DVWA), compose
   deployment on `127.0.0.1:4280`; login `admin/password`; initialize the DB,
-  and set security to `low` for the SQLi/XSS cases.
+  and set security to `low` for the SQLi/XSS cases. XSS requires both the
+  reflection candidate and a Playwright execution marker.
 - Juice Shop: official [OWASP project](https://owasp.org/projects/juice-shop),
   app on `127.0.0.1:3000`.
 - crAPI: official [OWASP project](https://github.com/OWASP/crAPI), compose
@@ -50,12 +51,12 @@ changes.
 
 ## Recorded findings and limits
 
-The 2026-11-18 run confirmed DVWA low-security error-based SQLi and crAPI's
+The 2026-11-19 rerun confirmed DVWA low-security error-based SQLi, DVWA
+reflected XSS in the isolated browser, and crAPI's
 public secret-bearing `/.env` file. The new exposure verifier did not report
 Juice Shop's `/.env` or `/.git/HEAD` routes because both returned the exact
-HTML SPA shell. DVWA reflected XSS was surfaced as a candidate but not counted
-confirmed because browser execution was not checked. Juice Shop's API
-discovery reached its 240-request cap and is marked partial; crAPI API
+HTML SPA shell. Juice Shop API discovery reached its 240-request cap and is
+marked partial; crAPI API
 discovery completed at 72 requests but found only three routes in its
 anonymous pass. The broad crawl's 200 responses are leads, not confirmed
 endpoints or vulnerabilities.

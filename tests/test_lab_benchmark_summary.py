@@ -12,7 +12,7 @@ summary = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(summary)
 
 
-def test_summary_counts_only_proven_positive_negative_and_keeps_xss_unresolved(tmp_path):
+def test_summary_requires_both_reflection_and_browser_execution_for_xss(tmp_path):
     artifacts = {
         "dvwa-sqli-campaign-findings.json": {
             "meta": {"parameters_tested": 2},
@@ -21,6 +21,9 @@ def test_summary_counts_only_proven_positive_negative_and_keeps_xss_unresolved(t
         "dvwa-xss-campaign-findings.json": {
             "meta": {"parameters_tested": 1},
             "findings": [{"type": "reflected_xss_candidate", "validated": False}],
+        },
+        "dvwa-xss-browser.json": {
+            "findings": [{"type": "dom_xss", "confidence": "confirmed"}],
         },
         "crapi-exposure.json": {
             "meta": {"paths_tested": 9},
@@ -33,10 +36,10 @@ def test_summary_counts_only_proven_positive_negative_and_keeps_xss_unresolved(t
 
     result = summary.summarize_lab_artifacts(tmp_path)
     metrics = result["labeled_metrics"]
-    assert metrics["true_positive"] == 2
+    assert metrics["true_positive"] == 3
     assert metrics["true_negative"] == 1
     assert metrics["false_positive"] == 0
     assert metrics["false_negative"] == 0
-    assert metrics["unresolved_labeled"] == 1
+    assert metrics["unresolved_labeled"] == 0
     xss = next(case for case in result["cases"] if case["id"] == "dvwa-low-reflected-xss")
-    assert xss["status"] == "candidate"
+    assert xss["status"] == "confirmed"

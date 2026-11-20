@@ -13,6 +13,17 @@
       "gold_source": "tests/fixtures/assessment_benchmark_app.py: intentional unguarded GET /api/orders/{id}"
     },
     {
+      "id": "fixture-anonymous-api-object-disclosure",
+      "behavior": "An unauthenticated caller can read an owner-tagged API object",
+      "tool": "api_authz",
+      "role": "anonymous",
+      "configuration": "three-role-loopback-fixture",
+      "preconditions": ["alice can enumerate her own order", "anonymous role is explicitly declared"],
+      "expected_evidence": ["same concrete owner-tagged object ID returned to anonymous role"],
+      "expected": "vulnerable",
+      "gold_source": "tests/fixtures/assessment_benchmark_app.py: intentional unguarded GET /api/orders/{id}"
+    },
+    {
       "id": "fixture-bfla-role-crossing",
       "behavior": "A lower-privilege role receives the same protected reports as the admin control",
       "tool": "api_authz",
@@ -44,6 +55,28 @@
       "expected_evidence": ["secret-like assignment key names are reported", "fixture values are absent from output"],
       "expected": "vulnerable",
       "gold_source": "tests/fixtures/assessment_benchmark_app.py: intentional fake /.env route"
+    },
+    {
+      "id": "fixture-path-traversal",
+      "behavior": "A download parameter reads a virtual passwd file outside its intended resource directory",
+      "tool": "web_lfi",
+      "role": "anonymous",
+      "configuration": "loopback-only-fixture",
+      "preconditions": ["the fixture maps traversal probes to a fake in-memory file; host files are never read"],
+      "expected_evidence": ["passwd signature appears only on traversal payloads and not baseline"],
+      "expected": "vulnerable",
+      "gold_source": "tests/fixtures/assessment_benchmark_app.py: virtual /download path-traversal oracle"
+    },
+    {
+      "id": "fixture-ssrf-loopback-fetch",
+      "behavior": "A fetch parameter retrieves controlled content from a local-only mock internal resource",
+      "tool": "web_ssrf",
+      "role": "anonymous",
+      "configuration": "loopback-only-fixture",
+      "preconditions": ["the fixture returns an nginx canary only for loopback URL inputs and performs no outbound request"],
+      "expected_evidence": ["new nginx response marker absent from baseline and not reflected from the URL payload"],
+      "expected": "vulnerable",
+      "gold_source": "tests/fixtures/assessment_benchmark_app.py: controlled /fetch localhost marker"
     },
     {
       "id": "fixture-workflow-repeat-coupon-impact",

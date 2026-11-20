@@ -1,9 +1,10 @@
 {
   "schema_version": 1,
+  "assessment_profile": "core_web_api_v1",
   "engagement": "replace-with-engagement-label",
   "scope": {
     "origins": ["https://app.example.test"],
-    "request_budget": 40,
+    "request_budget": 2500,
     "allow_state_changes": false
   },
   "targets": [
@@ -12,21 +13,45 @@
       "url": "https://app.example.test/",
       "roles": [
         {"name": "anonymous"},
-        {"name": "member", "credential_env": "APP_MEMBER_AUTHORIZATION", "credential_header": "Authorization"},
+        {"name": "user-a", "credential_env": "APP_USER_A_AUTHORIZATION", "credential_header": "Authorization"},
+        {"name": "user-b", "credential_env": "APP_USER_B_AUTHORIZATION", "credential_header": "Authorization"},
         {"name": "admin", "credential_env": "APP_ADMIN_AUTHORIZATION", "credential_header": "Authorization"}
       ]
     }
   ],
   "steps": [
-    {"id": "crawl", "tool": "web_crawl", "target": "app", "role": "anonymous", "max_requests": 20},
-    {"id": "sqli", "tool": "web_sqli", "target": "app", "role": "member",
-     "depends_on": ["crawl"], "max_requests": 20}
+    {"id": "crawl", "tool": "web_crawl", "target": "app", "role": "anonymous", "max_requests": 80},
+    {"id": "crawl-authenticated", "tool": "web_crawl", "target": "app", "role": "user-a", "max_requests": 80},
+    {"id": "exposure", "tool": "web_exposure", "target": "app", "role": "anonymous", "max_requests": 10},
+    {"id": "api-inventory", "tool": "api_discovery", "target": "app", "role": "anonymous", "max_requests": 200},
+    {"id": "sqli", "tool": "web_sqli", "target": "app", "role": "anonymous",
+     "depends_on": ["crawl"], "max_requests": 200},
+    {"id": "sqli-authenticated", "tool": "web_sqli", "target": "app", "role": "user-a",
+     "depends_on": ["crawl-authenticated"], "max_requests": 200},
+    {"id": "xss", "tool": "web_xss", "target": "app", "role": "anonymous",
+     "depends_on": ["crawl"], "max_requests": 150},
+    {"id": "xss-authenticated", "tool": "web_xss", "target": "app", "role": "user-a",
+     "depends_on": ["crawl-authenticated"], "max_requests": 150},
+    {"id": "lfi", "tool": "web_lfi", "target": "app", "role": "anonymous",
+     "depends_on": ["crawl"], "max_requests": 150},
+    {"id": "lfi-authenticated", "tool": "web_lfi", "target": "app", "role": "user-a",
+     "depends_on": ["crawl-authenticated"], "max_requests": 150},
+    {"id": "ssrf", "tool": "web_ssrf", "target": "app", "role": "anonymous",
+     "depends_on": ["crawl"], "max_requests": 250},
+    {"id": "ssrf-authenticated", "tool": "web_ssrf", "target": "app", "role": "user-a",
+     "depends_on": ["crawl-authenticated"], "max_requests": 250},
+    {"id": "browser", "tool": "web_browser", "target": "app", "role": "anonymous",
+     "depends_on": ["crawl"], "max_requests": 100, "max_pages": 10},
+    {"id": "browser-authenticated", "tool": "web_browser", "target": "app", "role": "user-a",
+     "depends_on": ["crawl-authenticated"], "max_requests": 100, "max_pages": 10},
+    {"id": "authorization", "tool": "api_authz", "target": "app", "role": "admin",
+     "depends_on": ["api-inventory"], "max_requests": 200}
   ],
   "authorization_matrices": [
     {
       "target": "app",
       "objects": [
-        {"id": "fixture-object-1", "owner_role": "member", "allowed_roles": ["member", "admin"]}
+        {"id": "fixture-object-1", "owner_role": "user-a", "allowed_roles": ["user-a", "admin"]}
       ]
     }
   ],

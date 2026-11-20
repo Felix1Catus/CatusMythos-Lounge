@@ -17,13 +17,16 @@ def test_local_benchmark_reports_detected_authz_workflow_and_clean_negative_cont
     assert report["benchmark"]["external_targets_contacted"] is False
     assert report["benchmark"]["detector_signals"] == {
         "bola_confirmed": True,
+        "anonymous_api_confirmed": True,
         "bfla_confirmed": True,
         "admin_negative_control_alerted": False,
         "sensitive_file_exposure_confirmed": True,
+        "path_traversal_confirmed": True,
+        "ssrf_confirmed": True,
         "workflow_impact_confirmed": True,
         "workflow_cleanup_reset": True,
     }
-    assert report["labeled_metrics"]["true_positive"] == 4
+    assert report["labeled_metrics"]["true_positive"] == 7
     assert report["labeled_metrics"]["false_negative"] == 0
     assert report["labeled_metrics"]["false_positive"] == 0
     assert report["labeled_metrics"]["true_negative"] == 1

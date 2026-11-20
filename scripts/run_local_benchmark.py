@@ -37,6 +37,8 @@ def run_benchmark():
     authz = _load("catus_local_benchmark_authz", authz_dir / "authz_tester.py", authz_dir)
     web_dir = ROOT / "skills" / "webapp-exploit-hunter" / "scripts"
     exposure = _load("catus_local_benchmark_exposure", web_dir / "exposure_tester.py", web_dir)
+    lfi = _load("catus_local_benchmark_lfi", web_dir / "lfi_tester.py", web_dir)
+    ssrf = _load("catus_local_benchmark_ssrf", web_dir / "ssrf_tester.py", web_dir)
     scenario_path = web_dir / "business_scenario.py"
     business_scenario = _load("catus_local_benchmark_scenario", scenario_path, web_dir)
     campaign_path = ROOT / "scripts" / "assessment_campaign.py"
@@ -48,11 +50,15 @@ def run_benchmark():
     base = "http://127.0.0.1:{}".format(server.server_port)
     try:
         roles = authz.build_role_matrix([
-            ("alice", "alice"), ("member", "member"), ("admin", "admin")])
+            ("anonymous", ""), ("alice", "alice"),
+            ("member", "member"), ("admin", "admin")])
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             bola = authz.test_bola_matrix(
                 base, [{"path": "/api/orders", "url": base + "/api/orders"}], roles, delay=0)
             bfla = authz.test_bfla_matrix(base, roles, delay=0)
+            lfi_findings = lfi.test_lfi(base + "/download?file=report.txt", "file", delay=0)
+            ssrf_findings = ssrf.test_ssrf(
+                base + "/fetch?url=https%3A%2F%2Fexample.invalid", "url", delay=0)
 
         scenario = {
             "version": 1,
@@ -93,6 +99,9 @@ def run_benchmark():
 
         confirmed_bola = any(item.get("type") == "bola" and item.get("validated") is True
                              for item in bola)
+        confirmed_anonymous_api = any(item.get("type") == "bola" and item.get("validated") is True
+                                      and item.get("accessing_role") == "anonymous"
+                                      for item in bola)
         confirmed_bfla = any(item.get("type") == "bfla" and item.get("validated") is True
                              for item in bfla)
         admin_lower_alert = any(item.get("path") == "/api/admin" and
@@ -102,6 +111,10 @@ def run_benchmark():
         confirmed_exposure = any(item.get("type") == "exposed_secret_configuration"
                                  and item.get("validated") is True
                                  for item in exposure_result["findings"])
+        confirmed_lfi = any(item.get("type") == "lfi" for item in lfi_findings)
+        confirmed_ssrf = any(item.get("type") == "ssrf"
+                             and item.get("confirmed_against_baseline") is True
+                             for item in ssrf_findings)
 
         results = [
             {"case_id": "fixture-bola-cross-role",
@@ -109,6 +122,11 @@ def run_benchmark():
              "evidence_review": {"schema_version": 1, "assessment_state": "confirmed",
                                  "proof_checks": {"complete": True}}
              if confirmed_bola else None},
+            {"case_id": "fixture-anonymous-api-object-disclosure",
+             "status": "confirmed" if confirmed_anonymous_api else "tested_negative",
+             "evidence_review": {"schema_version": 1, "assessment_state": "confirmed",
+                                 "proof_checks": {"complete": True}}
+             if confirmed_anonymous_api else None},
             {"case_id": "fixture-bfla-role-crossing",
              "status": "confirmed" if confirmed_bfla else "tested_negative",
              "evidence_review": {"schema_version": 1, "assessment_state": "confirmed",
@@ -124,6 +142,16 @@ def run_benchmark():
              "evidence_review": {"schema_version": 1, "assessment_state": "confirmed",
                                  "proof_checks": {"complete": True}}
              if confirmed_exposure else None},
+            {"case_id": "fixture-path-traversal",
+             "status": "confirmed" if confirmed_lfi else "tested_negative",
+             "evidence_review": {"schema_version": 1, "assessment_state": "confirmed",
+                                 "proof_checks": {"complete": True}}
+             if confirmed_lfi else None},
+            {"case_id": "fixture-ssrf-loopback-fetch",
+             "status": "confirmed" if confirmed_ssrf else "tested_negative",
+             "evidence_review": {"schema_version": 1, "assessment_state": "confirmed",
+                                 "proof_checks": {"complete": True}}
+             if confirmed_ssrf else None},
             {"case_id": "fixture-workflow-repeat-coupon-impact",
              "status": "confirmed" if confirmed_workflow else "tested_negative",
              "evidence_review": {"schema_version": 1, "assessment_state": "confirmed",
@@ -134,13 +162,16 @@ def run_benchmark():
         manifest = campaign.load_coverage_manifest(json.loads(manifest_path.read_text(encoding="utf-8")))
         report = campaign.evaluate_coverage(manifest, results)
         report["benchmark"] = {
-            "name": "catus-local-authz-workflow-v2",
+            "name": "catus-local-core-web-api-v3",
             "target": "loopback-only ephemeral fixture",
             "external_targets_contacted": False,
             "detector_signals": {"bola_confirmed": confirmed_bola,
+                                 "anonymous_api_confirmed": confirmed_anonymous_api,
                                  "bfla_confirmed": confirmed_bfla,
                                  "admin_negative_control_alerted": admin_lower_alert,
                                  "sensitive_file_exposure_confirmed": confirmed_exposure,
+                                 "path_traversal_confirmed": confirmed_lfi,
+                                 "ssrf_confirmed": confirmed_ssrf,
                                  "workflow_impact_confirmed": confirmed_workflow,
                                  "workflow_cleanup_reset": server.state["coupon_count"] == 0},
             "note": "Small regression benchmark; not an internet-wide detection estimate.",

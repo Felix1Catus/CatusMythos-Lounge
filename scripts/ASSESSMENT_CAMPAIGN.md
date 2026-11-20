@@ -1,19 +1,52 @@
 # Assessment campaign v1
 
-`assessment_campaign.py` provides an offline campaign planner/result evaluator,
-bounded native adapters for an existing operator-authored business workflow,
-single-origin technology fingerprinting, and anonymous API discovery, plus a
-registered CLI runner for selected existing scanners.
-Planning and reporting never make network requests. An operator can review
+`assessment_campaign.py` provides planning, a registered core assessment runner,
+bounded native adapters for an operator-authored workflow, single-origin
+technology fingerprinting, anonymous API discovery, and result/coverage
+evaluation. Planning and report evaluation never make network requests; `assess`
+and the run commands do. An operator can review
 exact scope,
 roles, test order, state-change intent, cleanup, and request budget before
 explicitly executing a supported step.
+
+## Run the core assessment
+
+Start from [`doctrine/templates/ASSESSMENT_CAMPAIGN.json`](../doctrine/templates/ASSESSMENT_CAMPAIGN.json),
+edit the exact origins and test accounts, then put each credential in the named
+environment variable. The profile executes only listed, registered steps in
+dependency order; it does not invent scope or run unsupported tools. It writes
+per-tool artifacts in a sibling `_artifacts` directory and a summary that
+contains status/counts, not credential values or response bodies:
+
+```powershell
+python scripts/assessment_campaign.py assess `
+  --manifest targets/assessment/campaign.json `
+  --state-db targets/assessment/campaign.sqlite `
+  --campaign-id assessment-2026-11 `
+  --output targets/assessment/assessment.json
+```
+
+The default is OS network isolation. `--process-only` explicitly selects the
+weaker process-level gate and is intended for local loopback fixtures. A
+required step that is blocked, throttled, over budget, missing its input
+artifact, or fails makes the assessment `incomplete` and returns a nonzero
+status; this never means the target is safe. API authz uses `--role-env` so
+tokens come from environment variables rather than argv. Browser checks use
+their per-step request cap plus the campaign ledger and keep form writes off by
+default.
 
 ## Plan a campaign
 
 Create a JSON manifest with:
 
 - `schema_version: 1` and an engagement label.
+- Optional `assessment_profile: "core_web_api_v1"` enables the release-gated
+  core web/API coverage contract. Each target must declare anonymous plus at
+  least two credentialed roles; the profile requires crawl, exposure, API
+  inventory, SQLi, XSS, LFI, SSRF, browser, and authorization stages, with anonymous
+  and authenticated coverage for crawler/injection/browser stages. Missing
+  roles, browser dependencies, discovery artifacts, or credentials produce
+  `blocked`/`incomplete` results and a nonzero exit, never a clean result.
 - `scope.origins`: exact credential-free HTTP(S) origins.
 - `scope.request_budget`: sum of the maximum request allocations declared by
   the steps. `allow_state_changes` defaults to false.

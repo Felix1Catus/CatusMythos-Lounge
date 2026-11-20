@@ -1875,6 +1875,50 @@ class AuthzMatrixTests(unittest.TestCase):
             written = json.loads(output_path.read_text())
             self.assertEqual(written["meta"]["roles"], ["anonymous", "viewer", "admin"])
 
+    def test_cli_role_env_reads_tokens_without_serializing_them(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "authz.json"
+            argv = [
+                "authz_tester.py", "--api-base", "https://api.example.test",
+                "--role", "anonymous:", "--role-env", "viewer:VIEWER_AUTH_TOKEN",
+                "--role-env", "admin:ADMIN_AUTH_TOKEN", "--output", str(output_path),
+            ]
+            environment = {"VIEWER_AUTH_TOKEN": "viewer-secret-fixture",
+                           "ADMIN_AUTH_TOKEN": "admin-secret-fixture"}
+            with ExitStack() as stack:
+                stack.enter_context(patch.dict(os.environ, environment, clear=False))
+                stack.enter_context(patch.object(sys, "argv", argv))
+                bola = stack.enter_context(patch.object(authz_tester, "test_bola_matrix", return_value=[]))
+                stack.enter_context(patch.object(authz_tester, "test_bfla_matrix", return_value=[]))
+                authz_tester.main()
+            roles = bola.call_args.args[2]
+            self.assertEqual([role["name"] for role in roles], ["anonymous", "viewer", "admin"])
+            self.assertEqual(roles[1]["headers"]["Authorization"], "Bearer viewer-secret-fixture")
+            written = output_path.read_text(encoding="utf-8")
+            self.assertNotIn("viewer-secret-fixture", written)
+            self.assertNotIn("admin-secret-fixture", written)
+
+    def test_cli_role_env_supports_cookie_credentials_without_serializing_them(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "authz-cookie.json"
+            argv = ["authz_tester.py", "--api-base", "https://api.example.test",
+                    "--role-env", "user-a:Cookie:USER_A_COOKIE",
+                    "--role-env", "user-b:Cookie:USER_B_COOKIE",
+                    "--output", str(output_path)]
+            with ExitStack() as stack:
+                stack.enter_context(patch.dict(os.environ, {
+                    "USER_A_COOKIE": "session=secret-a", "USER_B_COOKIE": "session=secret-b"}))
+                stack.enter_context(patch.object(sys, "argv", argv))
+                bola = stack.enter_context(patch.object(authz_tester, "test_bola_matrix", return_value=[]))
+                stack.enter_context(patch.object(authz_tester, "test_bfla_matrix", return_value=[]))
+                authz_tester.main()
+            roles = bola.call_args.args[2]
+            self.assertEqual(roles[0]["headers"]["Cookie"], "session=secret-a")
+            self.assertEqual(roles[1]["headers"]["Cookie"], "session=secret-b")
+            written = output_path.read_text(encoding="utf-8")
+            self.assertNotIn("secret-a", written)
+            self.assertNotIn("secret-b", written)
+
     def test_cli_token_mode_leaves_roles_empty_in_output(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             output_path = Path(temp_dir) / "authz.json"

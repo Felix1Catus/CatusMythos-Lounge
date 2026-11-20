@@ -34,6 +34,7 @@ def summarize_lab_artifacts(directory):
     xss = _read(directory / "dvwa-xss-campaign-findings.json")
     crapi_exposure = _read(directory / "crapi-exposure.json")
     juice_exposure = _read(directory / "juice-shop-exposure.json")
+    dvwa_browser = _read(directory / "dvwa-xss-browser.json")
 
     sqli_findings = [item for item in sqli.get("findings", [])
                      if isinstance(item, dict) and item.get("type") == "error_based_sqli"]
@@ -46,7 +47,9 @@ def summarize_lab_artifacts(directory):
     sqli_status, sqli_review = _status(bool(sqli_findings), vulnerable=True,
                                        detector_confirmed=bool(sqli_findings))
     xss_status, xss_review = _status(bool(xss_findings), vulnerable=True,
-                                     detector_confirmed=any(item.get("validated") is True for item in xss_findings))
+                                     detector_confirmed=any(item.get("type") == "dom_xss"
+                                                            and item.get("confidence") == "confirmed"
+                                                            for item in dvwa_browser.get("findings", [])))
     crapi_status, crapi_review = _status(bool(crapi_findings), vulnerable=True,
                                          detector_confirmed=bool(crapi_findings))
     juice_status, juice_review = _status(bool(juice_findings), vulnerable=False,
@@ -74,13 +77,15 @@ def summarize_lab_artifacts(directory):
         "dvwa": {"sql_parameters_tested": sqli.get("meta", {}).get("parameters_tested"),
                  "reported_error_based_findings": len(sqli_findings),
                  "xss_parameters_tested": xss.get("meta", {}).get("parameters_tested"),
-                 "xss_candidates": len(xss_findings)},
+                 "xss_candidates": len(xss_findings),
+                 "browser_xss_confirmed": any(item.get("type") == "dom_xss"
+                                               and item.get("confidence") == "confirmed"
+                                               for item in dvwa_browser.get("findings", []))},
         "crapi": {"sensitive_paths_tested": crapi_exposure.get("meta", {}).get("paths_tested"),
                   "verified_sensitive_file_findings": len(crapi_findings)},
         "juice_shop": {"sensitive_paths_tested": juice_exposure.get("meta", {}).get("paths_tested"),
                        "verified_sensitive_file_findings": len(juice_findings)},
-        "limitations": ["DVWA XSS needs browser execution proof and remains unresolved.",
-                        "The lab cases are narrow and do not estimate internet-wide recall."]
+        "limitations": ["The lab cases are narrow and do not estimate internet-wide recall."]
     }
     return report
 

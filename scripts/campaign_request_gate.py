@@ -247,6 +247,18 @@ def reserve_external_command_from_environment(command, *, shell=False):
     except (IndexError, TypeError):
         _mark_status("gate_errors")
         raise CampaignGateError("campaign gate blocks an invalid child process command")
+    browser_names = {"chrome", "chromium", "chrome-headless-shell", "headless_shell"}
+    normalized_path = values[0].replace("\\", "/").lower()
+    browser_gate = os.environ.get("CATUS_CAMPAIGN_GATE_BROWSER") == "1"
+    is_managed_browser = (browser_gate and executable in browser_names
+                          and "/ms-playwright/" in normalized_path)
+    is_playwright_driver = (browser_gate and executable == "node"
+                            and "/playwright/driver/node" in normalized_path)
+    if is_managed_browser or is_playwright_driver:
+        if shell:
+            _mark_status("gate_errors")
+            raise CampaignGateError("campaign browser adapter blocks shell execution")
+        return values
     if executable not in _KNOWN_NETWORK_EXECUTABLES:
         _mark_status("gate_errors")
         raise CampaignGateError(

@@ -11,6 +11,7 @@ import ipaddress
 import json
 import socket
 import subprocess
+import sys
 import urllib.request
 from urllib.parse import urlsplit
 
@@ -122,9 +123,10 @@ if (os.environ.get("CATUS_CAMPAIGN_GATE_DB")
             pass
     os.environ["CATUS_CAMPAIGN_GATE_ORIGIN_ADDRESSES"] = json.dumps(sorted(_origin_addresses))
 
-    def _deny_network_escape():
+    def _deny_network_escape(endpoint=None):
         _mark_status("off_origin_requests_blocked")
-        raise CampaignGateError("campaign socket guard blocked an unscoped network endpoint")
+        detail = "" if endpoint is None else " ({} )".format(endpoint)
+        raise CampaignGateError("campaign socket guard blocked an unscoped network endpoint" + detail)
 
     def _port_number(port):
         if port is None:
@@ -141,8 +143,24 @@ if (os.environ.get("CATUS_CAMPAIGN_GATE_DB")
         if not isinstance(address, tuple) or len(address) < 2:
             return
         host, port = address[0], _port_number(address[1])
+        # Windows Playwright's asyncio Proactor IPC uses a temporary loopback
+        # socketpair between the Python driver and its managed browser. Permit
+        # only loopback ephemeral ports in the explicit browser campaign mode;
+        # remote destinations and normal campaign processes remain denied.
+        if (os.environ.get("CATUS_CAMPAIGN_GATE_BROWSER") == "1" and protocol == "tcp"):
+            try:
+                if ipaddress.ip_address(_normalize_network_host(host)).is_loopback:
+                    frame = sys._getframe(1)
+                    for _ in range(16):
+                        if frame is None:
+                            break
+                        if frame.f_code.co_name in ("socketpair", "_make_self_pipe"):
+                            return
+                        frame = frame.f_back
+            except ValueError:
+                pass
         if port is None or not network_endpoint_is_scoped(host, port, protocol):
-            _deny_network_escape()
+            _deny_network_escape("{}:{}".format(host, port))
 
     def _guard_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
         try:
@@ -157,6 +175,11 @@ if (os.environ.get("CATUS_CAMPAIGN_GATE_DB")
         if not is_ip:
             requested_port = _port_number(port)
             protocol = "udp" if type == socket.SOCK_DGRAM else "tcp"
+            if (os.environ.get("CATUS_CAMPAIGN_GATE_BROWSER") == "1"
+                    and normalized in ("localhost", "localhost.localdomain")
+                    and requested_port is not None and requested_port >= 49152):
+                return _original_getaddrinfo(host, port, family or socket.AF_INET,
+                                             type, proto, flags)
             if normalized == _origin_host and (requested_port is None or requested_port == _origin_port):
                 addresses = _origin_addresses
             elif (requested_port is not None
@@ -166,7 +189,7 @@ if (os.environ.get("CATUS_CAMPAIGN_GATE_DB")
                 if not addresses:
                     return _original_getaddrinfo(host, port, family, type, proto, flags)
             else:
-                _deny_network_escape()
+                _deny_network_escape("{}:{}".format(normalized, requested_port))
             numeric_results = []
             for address in addresses:
                 try:

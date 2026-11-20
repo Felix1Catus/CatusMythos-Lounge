@@ -2,11 +2,14 @@
 
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlsplit
 
 
 class BenchmarkHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         role = self.headers.get("Authorization", "").removeprefix("Bearer ")
+        parsed = urlsplit(self.path)
+        query = parse_qs(parsed.query)
         if self.path == "/.env":
             body = b"DB_PASSWORD=fixture-not-a-real-secret\nAPI_TOKEN=fixture-token-value\n"
             self.send_response(200)
@@ -47,6 +50,30 @@ class BenchmarkHandler(BaseHTTPRequestHandler):
             return
         if self.path == "/cart":
             self._json(200, {"coupon_count": self.server.state["coupon_count"]})
+            return
+        if parsed.path == "/download":
+            requested = query.get("file", [""])[0].lower()
+            if "etc/passwd" in requested:
+                body = b"root:x:0:0:root:/root:/bin/bash\n"
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            else:
+                self._json(200, {"file": "not found"})
+            return
+        if parsed.path == "/fetch":
+            requested = query.get("url", [""])[0]
+            if "127.0.0.1" in requested or "localhost" in requested:
+                body = b"<html><title>nginx default internal status</title></html>"
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            else:
+                self._json(200, {"fetched": False})
             return
         self.send_error(404)
 

@@ -256,6 +256,8 @@ def execute_request(request):
                 for key in tuple(env):
                     if key.startswith("CATUS_CAMPAIGN_GATE_"):
                         env.pop(key, None)
+                if _selected["tool"] == "web_browser":
+                    env["CATUS_CAMPAIGN_GATE_BROWSER"] = "1"
                 env["CATUS_CAMPAIGN_GATE_ORIGIN_ADDRESSES"] = json.dumps(
                     address_map[urlsplit(_selected["origin"]).hostname])
                 env["CATUS_CAMPAIGN_GATE_ENDPOINT_ADDRESSES"] = json.dumps(address_map)

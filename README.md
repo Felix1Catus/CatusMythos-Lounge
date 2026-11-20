@@ -217,6 +217,33 @@ Or invoke the orchestrator for a full engagement:
 Use the swarm-operator agent to run a full assessment of target.com
 ```
 
+For a repeatable core web/API pass, create a campaign from
+[`doctrine/templates/ASSESSMENT_CAMPAIGN.json`](doctrine/templates/ASSESSMENT_CAMPAIGN.json),
+set any declared credential environment variables, and run:
+
+```bash
+python3 scripts/assessment_campaign.py assess \
+  --manifest targets/assessment/campaign.json \
+  --state-db targets/assessment/campaign.sqlite \
+  --campaign-id assessment-2026-11 \
+  --output targets/assessment/assessment.json
+```
+
+The report distinguishes completed coverage from blocked or incomplete checks;
+an incomplete scan is not a clean result. Browser checks require the managed
+Chromium preflight. See [campaign usage](scripts/ASSESSMENT_CAMPAIGN.md).
+
+The `core_web_api_v1` campaign profile is the release-gated web/API baseline.
+It requires anonymous and authenticated tests for crawling, injection, LFI,
+SSRF, and browser behavior, plus sensitive-file checks, API inventory, and
+authorization tests. Put disposable user credentials in the environment under
+the names in the manifest; never put tokens in manifest arguments. Missing
+accounts, preflight failures, request caps, or untested required stages make
+the assessment incomplete. Pull requests run the pinned DVWA, Juice Shop, and
+crAPI lab suite and fail unless all labeled positive cases are confirmed and
+all negative controls remain negative. This gate measures the pinned lab set;
+it is not a promise of universal detection on arbitrary applications.
+
 ## Local checks
 
 Run the focused stdlib regression tests and the cache auditor's offline

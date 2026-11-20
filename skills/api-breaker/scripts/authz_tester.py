@@ -679,6 +679,11 @@ def main():
              "Mutually exclusive with --token/--token-b.",
     )
     parser.add_argument(
+        "--role-env", action="append", default=[], metavar="NAME[:HEADER]:ENV_VAR",
+        help="N-role identity whose credential is read from ENV_VAR; optional HEADER defaults to Authorization. "
+             "The token is not placed in argv or report output.",
+    )
+    parser.add_argument(
         "--role-cookie", action="append", default=[], metavar="NAME:COOKIE",
         help="Session cookie for one named --role (repeatable). A role never inherits another "
              "role's cookie.",
@@ -717,6 +722,35 @@ def main():
             knowledge = module.KnowledgeStore(args.knowledge_db, args.engagement)
         except (ValueError, OSError, module.sqlite3.Error) as exc:
             parser.error(str(exc))
+
+    if args.role_env and (args.token or args.token_b):
+        parser.error("--role-env and --token/--token-b are mutually exclusive -- use one mode or the other")
+    env_roles = []
+    for entry in args.role_env:
+        pieces = entry.split(":", 2)
+        if len(pieces) == 2:
+            name, env_name = pieces
+            header = "Authorization"
+        elif len(pieces) == 3:
+            name, header, env_name = pieces
+        else:
+            parser.error("--role-env must use NAME:ENV_VAR or NAME:HEADER:ENV_VAR")
+        name, header, env_name = name.strip(), header.strip(), env_name.strip()
+        if (not re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{0,63}", name)
+                or not re.fullmatch(r"[!#$%&'*+.^_`|~0-9A-Za-z-]{1,128}", header)
+                or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,127}", env_name)):
+            parser.error("--role-env needs a valid role name, HTTP header, and environment variable name")
+        token = os.environ.get(env_name)
+        if not token:
+            parser.error("credential environment variable {} is unset or empty".format(env_name))
+        env_roles.append((name, header, token))
+    if len(args.role) + len(env_roles) > 32:
+        parser.error("the authorization matrix supports at most 32 roles")
+    if env_roles:
+        existing_names = {name for name, _token in args.role}
+        if existing_names.intersection(name for name, _header, _token in env_roles):
+            parser.error("role names declared by --role and --role-env must be unique")
+        args.role.extend((name, "") for name, _header, _token in env_roles)
 
     if args.role and (args.token or args.token_b):
         parser.error("--role and --token/--token-b are mutually exclusive -- use one mode or the other")
@@ -781,6 +815,14 @@ def main():
             role_cookies[name.strip()] = cookie.strip()
 
         roles = build_role_matrix(args.role, extra_headers=extra_headers, cookies=role_cookies)
+        for role in roles:
+            env_credential = next((item for item in env_roles if item[0] == role["name"]), None)
+            if env_credential:
+                _name, header, credential = env_credential
+                value = credential
+                if header.lower() == "authorization" and " " not in value:
+                    value = "Bearer " + value
+                role["headers"][header] = value
         role_names = [r["name"] for r in roles]
         log(f"Role matrix ({len(roles)} roles, lowest to highest privilege): {', '.join(role_names)}")
 

@@ -176,6 +176,24 @@ class CampaignRequestGateTests(unittest.TestCase):
         with self.assertRaisesRegex(gate.CampaignGateError, "whois adapter is unavailable"):
             gate.reserve_external_command_from_environment(["whois", "127.0.0.1"])
 
+    def test_campaign_browser_adapter_allows_only_managed_playwright_chromium(self):
+        gate = self._gate_module()
+        previous = os.environ.get("CATUS_CAMPAIGN_GATE_BROWSER")
+        os.environ["CATUS_CAMPAIGN_GATE_BROWSER"] = "1"
+        try:
+            allowed = ["/home/runner/.cache/ms-playwright/chromium-1234/chrome-linux/chrome",
+                       "--headless"]
+            self.assertEqual(gate.reserve_external_command_from_environment(allowed), allowed)
+            driver = ["/opt/venv/lib/python/site-packages/playwright/driver/node", "driver.js"]
+            self.assertEqual(gate.reserve_external_command_from_environment(driver), driver)
+            with self.assertRaisesRegex(gate.CampaignGateError, "without an explicit command adapter"):
+                gate.reserve_external_command_from_environment(["/usr/bin/chromium", "--headless"])
+        finally:
+            if previous is None:
+                os.environ.pop("CATUS_CAMPAIGN_GATE_BROWSER", None)
+            else:
+                os.environ["CATUS_CAMPAIGN_GATE_BROWSER"] = previous
+
     def test_python_child_blocks_external_network_binary_before_launch(self):
         env = os.environ.copy()
         env["PYTHONPATH"] = str(ROOT / "scripts") + os.pathsep + env.get("PYTHONPATH", "")

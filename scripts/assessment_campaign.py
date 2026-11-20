@@ -27,6 +27,7 @@ import urllib.request
 from urllib.parse import urlsplit
 
 SCHEMA_VERSION = 1
+ASSESSMENT_PROFILES = {"custom", "core_web_api_v1"}
 MAX_TARGETS = 100
 MAX_STEPS = 500
 MAX_REQUEST_BUDGET = 100000
@@ -45,10 +46,13 @@ TOOLS = {
     "api_authz": {"skill": "api-breaker", "stateful": False},
     "web_crawl": {"skill": "webapp-exploit-hunter", "stateful": False},
     "web_exposure": {"skill": "webapp-exploit-hunter", "stateful": False},
+    "web_lfi": {"skill": "webapp-exploit-hunter", "stateful": False},
+    "web_ssrf": {"skill": "webapp-exploit-hunter", "stateful": False},
     "web_sqli": {"skill": "webapp-exploit-hunter", "stateful": False},
     "web_xss": {"skill": "webapp-exploit-hunter", "stateful": False},
     "web_idor": {"skill": "webapp-exploit-hunter", "stateful": False},
     "web_dom_xss": {"skill": "webapp-exploit-hunter", "stateful": False},
+    "web_browser": {"skill": "webapp-exploit-hunter", "stateful": False},
     "web_cache": {"skill": "web-cache-auditor", "stateful": False},
     "llm_prompt_injection": {"skill": "16-ai-llm-security", "stateful": False},
     "llm_rag_security": {"skill": "16-ai-llm-security", "stateful": False},
@@ -68,10 +72,13 @@ TOOL_ENTRYPOINTS = {
     "cloud_detector": ("cloud-pivot-finder", "cloud_detector.py"),
     "web_crawl": ("webapp-exploit-hunter", "crawler.py"),
     "web_exposure": ("webapp-exploit-hunter", "exposure_tester.py"),
+    "web_lfi": ("webapp-exploit-hunter", "lfi_tester.py"),
+    "web_ssrf": ("webapp-exploit-hunter", "ssrf_tester.py"),
     "web_sqli": ("webapp-exploit-hunter", "sqli_tester.py"),
     "web_xss": ("webapp-exploit-hunter", "xss_tester.py"),
     "web_idor": ("webapp-exploit-hunter", "idor_tester.py"),
     "web_dom_xss": ("webapp-exploit-hunter", "dom_xss_auditor.py"),
+    "web_browser": ("webapp-exploit-hunter", "browser_security_auditor.py"),
     "web_cache": ("web-cache-auditor", "cache_audit.py"),
     "llm_prompt_injection": ("16-ai-llm-security", "prompt_injection_tester.py"),
     "llm_rag_security": ("16-ai-llm-security", "rag_security_tester.py"),
@@ -200,6 +207,9 @@ def validate_manifest(manifest):
     engagement = manifest.get("engagement")
     if not isinstance(engagement, str) or not engagement.strip() or len(engagement) > 120:
         raise CampaignError("engagement must be a nonempty label under 120 characters")
+    assessment_profile = manifest.get("assessment_profile", "custom")
+    if not isinstance(assessment_profile, str) or assessment_profile not in ASSESSMENT_PROFILES:
+        raise CampaignError("assessment_profile must be custom or core_web_api_v1")
 
     scope = manifest.get("scope")
     if not isinstance(scope, dict):
@@ -251,6 +261,13 @@ def validate_manifest(manifest):
         targets_by_id[target["id"]] = {"id": target["id"], "url": target["url"],
                                         "origin": origin, "roles": role_map}
 
+    if assessment_profile == "core_web_api_v1":
+        for target in targets_by_id.values():
+            credentials = [role for role in target["roles"].values() if role.get("credential_env")]
+            if "anonymous" not in target["roles"] or len(credentials) < 2:
+                raise CampaignError(
+                    "core_web_api_v1 requires an anonymous role and at least two credentialed test roles per target")
+
     steps = manifest.get("steps")
     if not isinstance(steps, list) or not steps or len(steps) > MAX_STEPS:
         raise CampaignError("steps must contain 1 to {} entries".format(MAX_STEPS))
@@ -278,10 +295,29 @@ def validate_manifest(manifest):
         if any(dep not in seen for dep in dependencies):
             raise CampaignError("step {} dependencies must refer to earlier steps".format(step_id))
         max_requests = _bounded_int(step.get("max_requests"), step_id + ".max_requests", 1, MAX_TOOL_REQUESTS)
+        required_step = step.get("required", True)
+        if not isinstance(required_step, bool):
+            raise CampaignError("step {} required must be boolean".format(step_id))
+        arguments = step.get("arguments", [])
+        if (not isinstance(arguments, list) or len(arguments) > 80
+                or any(not isinstance(value, str) or len(value) > 2048
+                       or "\x00" in value or "\r" in value or "\n" in value
+                       for value in arguments)):
+            raise CampaignError("step {} arguments must be a bounded list of single-line strings".format(step_id))
+        forbidden_arguments = {"--output", "-o", "--cookie", "--cookie-b", "--token",
+                               "--token-b", "--role", "--role-cookie", "--header",
+                               "--password", "--api-key", "--allow-mutation-write"}
+        if any(value.split("=", 1)[0] in forbidden_arguments for value in arguments):
+            raise CampaignError("step {} arguments contain an output or secret/write option; use the campaign role environment or scope gate".format(step_id))
         budget_used += max_requests
         if budget_used > request_budget:
             raise CampaignError("declared step budgets exceed scope.request_budget")
-        mode = "stateful" if TOOLS[tool]["stateful"] else "active"
+        step_mutations = step.get("allow_state_changes", False)
+        if not isinstance(step_mutations, bool):
+            raise CampaignError("step {} allow_state_changes must be boolean".format(step_id))
+        mode = "stateful" if TOOLS[tool]["stateful"] or step_mutations else "active"
+        if mode == "stateful" and not allow_mutations:
+            raise CampaignError("state-changing step {} requires scope.allow_state_changes".format(step_id))
         cleanup = step.get("cleanup", [])
         fixture_note = step.get("fixture_note")
         if mode == "stateful":
@@ -299,15 +335,17 @@ def validate_manifest(manifest):
                                             or len(manual_note) > 500):
                 raise CampaignError("manual_cleanup_note must be a short nonempty explanation")
             scenario_file = step.get("scenario_file")
-            if (not isinstance(scenario_file, str) or not scenario_file.strip()
+            if tool == "business_workflow" and (
+                    not isinstance(scenario_file, str) or not scenario_file.strip()
                     or Path(scenario_file).is_absolute() or ".." in Path(scenario_file).parts
                     or len(scenario_file) > 500):
-                raise CampaignError("stateful steps require a relative scenario_file without parent traversal")
+                raise CampaignError("stateful business_workflow steps require a relative scenario_file without parent traversal")
         elif cleanup or fixture_note:
             raise CampaignError("fixture and cleanup fields are reserved for stateful steps")
         planned.append({"id": step_id, "tool": tool, "skill": TOOLS[tool]["skill"],
                         "target": target_id, "origin": target["origin"], "role": role_name,
                         "depends_on": dependencies, "max_requests": max_requests,
+                        "required": required_step,
                         "mode": mode, "position": index + 1,
                         "status": "planned", "cleanup": cleanup if mode == "stateful" else [],
                         "fixture_note": fixture_note if mode == "stateful" else None,
@@ -328,6 +366,7 @@ def validate_manifest(manifest):
             raise CampaignError("invalid authorization matrix: {}".format(exc)) from exc
     context_assets = _validate_business_context(manifest.get("business_context"), normalized_origins)
     return {"schema_version": 1, "engagement": engagement.strip(),
+            "assessment_profile": assessment_profile,
             "scope": {"origins": normalized_origins, "request_budget": request_budget,
                       "declared_request_budget": budget_used, "allow_state_changes": allow_mutations,
                       "network_endpoints": network_endpoints},
@@ -1080,6 +1119,8 @@ def execute_registered_cli_step(manifest, step_id, confirm_target, state_databas
             "CATUS_CAMPAIGN_GATE_ORIGIN": selected["origin"],
             "CATUS_CAMPAIGN_GATE_STATUS": str(status_path),
         })
+        if selected["tool"] == "web_browser":
+            env["CATUS_CAMPAIGN_GATE_BROWSER"] = "1"
         existing_pythonpath = env.get("PYTHONPATH", "")
         env["PYTHONPATH"] = str(Path(__file__).resolve().parent) + (
             os.pathsep + existing_pythonpath if existing_pythonpath else "")
@@ -1196,6 +1237,270 @@ def _add_network_isolation_options(parser):
                         help="WSL distro used for OS isolation on Windows")
 
 
+def _assessment_tool_arguments(step, target, plan, artifacts, raw_step):
+    """Compile a manifest step into the fixed CLI's bounded core-profile argv."""
+    tool = step["tool"]
+    target_url = target["url"]
+    origin = target["origin"]
+    provided = list(raw_step.get("arguments", []))
+    def merged(defaults):
+        return defaults + provided
+    def role_credential_args(role_name):
+        role = next((item for item in target["roles"] if item["name"] == role_name), None)
+        if role is None or not role.get("credential_env"):
+            return []
+        env_name = role["credential_env"]
+        if not os.environ.get(env_name):
+            return None
+        header = role.get("credential_header", "")
+        if header.lower() == "cookie":
+            return ["--cookie-env", env_name]
+        return ["--header-env", header + ":" + env_name]
+
+    if tool == "web_crawl":
+        depth = _bounded_int(raw_step.get("depth", 2), "step.depth", 0, 3)
+        pages = _bounded_int(raw_step.get("max_pages", 25), "step.max_pages", 1, 200)
+        credentials = role_credential_args(step["role"])
+        return (merged(["--target", target_url, "--depth", str(depth), "--max-pages", str(pages)])
+                + credentials) if credentials is not None else None
+    if tool == "web_exposure":
+        return merged(["--target", origin])
+    if tool in ("web_sqli", "web_xss", "web_lfi", "web_ssrf"):
+        crawl = next((artifacts[dependency] for dependency in step["depends_on"]
+                      if dependency in artifacts and any(item["id"] == dependency
+                          and item["tool"] == "web_crawl" and item["target"] == step["target"]
+                          for item in plan["steps"])), None)
+        credentials = role_credential_args(step["role"])
+        defaults = ["--params", str(crawl)] + (["--skip-lfi-chains"] if tool == "web_lfi" else [])
+        return (merged(defaults) + credentials) if crawl and credentials is not None else None
+    if tool == "web_dom_xss":
+        return merged(["--target", target_url])
+    if tool == "web_browser":
+        if step["max_requests"] < 10:
+            return None
+        pages = _bounded_int(raw_step.get("max_pages", 10), "step.max_pages", 1, 50)
+        requests = _bounded_int(raw_step.get("browser_request_budget", min(step["max_requests"], 1000)),
+                                "step.browser_request_budget", 10, 1000)
+        credentials = role_credential_args(step["role"])
+        return (merged(["--target", target_url, "--active", "--max-pages", str(pages),
+                        "--max-requests", str(requests)]) + credentials
+                if credentials is not None else None)
+    if tool == "web_idor":
+        api = next((artifacts[dependency] for dependency in step["depends_on"]
+                    if dependency in artifacts and any(item["id"] == dependency
+                        and item["tool"] == "api_discovery" and item["target"] == step["target"]
+                        for item in plan["steps"])), None)
+        return merged(["--target", origin, "--endpoints", str(api)]) if api else None
+    if tool == "api_authz":
+        api = next((artifacts[dependency] for dependency in step["depends_on"]
+                    if dependency in artifacts and any(item["id"] == dependency
+                        and item["tool"] == "api_discovery" and item["target"] == step["target"]
+                        for item in plan["steps"])), None)
+        if not api:
+            return None
+        args = ["--api-base", origin, "--input", str(api)]
+        roles = target.get("roles", [])
+        for role in roles:
+            if role["name"] == "anonymous":
+                args.extend(["--role", "anonymous:"])
+            elif role.get("credential_env"):
+                if role["credential_env"] not in os.environ:
+                    return None
+                args.extend(["--role-env", role["name"] + ":" + role.get("credential_header", "Authorization")
+                             + ":" + role["credential_env"]])
+        return merged(args) if len([arg for arg in args if arg == "--role-env"]) + args.count("--role") >= 2 else None
+    if tool == "web_cache":
+        return merged(["--target", origin])
+    return None
+
+
+def _run_assessment(manifest_path, state_database, campaign_id, output_path,
+                    process_only=False, distro="Ubuntu-24.04"):
+    """Execute the explicit registered steps in a campaign and summarize coverage.
+
+    Each child invocation reuses the same manifest and SQLite ledger. Scanner
+    outputs are written under a private run-artifact directory; the summary
+    contains only finding types/counts and execution state.
+    """
+    manifest = _read_json(manifest_path)
+    plan = validate_manifest(manifest)
+    targets = {item["id"]: item for item in plan["targets"]}
+    raw_steps = {item["id"]: item for item in manifest["steps"]}
+    output_path = Path(output_path).expanduser().resolve()
+    artifact_dir = output_path.parent / (output_path.stem + "_artifacts")
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    artifacts = {}
+    rows = []
+    status_by_step = {}
+    browser_required = any(step["tool"] == "web_browser" and step["required"]
+                           for step in plan["steps"])
+    browser_preflight = None
+    if browser_required:
+        bootstrap = Path(__file__).resolve().with_name("bootstrap.py")
+        try:
+            browser_preflight = subprocess.run(
+                [sys.executable, str(bootstrap), "--require-tool", "chromium"],
+                capture_output=True, text=True, check=False, timeout=900)
+        except (OSError, subprocess.TimeoutExpired):
+            browser_preflight = None
+
+    for step in plan["steps"]:
+        dependency_statuses = [status_by_step.get(dependency) for dependency in step["depends_on"]]
+        row = {"step_id": step["id"], "tool": step["tool"], "target": step["target"],
+               "role": step["role"], "required": step["required"]}
+        if any(status != "completed" for status in dependency_statuses):
+            row.update({"status": "blocked", "reason": "a required dependency did not complete"})
+            rows.append(row)
+            status_by_step[step["id"]] = "blocked"
+            continue
+
+        target = targets[step["target"]]
+        raw_step = raw_steps[step["id"]]
+        if step["tool"] == "web_browser" and (
+                browser_preflight is None or browser_preflight.returncode != 0):
+            row.update({"status": "blocked", "reason": "Chromium preflight failed or timed out"})
+            rows.append(row)
+            status_by_step[step["id"]] = "blocked"
+            continue
+        tool_args = _assessment_tool_arguments(step, target, plan, artifacts, raw_step)
+        if step["tool"] in TOOL_ENTRYPOINTS and tool_args is None:
+            row.update({"status": "blocked", "reason": "required discovery artifact or role credentials are unavailable"})
+            rows.append(row)
+            status_by_step[step["id"]] = "blocked"
+            continue
+        if step["tool"] not in TOOL_ENTRYPOINTS and step["tool"] not in (
+                "api_discovery", "tech_fingerprint", "business_workflow"):
+            row.update({"status": "blocked", "reason": "no executable adapter is registered for this step"})
+            rows.append(row)
+            status_by_step[step["id"]] = "blocked"
+            continue
+
+        artifact_path = artifact_dir / (step["id"] + ".json")
+        wrapper_path = artifact_dir / (step["id"] + ".execution.json")
+        if step["tool"] in TOOL_ENTRYPOINTS:
+            command = [sys.executable, str(Path(__file__).resolve()), "run-cli",
+                       "--manifest", str(Path(manifest_path).expanduser().resolve()),
+                       "--step", step["id"], "--confirm-target", step["origin"],
+                       "--state-db", str(Path(state_database).expanduser().resolve()),
+                       "--campaign-id", campaign_id, "--output", str(wrapper_path)]
+            browser_uses_context_gate = step["tool"] == "web_browser" and os.name == "nt"
+            if process_only or browser_uses_context_gate:
+                command.append("--process-only")
+            else:
+                command.extend(["--wsl-distro", distro])
+            command.extend(["--", *tool_args, "--output", str(artifact_path)])
+        else:
+            subcommand = "run-workflow" if step["tool"] == "business_workflow" else "run-step"
+            command = [sys.executable, str(Path(__file__).resolve()), subcommand,
+                       "--manifest", str(Path(manifest_path).expanduser().resolve()),
+                       "--step", step["id"], "--confirm-target", step["origin"],
+                       "--state-db", str(Path(state_database).expanduser().resolve()),
+                       "--campaign-id", campaign_id, "--output", str(wrapper_path)]
+            if process_only:
+                command.append("--process-only")
+            else:
+                command.extend(["--wsl-distro", distro])
+
+        try:
+            completed = subprocess.run(command, capture_output=True, text=True, check=False,
+                                       timeout=CLI_TIMEOUT_SECONDS + 660)
+        except (OSError, subprocess.TimeoutExpired):
+            completed = None
+        raw_result = {}
+        wrapper = {}
+        try:
+            if artifact_path.is_file():
+                raw_result = _read_json(artifact_path)
+            if wrapper_path.is_file():
+                wrapper = _read_json(wrapper_path)
+            elif step["tool"] not in TOOL_ENTRYPOINTS and artifact_path.is_file():
+                wrapper = raw_result
+        except CampaignError:
+            raw_result = {}
+            wrapper = {}
+        execution = wrapper.get("execution", {}) if isinstance(wrapper, dict) else {}
+        failure = (completed is None or completed.returncode != 0 or not artifact_path.is_file()
+                   or execution.get("return_code") not in (None, 0)
+                   or execution.get("timed_out") is True
+                   or execution.get("budget_exhausted") is True
+                   or execution.get("off_origin_requests_blocked") is True
+                   or execution.get("gate_errors") is True
+                   or execution.get("throttled") is True)
+        step_status = "failed" if failure else "completed"
+        status_by_step[step["id"]] = step_status
+        artifacts[step["id"]] = artifact_path
+        findings = raw_result.get("findings", []) if isinstance(raw_result, dict) else []
+        if not isinstance(findings, list):
+            findings = []
+        finding_types = sorted({item.get("type") for item in findings
+                                if isinstance(item, dict) and isinstance(item.get("type"), str)})
+        row.update({"status": step_status,
+                    "requests_sent": execution.get("requests_sent"),
+                    "request_budget": execution.get("request_budget", step["max_requests"]),
+                    "finding_count": len(findings), "finding_types": finding_types,
+                    "artifact": str(artifact_path.relative_to(artifact_dir.parent))})
+        if failure:
+            row["reason"] = "tool failed, was incomplete, or produced no result artifact"
+        rows.append(row)
+
+    if plan.get("assessment_profile") == "core_web_api_v1":
+        mandatory_tools = ("web_crawl", "web_exposure", "web_sqli", "web_xss",
+                           "web_lfi", "web_ssrf", "web_browser", "api_discovery", "api_authz")
+        two_phase_tools = ("web_crawl", "web_sqli", "web_xss", "web_lfi", "web_ssrf", "web_browser")
+        for target in plan["targets"]:
+            for tool in mandatory_tools:
+                matches = [step for step in plan["steps"]
+                           if step["target"] == target["id"] and step["tool"] == tool]
+                if not matches or all(not step["required"] for step in matches):
+                    rows.append({"step_id": "required:{}:{}".format(target["id"], tool),
+                                 "tool": tool, "target": target["id"], "role": "any",
+                                 "required": True, "status": "blocked",
+                                 "reason": "core_web_api_v1 requires this test stage"})
+                if tool in two_phase_tools:
+                    target_roles = {role["name"]: role for role in target["roles"]}
+                    role_sets = {
+                        "anonymous": any(step["role"] == "anonymous" and step["required"] for step in matches),
+                        "authenticated": any(step["role"] in target_roles
+                                             and target_roles[step["role"]].get("credential_env")
+                                             and step["required"] for step in matches),
+                    }
+                    for phase, present in role_sets.items():
+                        if not present:
+                            rows.append({"step_id": "required:{}:{}:{}".format(target["id"], tool, phase),
+                                         "tool": tool, "target": target["id"], "role": phase,
+                                         "required": True, "status": "blocked",
+                                         "reason": "core_web_api_v1 requires both anonymous and authenticated coverage"})
+
+    required = [row for row in rows if row["required"]]
+    incomplete = [row for row in required if row["status"] != "completed"]
+    finding_types = sorted({kind for row in rows for kind in row.get("finding_types", [])})
+    report = {
+        "schema_version": 1,
+        "campaign_id": campaign_id,
+        "engagement": plan["engagement"],
+        "scope": {"origins": plan["scope"]["origins"],
+                  "state_changes_authorized": plan["scope"]["allow_state_changes"]},
+        "assessment_profile": plan.get("assessment_profile", "custom"),
+        "preflight": {"browser": "passed" if browser_preflight and browser_preflight.returncode == 0
+                      else ("failed" if browser_required else "not_required")},
+        "status": "incomplete" if incomplete else "complete",
+        "security_conclusion": "incomplete" if incomplete else
+                               ("findings_reported" if finding_types else "no_confirmed_findings"),
+        "coverage": {"required_steps": len(required),
+                     "completed_required_steps": len(required) - len(incomplete),
+                     "incomplete_required_steps": len(incomplete)},
+        "steps": rows,
+        "finding_types": finding_types,
+        "artifacts_directory": str(artifact_dir),
+        "secrets_or_response_bodies_in_summary": False,
+        "limitations": ["A complete scan status is not a claim that the target is vulnerability-free.",
+                        "Unsupported, unconfigured, or unauthenticated stages remain blocked rather than passed."],
+    }
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(report, indent=2, allow_nan=False) + "\n", encoding="utf-8")
+    return report
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -1212,6 +1517,13 @@ def main(argv=None):
     prioritize.add_argument("--manifest", required=True, help="versioned coverage-case JSON")
     prioritize.add_argument("--results", required=True, help="JSON list of case_id/status results")
     prioritize.add_argument("--output", required=True)
+    assess = subparsers.add_parser(
+        "assess", help="run the declared, registered campaign steps and write a coverage-first summary")
+    assess.add_argument("--manifest", required=True)
+    assess.add_argument("--state-db", required=True)
+    assess.add_argument("--campaign-id", required=True)
+    assess.add_argument("--output", required=True, help="Sanitized assessment summary JSON")
+    _add_network_isolation_options(assess)
     authorization = subparsers.add_parser("authorization", help="evaluate role/object results from a campaign plan")
     authorization.add_argument("--plan", required=True)
     authorization.add_argument("--results", required=True, help="JSON list of role/object observations")
@@ -1268,6 +1580,15 @@ def main(argv=None):
     record.add_argument("--output", help="Optional JSON output path")
     args = parser.parse_args(argv)
     try:
+        if args.command == "assess":
+            summary = _run_assessment(args.manifest, args.state_db, args.campaign_id,
+                                      args.output, process_only=not args.wsl_netns,
+                                      distro=args.wsl_distro)
+            print(json.dumps({"status": "ok" if summary["status"] == "complete" else "incomplete",
+                              "assessment_status": summary["status"],
+                              "output": str(Path(args.output).resolve()),
+                              "coverage": summary["coverage"]}))
+            return 0 if summary["status"] == "complete" else 2
         if args.command in ("run-cli", "run-external", "run-workflow", "run-step") and args.wsl_netns:
             manifest = _read_json(args.manifest)
             plan = validate_manifest(manifest)
@@ -1303,6 +1624,31 @@ def main(argv=None):
                 tool_args = list(args.tool_args)
                 if tool_args and tool_args[0] == "--":
                     tool_args = tool_args[1:]
+                if args.command == "run-cli" and selected["tool"] == "api_authz":
+                    target = next(item for item in plan["targets"] if item["id"] == selected["target"])
+                    for role in target["roles"]:
+                        credential_name = role.get("credential_env")
+                        if credential_name and credential_name in os.environ:
+                            environment[credential_name] = os.environ[credential_name]
+                if args.command == "run-cli":
+                    index = 0
+                    while index < len(tool_args):
+                        flag = tool_args[index]
+                        if flag in ("--cookie-env", "--header-env", "--role-env"):
+                            if index + 1 >= len(tool_args):
+                                raise CampaignError("{} requires an environment-variable reference".format(flag))
+                            reference = tool_args[index + 1]
+                            env_name = reference.split(":")[-1] if flag in (
+                                "--header-env", "--role-env") else reference
+                            if not MAX_ENV.fullmatch(env_name):
+                                raise CampaignError("{} must reference a valid environment variable name".format(flag))
+                            value = os.environ.get(env_name)
+                            if not value:
+                                raise CampaignError("credential environment variable {} is unset or empty".format(env_name))
+                            environment[env_name] = value
+                            index += 2
+                        else:
+                            index += 1
             if args.command == "run-cli":
                 if selected["tool"] == "api_authz" and "--allow-mutation-write" in tool_args:
                     raise CampaignError("campaign run-cli does not enable mutation probes")

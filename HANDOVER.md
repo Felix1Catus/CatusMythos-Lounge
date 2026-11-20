@@ -4,7 +4,29 @@ Living status note for the ongoing CatusMythos-Lounge improvement work. Keep it
 current; it records what has and has **not** been deeply reviewed so later work
 doesn't mistake uneven coverage for uniform coverage.
 
-## 2026-11-18 addendum — three-lab benchmark and sensitive-file detector
+## 2026-11-19 addendum — release-gated core assessment in progress
+
+Added a `core_web_api_v1` profile to the campaign runner, including required
+anonymous/authenticated coverage, environment-backed API roles, browser
+preflight, artifact dependencies, request accounting, and incomplete status for
+blocked or failed required stages. Added `assess` as the natural-language/CLI
+entrypoint, plus a release gate that fails on unresolved positives, missed
+positives, or false confirmations. The swarm operator and README now route core
+web/API assessments through this runner.
+
+Added a pinned-lab PR workflow to run Windows/Linux regressions and DVWA,
+Juice Shop, crAPI, and loopback-fixture release tests on each pull request.
+The lab harness binds Docker ports to loopback, initializes disposable data,
+keeps auth values in environment/session state, and removes containers and
+volumes in cleanup. The pinned-lab CI harness ran successfully inside WSL and
+reports **12/12 cases passing** (10 positives and 2 negative controls): DVWA
+SQLi and browser-confirmed XSS, crAPI sensitive-file disclosure, Juice Shop
+SPA-fallback suppression, plus local BOLA, anonymous API disclosure, BFLA,
+path traversal, SSRF, and stateful workflow fixtures. Ruff, compileall,
+common-sync, CLI docs, and diff checks are clean. The first GitHub Actions run
+is still pending.
+
+## 2026-11-19 addendum — release-gated core assessment and lab refresh
 
 Added a bounded `web_exposure` campaign tool after the local crAPI run showed
 that crawl discovery surfaced `/.env` but did not verify its contents. The
@@ -22,20 +44,24 @@ saved, all lab containers and persistent volumes were stopped and removed;
 the WSL Docker package and image cache remain installed for future reruns.
 
 The DVWA low-security SQLi CLI reported one error-based finding across two
-parameters (32/80 campaign requests). The XSS CLI returned one reflected
-candidate, not a confirmed execution (2/80). Crawlers used 51/100 requests on
+parameters (32/80 campaign requests). Its reflected-XSS candidate was
+confirmed by the isolated browser canary (33 HTTP events / 4 active probes;
+the normal browser run also records static response headers). Crawlers used 51/100 requests on
 DVWA, 55/100 on Juice Shop, and 49/100 on crAPI. API discovery completed on
 crAPI at 72/120 requests with three anonymous routes; Juice Shop discovery
 reported 40 routes and four GraphQL endpoints but exhausted its 240-request
 cap, so it is partial. These inventory results are not vulnerability counts.
 
-The four-case cross-lab score is **2 confirmed true positives, 1 clean true
-negative, 0 false positives, 0 false negatives, and 1 unresolved positive**
-(DVWA XSS). The resolved subset shows 100% precision/recall, but one positive
-is unresolved and this small challenge set does not estimate real-world
-recall. Full suite: **978 tests + 143 subtests**. Ruff, compileall,
-common-sync, CLI-docs (**10 docs / 119 command references / 64 CLIs**), and
-`git diff --check` passed. No lab container remains running.
+The four-case cross-lab score is **3 confirmed true positives, 1 clean true
+negative, 0 false positives, 0 false negatives, and 0 unresolved positives**.
+This small challenge set does not estimate real-world recall. The campaign
+`assess` runner now performs the core stages from a manifest, charges one
+request ledger, blocks dependencies after failed prerequisites, and exits
+incomplete for missing/failed required checks. The authenticated phase uses
+environment-backed cookies/headers/API roles; core mode requires anonymous
+and authenticated coverage for crawler, SQLi, XSS, LFI, and browser checks.
+A release checker rejects candidate positives and false-confirmed negatives.
+Full suite and CI wiring remain in progress. No lab container remains running.
 
 ## 2026-11-18 addendum — application behavior handoff and test prioritization
 

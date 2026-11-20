@@ -1,14 +1,17 @@
 # Assessment benchmark fixtures
 
 `assessment_benchmark_app.py` binds only to `127.0.0.1` on an ephemeral port.
-It deliberately contains three labeled behaviors for regression testing:
+It deliberately contains labeled positive and negative behaviors for regression testing:
 
 | Case | Fixture behavior | Expected scanner result |
 | --- | --- | --- |
 | BOLA | `/api/orders/101` discloses the same owner-tagged object to lower roles | Validated BOLA when the returned object ID is reproduced across roles |
+| Anonymous API access | Anonymous identity can list and read an owner-tagged order | Validated BOLA to the explicit anonymous role |
 | BFLA positive | `/api/reports` returns the same structured privileged data to member-level and admin roles | Validated when the low role's JSON response matches the successful admin control |
 | BFLA negative control | `/api/admin` returns 403 to lower roles and protected JSON to admin | No lower-role finding |
 | Sensitive file | `/.env` returns a fake DB password/API token | Verified exposure; output retains key names only and redacts values |
+| Path traversal | `/download?file=` maps traversal to a fake in-memory passwd signature | Validated LFI signature; no host file is opened |
+| SSRF | `/fetch?url=` returns an nginx canary for loopback URLs | Validated fetch-specific response marker; fixture makes no outbound connection |
 | Stateful workflow | The same coupon can be applied twice; `/cart` exposes the resulting count | Automatically validated only after baseline count 1, misuse read-back count 2, and cleanup reset |
 
 `tests/test_assessment_benchmark_app.py` executes the repository's N-role authz
