@@ -110,6 +110,20 @@ class SessionViewTests(unittest.TestCase):
             log.with_suffix('.log.process.json').write_text(json.dumps({'state': 'running', 'pid': 100, 'started_at': 1}))
             self.assertEqual(view.sessions(root)[0]['state'], 'stale/unknown')
 
+    def test_quarantined_worker_is_flagged_not_shown_as_idle(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run = root / 'runs' / 'goal' / '1'
+            run.mkdir(parents=True)
+            log = run / 'author-0.log'
+            log.write_text('')
+            # A kill attempt that could not be confirmed leaves state
+            # 'quarantined' with no returncode (the process may still be
+            # alive) -- this must not fall through to the default 'waiting'.
+            log.with_suffix('.log.process.json').write_text(
+                json.dumps({'state': 'quarantined', 'pid': 100, 'returncode': None}))
+            self.assertEqual(view.sessions(root)[0]['state'], 'needs-attention')
+
     def test_structured_reviewer_result_without_text_is_completed(self):
         result = view.summarize([{'type': 'result', 'is_error': False, 'result': '',
                                  'structured_output': {'approved': True, 'findings': []}}])

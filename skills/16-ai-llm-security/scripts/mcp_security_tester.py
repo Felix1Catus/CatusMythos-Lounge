@@ -830,7 +830,7 @@ def _run_demo() -> int:
 # CLI
 # ---------------------------------------------------------------------------
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Authorized MCP (Model Context Protocol) server/agent security tester")
+    ap = argparse.ArgumentParser(description="Authorized MCP (Model Context Protocol) server/agent security tester", allow_abbrev=False)
     ap.add_argument("--url", help="Target MCP server JSON-RPC HTTP endpoint (live tools/list, serverInfo, and token-passthrough checks)")
     ap.add_argument("--tools-file", help="Local JSON file with a tools/list response, or a bare list of tool dicts "
                                            "(offline alternative to --url; takes priority if both are given)")

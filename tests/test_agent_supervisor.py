@@ -1,6 +1,7 @@
 """Offline supervisor regressions; Git integration uses disposable local repositories."""
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -86,6 +87,43 @@ class StoreTests(unittest.TestCase):
             self.store.checkpoint(self.owner, old, {'wrong': True}, 'done')
         with self.assertRaises(RuntimeError):
             self.store.pulse(self.owner, 120, old)
+
+    def test_recover_kills_a_still_running_worker_before_reassigning(self):
+        self.enqueue()
+        claimed = self.store.claim(self.owner, 120)
+        artifact = self.store.root / 'runs' / claimed['id'] / str(claimed['fence'])
+        artifact.mkdir(parents=True)
+        token = 'fixture-session-token'
+        environment = dict(os.environ, CATUS_WORKER_SESSION_TOKEN=token)
+        process = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], env=environment)
+        marker = artifact / 'author-0.log.process.json'
+        marker.write_text(json.dumps({'pid': process.pid, 'session_token': token, 'state': 'running'}),
+                          encoding='utf-8')
+        try:
+            self.store.recover(confirmed=True)
+            deadline = time.monotonic() + 10
+            while process.poll() is None and time.monotonic() < deadline:
+                time.sleep(0.2)
+            self.assertIsNotNone(process.poll(),
+                                 'recover() did not actually terminate the stale worker process')
+        finally:
+            if process.poll() is None:
+                process.kill()
+            process.wait(timeout=10)
+
+    @unittest.skipIf(sys.platform.startswith('win'), 'POSIX-only: identity check needs /proc/<pid>/environ')
+    def test_pid_matches_worker_rejects_a_reused_pid_with_the_wrong_identity(self):
+        process = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(5)'],
+                                   env=dict(os.environ, CATUS_WORKER_SESSION_TOKEN='the-real-worker'))
+        try:
+            self.assertTrue(sup.pid_matches_worker(process.pid, 'the-real-worker'))
+            # A stale marker naming the right PID but the WRONG session token
+            # must never be treated as a match -- that is exactly the
+            # PID-reuse scenario the token exists to catch.
+            self.assertFalse(sup.pid_matches_worker(process.pid, 'a-different-worker-entirely'))
+        finally:
+            process.kill()
+            process.wait(timeout=10)
 
     def test_expired_owner_is_not_automatically_replaced(self):
         self.enqueue()

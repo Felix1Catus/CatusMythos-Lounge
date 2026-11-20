@@ -306,7 +306,10 @@ def validate_manifest(manifest):
             raise CampaignError("step {} arguments must be a bounded list of single-line strings".format(step_id))
         forbidden_arguments = {"--output", "-o", "--cookie", "--cookie-b", "--token",
                                "--token-b", "--role", "--role-cookie", "--header",
-                               "--password", "--api-key", "--allow-mutation-write"}
+                               "--password", "--api-key", "--allow-mutation-write",
+                               "--target", "-t", "--api-base", "--domain", "-d",
+                               "--endpoints", "-e", "--url", "--allow-origin",
+                               "--allow-destination"}
         if any(value.split("=", 1)[0] in forbidden_arguments for value in arguments):
             raise CampaignError("step {} arguments contain an output or secret/write option; use the campaign role environment or scope gate".format(step_id))
         budget_used += max_requests

@@ -148,6 +148,19 @@ class TestContextualAssessment(unittest.TestCase):
         assessment = context.assess_chain_context(chain)
         self.assertEqual(assessment["contextual_severity"], "LOW")
 
+    def test_attached_context_without_host_falls_back_to_finding_url_with_query_string(self):
+        chain = dict(self.chain)
+        attached = profile("blog.example.test", service="Public blog", purpose="Public articles",
+                           criticality="low", sensitivity="public", scope="individual",
+                           evidence="Asset inventory confirms public-only content.")
+        del attached["host"]
+        chain["primary_finding"] = {
+            "id": "f1", "url": "https://blog.example.test/articles?id=5&utm_source=test",
+            "business_context": attached,
+        }
+        assessment = context.assess_chain_context(chain)
+        self.assertEqual(assessment["contextual_severity"], "LOW")
+
     def test_missing_context_is_explicit_and_does_not_infer_from_type(self):
         assessment = context.assess_chain_context(self.chain, technical_severity="MEDIUM")
         self.assertEqual(assessment["status"], "no_matching_context")

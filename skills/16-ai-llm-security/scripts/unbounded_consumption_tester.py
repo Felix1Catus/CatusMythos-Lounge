@@ -293,7 +293,7 @@ def _run_demo() -> int:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Authorized OWASP LLM10 (Unbounded Consumption) exposure checks")
+    ap = argparse.ArgumentParser(description="Authorized OWASP LLM10 (Unbounded Consumption) exposure checks", allow_abbrev=False)
     ap.add_argument("--url", help="Target chat/completions endpoint (POST JSON)")
     ap.add_argument("--field", default="message", help="JSON key for the user input")
     ap.add_argument("--header", action="append", default=[], help="Extra header 'K: V' (repeatable)")

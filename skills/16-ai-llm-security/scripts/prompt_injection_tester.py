@@ -383,7 +383,7 @@ def export_findings(results: list[dict], url: str) -> list[dict]:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Authorized LLM prompt-injection tester")
+    ap = argparse.ArgumentParser(description="Authorized LLM prompt-injection tester", allow_abbrev=False)
     ap.add_argument("--url", help="Target chat endpoint (POST JSON)")
     ap.add_argument("--field", default="message", help="JSON key for the user input")
     ap.add_argument("--response-path", default="", help="Dotted path into JSON response, e.g. 'choices.0.message.content'")

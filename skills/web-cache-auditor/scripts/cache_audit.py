@@ -352,7 +352,8 @@ def _nonnegative_float(value):
 
 def _build_parser():
     parser = argparse.ArgumentParser(
-        description="Inspect HTTP cache signals and, optionally, probe inert unkeyed-input canaries."
+        description="Inspect HTTP cache signals and, optionally, probe inert unkeyed-input canaries.",
+        allow_abbrev=False,
     )
     parser.add_argument("--target", help="authorized absolute HTTP(S) URL; GET-only")
     parser.add_argument(

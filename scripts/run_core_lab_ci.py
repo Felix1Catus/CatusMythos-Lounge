@@ -26,17 +26,21 @@ DVWA_NAME = RESOURCE_PREFIX + "-dvwa"
 JUICE_NAME = RESOURCE_PREFIX + "-juice-shop"
 PINNED = json.loads((ROOT / "doctrine" / "benchmarks" / "lab-run-2026-11-18.json")
                    .read_text(encoding="utf-8"))
+def _pinned(repository, pinned_key):
+    return repository + "@" + PINNED["builds"]["crapi"][pinned_key].split("@", 1)[1]
+
+
 CRAPI_IMAGES = {
-    "crapi-identity": "crapi/crapi-identity@" + PINNED["builds"]["crapi"]["identity_image"].split("@", 1)[1],
-    "crapi-community": "crapi/crapi-community@sha256:8ba0c7eda86ae065a673f1fa554d0109a24f25c5a8d65097ae024e5ee715c54e",
-    "crapi-workshop": "crapi/crapi-workshop@" + PINNED["builds"]["crapi"]["workshop_image"].split("@", 1)[1],
-    "crapi-chatbot": "crapi/crapi-chatbot@sha256:36d274d54182a8baddba7ede17282035bb43ab9cb9cf87927e1fe7109901e0aa",
-    "crapi-web": "crapi/crapi-web@" + PINNED["builds"]["crapi"]["web_image"].split("@", 1)[1],
-    "api.mypremiumdealership.com": "crapi/gateway-service@sha256:97dade9daf0e758547b1686e2d3303c8c9b79838167f728a9211f0ee1f4622b0",
-    "postgresdb": "postgres@sha256:c0e9c0e9bac7e4c1834b698217a03ee5c708de30d313c84a506972de0e24b059",
-    "mongodb": "mongo@sha256:4be76f674fc4b27859816811b8baa3c51830eb1dbf4ca81a51e26b79edd662ef",
-    "chromadb": "chromadb/chroma@sha256:1e0b73a187a28757c572acba508c46f48c9e8b0acaf5c20e6d95cdedce1acdf6",
-    "mailhog": "crapi/mailhog@" + PINNED["builds"]["crapi"]["mailhog_image"].split("@", 1)[1],
+    "crapi-identity": _pinned("crapi/crapi-identity", "identity_image"),
+    "crapi-community": _pinned("crapi/crapi-community", "community_image"),
+    "crapi-workshop": _pinned("crapi/crapi-workshop", "workshop_image"),
+    "crapi-chatbot": _pinned("crapi/crapi-chatbot", "chatbot_image"),
+    "crapi-web": _pinned("crapi/crapi-web", "web_image"),
+    "api.mypremiumdealership.com": _pinned("crapi/gateway-service", "gateway_image"),
+    "postgresdb": _pinned("postgres", "postgres_image"),
+    "mongodb": _pinned("mongo", "mongodb_image"),
+    "chromadb": _pinned("chromadb/chroma", "chromadb_image"),
+    "mailhog": _pinned("crapi/mailhog", "mailhog_image"),
 }
 
 

@@ -372,7 +372,7 @@ def _extract_hosts_from_json(data):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Cloud Detector - orizon.one")
+    parser = argparse.ArgumentParser(description="Cloud Detector - orizon.one", allow_abbrev=False)
     parser.add_argument("--domain", "-d", help="Single domain to analyze")
     parser.add_argument("--input", "-i", help="File with hostnames (one per line) or recon JSON")
     parser.add_argument("--output", "-o", help="Output JSON file")

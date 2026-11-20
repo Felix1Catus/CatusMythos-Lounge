@@ -933,7 +933,7 @@ def _fetch_path(url: str, field: str, headers: dict, timeout: int, query: str, p
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Authorized RAG / vector-store security tester "
-                                               "(OWASP LLM08:2025-class checks)")
+                                               "(OWASP LLM08:2025-class checks)", allow_abbrev=False)
     ap.add_argument("--url", help="Target retrieval/chat endpoint (POST JSON)")
     ap.add_argument("--field", default="message", help="JSON key for the user input/query")
     ap.add_argument("--response-path", default="",

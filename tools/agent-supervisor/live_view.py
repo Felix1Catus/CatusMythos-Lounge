@@ -140,9 +140,20 @@ def sessions(root, goal=None):
                 continue
             process = read_json(log.with_suffix(log.suffix + '.process.json'))
             view['pid'] = process.get('pid')
-            view['state'] = ('running' if process.get('state') == 'running' else
-                             'needs-attention' if process.get('returncode') not in (None, 0) else
-                             view.get('result', 'completed' if process.get('returncode') == 0 else 'waiting'))
+            if process.get('state') == 'running':
+                view['state'] = 'running'
+            elif process.get('state') == 'quarantined':
+                # The supervisor tried to kill this process (see
+                # terminate_tree/kill_running_workers_for_task) but could
+                # not confirm it actually stopped. That is exactly the
+                # moment an operator needs a visible warning, not the
+                # default 'waiting' a quarantined-but-still-alive worker
+                # would otherwise fall into (its returncode stays None).
+                view['state'] = 'needs-attention'
+            elif process.get('returncode') not in (None, 0):
+                view['state'] = 'needs-attention'
+            else:
+                view['state'] = view.get('result', 'completed' if process.get('returncode') == 0 else 'waiting')
             view['started_at'] = process.get('started_at', log.stat().st_mtime)
             view['goal_status'] = goals.get(goal_id, {})
             if view['state'] == 'running' and time.time() - process.get('heartbeat_at', view['started_at']) > 10:

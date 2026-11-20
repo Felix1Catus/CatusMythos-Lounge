@@ -287,7 +287,7 @@ def _report(plan, steps, *, success, reason=None):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Guarded executor for redirect-into-allowlist -> SSRF chains")
+    parser = argparse.ArgumentParser(description="Guarded executor for redirect-into-allowlist -> SSRF chains", allow_abbrev=False)
     parser.add_argument("--plan", required=True, help="Operator-authored execution plan JSON")
     parser.add_argument("--execute", action="store_true", help="Send the two scoped GET requests; default is dry-run")
     parser.add_argument("--allow-origin", action="append", default=[], help="Explicit source origin; repeat for each endpoint")

@@ -124,5 +124,9 @@ def http_request(url, method="GET", headers=None, data=None, timeout=8):
     except urllib.error.HTTPError as e:
         body = e.read(32768).decode("utf-8", errors="replace") if hasattr(e, "read") else ""
         return e.code, dict(e.headers) if hasattr(e, "headers") else {}, body
-    except Exception:
+    except Exception as exc:
+        if os.environ.get("CATUS_CAMPAIGN_GATE_DB"):
+            from campaign_request_gate import CampaignGateError
+            if isinstance(exc, CampaignGateError):
+                raise
         return 0, {}, ""

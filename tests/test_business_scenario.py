@@ -49,6 +49,15 @@ def test_rejects_cross_origin_actions(path):
         business_scenario.validate_scenario(sample(path), "https://example.test", 20)
 
 
+def test_rejects_malformed_case_action_with_a_clean_error_not_a_crash():
+    scenario = sample()
+    scenario["cases"][0]["impact_assertions"] = [
+        {"pointer": "/coupon_count", "equals": 2, "safe_value": 1}]
+    scenario["cases"][0]["actions"][-1] = "not-an-action-object"
+    with pytest.raises(business_scenario.ScenarioError, match="case actions must be a list of objects"):
+        business_scenario.validate_scenario(scenario, "http://localhost")
+
+
 def test_rejects_missing_cleanup_and_fixture_note_for_writes():
     scenario = sample()
     scenario.pop("cleanup")

@@ -113,6 +113,21 @@ def _chain_items(chain):
     return items
 
 
+def _finding_host(item):
+    """Derive a bare host from a finding's domain/url for matching/defaulting.
+
+    A finding's own `url` commonly carries a path and query string (e.g.
+    `.../articles?id=5`); _host() deliberately rejects any value containing
+    one (it also validates explicit `host` fields, where a query string
+    indicates malformed data). Strip path/query/fragment here so a normal
+    finding URL still yields its host instead of being treated as invalid.
+    """
+    candidate = item.get("domain") or item.get("url")
+    if isinstance(candidate, str):
+        candidate = candidate.split("?", 1)[0].split("#", 1)[0]
+    return _host(candidate)
+
+
 def assess_chain_context(chain, *, business_context=None, technical_severity=""):
     """Assess business context without modifying or replacing technical CVSS."""
     records = []
@@ -120,7 +135,7 @@ def assess_chain_context(chain, *, business_context=None, technical_severity="")
         attached = item.get("business_context")
         if attached is None:
             continue
-        default_host = item.get("domain") or item.get("url")
+        default_host = _finding_host(item) or None
         attached_items = attached if isinstance(attached, list) else [attached]
         records.extend(_context_record(entry, default_host) for entry in attached_items)
     explicit = [] if business_context is None else business_context
@@ -131,8 +146,7 @@ def assess_chain_context(chain, *, business_context=None, technical_severity="")
     records.extend(_context_record(entry) for entry in explicit)
 
     affected_hosts = {
-        host for item in _chain_items(chain)
-        if (host := _host(item.get("domain") or item.get("url")))
+        host for item in _chain_items(chain) if (host := _finding_host(item))
     }
     matched = [record for record in records if record["host"] in affected_hosts]
     result = {

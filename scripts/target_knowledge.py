@@ -124,13 +124,17 @@ class KnowledgeStore:
         finally:
             db.close()
 
-    def observe(self, url, kind, key, value, source, confidence='observed', ttl=3600, context='', resource='/'):
+    def observe(self, url, kind, key, value, source, confidence='observed', ttl=None, context='', resource='/'):
         if kind not in KINDS or confidence not in CONFIDENCES:
             raise ValueError('unsupported knowledge kind or confidence')
+        if ttl is None:
+            ttl = MAX_TTL[kind]
         if not key or not source or not resource.startswith('/') or '?' in resource or '#' in resource:
             raise ValueError('key, source and an absolute resource path are required')
         if not math.isfinite(ttl) or ttl <= 0:
             raise ValueError('TTL must be finite and positive')
+        if ttl > MAX_TTL[kind]:
+            raise ValueError('TTL exceeds the {}s cap for kind {!r}'.format(MAX_TTL[kind], kind))
         encoded = json.dumps(value, sort_keys=True, allow_nan=False)
         if len(encoded.encode()) > 65536:
             raise ValueError('observation exceeds 64 KiB')
@@ -496,7 +500,7 @@ class KnowledgeStore:
         self.observe(url, 'technology', 'stack', {
             'technologies': result.get('technologies', []),
             'versioned_components': details.get('versioned_components', []),
-        }, 'recon-dominator/tech_fingerprint')
+        }, 'recon-dominator/tech_fingerprint', ttl=3600)
         if details.get('waf'):
             self.observe(url, 'waf', 'fingerprint', {'products': details['waf']},
                          'recon-dominator/tech_fingerprint')

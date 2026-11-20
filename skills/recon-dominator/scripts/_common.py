@@ -115,5 +115,9 @@ def http_get(url, timeout=15):
         with scoped_urlopen(req, timeout=timeout, context=ctx) as resp:
             return resp.read().decode("utf-8", errors="replace")
     except Exception as e:
+        if os.environ.get("CATUS_CAMPAIGN_GATE_DB"):
+            from campaign_request_gate import CampaignGateError
+            if isinstance(e, CampaignGateError):
+                raise
         warn(f"Request failed: {url} - {e}")
         return None

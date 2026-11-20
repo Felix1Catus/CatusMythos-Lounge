@@ -274,6 +274,15 @@ class Store:
     def recover(self, confirmed=False, retry=None):
         if not confirmed:
             raise ValueError('confirm all previous worker processes have stopped before recovery')
+        # Do not just trust the operator's confirmation: actively find and
+        # kill any worker process still recorded as running for a task about
+        # to be reassigned, before any lease changes hands. This runs
+        # outside the write transaction below since process termination has
+        # no rollback semantics and can be slow.
+        with self.db() as db:
+            running = db.execute("SELECT id, fence FROM tasks WHERE state='running'").fetchall()
+        for row in running:
+            kill_running_workers_for_task(self.root / 'runs' / row['id'] / str(row['fence']))
         with self.db() as db:
             db.execute('BEGIN IMMEDIATE')
             db.execute("UPDATE tasks SET state='attention',fence=fence+1,lease=0 WHERE state='running'")
@@ -402,6 +411,79 @@ def terminate_tree(process):
     except subprocess.TimeoutExpired:
         process.kill()
         process.wait(timeout=10)
+
+
+def kill_pid_tree(pid):
+    """Best-effort termination of a worker process this supervisor process
+    did not itself spawn (e.g. a prior, crashed supervisor's worker), given
+    only the bare PID recorded in its on-disk marker file."""
+    if os.name == 'nt':
+        subprocess.run(['taskkill', '/PID', str(pid), '/T', '/F'], capture_output=True, timeout=15)
+    else:
+        try:
+            os.killpg(pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+
+
+def pid_matches_worker(pid, session_token):
+    """Check whether `pid` is still the SAME process that was launched with
+    `session_token` in CATUS_WORKER_SESSION_TOKEN, not a later, unrelated
+    process the OS has reused that PID for.
+
+    POSIX can confirm this exactly via /proc/<pid>/environ. Windows has no
+    standard-library equivalent (no procfs, and reading another process's
+    environment block needs ctypes/psutil, which this module does not
+    depend on) -- there, this can only confirm the PID still names a live
+    process, not that it is still the expected one. Treat a Windows "yes"
+    as weaker evidence than a POSIX "yes".
+    """
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    if os.name == 'nt':
+        try:
+            result = subprocess.run(['tasklist', '/FI', 'PID eq {}'.format(pid), '/NH'],
+                                    capture_output=True, text=True, timeout=15)
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+        return str(pid) in result.stdout and 'No tasks' not in result.stdout
+    try:
+        with open('/proc/{}/environ'.format(pid), 'rb') as stream:
+            entries = stream.read().split(b'\x00')
+    except OSError:
+        return False
+    marker = 'CATUS_WORKER_SESSION_TOKEN={}'.format(session_token).encode('utf-8')
+    return marker in entries
+
+
+def kill_running_workers_for_task(artifact_dir):
+    """Scan a task attempt's artifact directory for every worker-process
+    marker still claiming state=='running', verify each PID is still the
+    expected process (see pid_matches_worker), and kill the ones that are.
+
+    Returns the list of PIDs that could not be confirmed stopped: either
+    pid_matches_worker said no evidence either way (process gone, or -- on
+    Windows only -- simply unconfirmable) in which case there is nothing to
+    kill and nothing to warn about, OR killing was attempted but the PID
+    still matches afterward (kill failed to take effect).
+    """
+    unresolved = []
+    directory = Path(artifact_dir)
+    if not directory.is_dir():
+        return unresolved
+    for marker in directory.glob('*.process.json'):
+        try:
+            metadata = json.loads(marker.read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(metadata, dict) or metadata.get('state') != 'running':
+            continue
+        pid = metadata.get('pid')
+        if pid_matches_worker(pid, metadata.get('session_token')):
+            kill_pid_tree(pid)
+            if pid_matches_worker(pid, metadata.get('session_token')):
+                unresolved.append(pid)
+    return unresolved
 
 
 def execute(argv, cwd, prompt, output, timeout, heartbeat):

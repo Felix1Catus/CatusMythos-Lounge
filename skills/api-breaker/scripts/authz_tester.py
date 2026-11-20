@@ -344,17 +344,28 @@ def test_bfla_matrix(base_url, roles, delay=0, allow_mutation_write=False, knowl
 
     for admin_path in ADMIN_PATTERNS:
         url = urllib.parse.urljoin(base_url, admin_path)
+        control_cache = {}
 
         for role in roles:
             if role["rank"] == max_rank:
                 continue  # the top-ranked role reaching its own admin surface is expected
 
             for method in methods_to_test:
-                control_status, _control_headers, control_body = http_request(
-                    url, method=method, headers=dict(admin_role["headers"]))
-                if knowledge is not None:
-                    knowledge.record_auth_outcome(url, admin_role["name"], control_status,
-                                                  admin_role["headers"], "api-breaker/authz_tester")
+                if method not in control_cache:
+                    # One control probe per (admin_path, method) is enough --
+                    # it depends only on those two things, not on which lower
+                    # role is being tested, so cache it instead of re-sending
+                    # an identical admin-role request for every role.
+                    control_status, _control_headers, control_body = http_request(
+                        url, method=method, headers=dict(admin_role["headers"]))
+                    if knowledge is not None:
+                        knowledge.record_auth_outcome(url, admin_role["name"], control_status,
+                                                      admin_role["headers"], "api-breaker/authz_tester")
+                    control_cache[method] = (control_status, control_body)
+                    if delay:
+                        time.sleep(delay)
+                control_status, control_body = control_cache[method]
+
                 data = None
                 req_headers = dict(role["headers"])
                 if method in ("POST", "PUT", "PATCH"):
@@ -661,8 +672,30 @@ def test_bfla(base_url, token, extra_headers=None, delay=0, allow_mutation_write
     return findings
 
 
+class _OrderedRoleAction(argparse.Action):
+    """Append to this flag's own list (unchanged behavior) while also
+    recording the entry's true position relative to the OTHER role flag.
+
+    argparse gives each `action="append"` flag its own list, so interleaving
+    --role and --role-env on the command line loses their relative order --
+    rank is purely list position (see build_role_matrix), so that silently
+    reorders the privilege matrix. Recording both flags' calls into one
+    shared, arrival-ordered list lets main() rebuild the operator's actual
+    intended order afterward.
+    """
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        items = getattr(namespace, self.dest)
+        items.append(values)
+        order = getattr(namespace, "role_order", None)
+        if order is None:
+            order = []
+            namespace.role_order = order
+        order.append((self.dest, values))
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Authorization Tester - orizon.one")
+    parser = argparse.ArgumentParser(description="Authorization Tester - orizon.one", allow_abbrev=False)
     parser.add_argument("--input", "-i", help="Input JSON from schema_builder.py or api_discovery.py")
     parser.add_argument("--output", "-o", help="Output JSON file")
     parser.add_argument("--token", help="User A auth token (2-role mode; omit when using --role)")
@@ -670,7 +703,7 @@ def main():
     parser.add_argument("--cookie", help="User A session cookie (2-role mode)")
     parser.add_argument("--cookie-b", help="User B session cookie (2-role mode; never reuses User A's cookie)")
     parser.add_argument(
-        "--role", action="append", type=parse_role, default=[], metavar="NAME:TOKEN",
+        "--role", action=_OrderedRoleAction, type=parse_role, default=[], metavar="NAME:TOKEN",
         help="N-role authorization matrix: repeat in ASCENDING privilege order, lowest first "
              "(e.g. --role anonymous: --role viewer:TOKEN1 --role admin:TOKEN2). An empty TOKEN "
              "declares an explicit anonymous role at that position. Needs at least 2 for BOLA "
@@ -679,7 +712,7 @@ def main():
              "Mutually exclusive with --token/--token-b.",
     )
     parser.add_argument(
-        "--role-env", action="append", default=[], metavar="NAME[:HEADER]:ENV_VAR",
+        "--role-env", action=_OrderedRoleAction, default=[], metavar="NAME[:HEADER]:ENV_VAR",
         help="N-role identity whose credential is read from ENV_VAR; optional HEADER defaults to Authorization. "
              "The token is not placed in argv or report output.",
     )
@@ -750,7 +783,17 @@ def main():
         existing_names = {name for name, _token in args.role}
         if existing_names.intersection(name for name, _header, _token in env_roles):
             parser.error("role names declared by --role and --role-env must be unique")
-        args.role.extend((name, "") for name, _header, _token in env_roles)
+        # Rebuild the role list in the order the operator actually typed
+        # --role/--role-env on the command line, not "all --role, then all
+        # --role-env" -- rank is list position, so this is the privilege
+        # order the matrix will test against.
+        args.role = []
+        for dest, value in getattr(args, "role_order", []):
+            if dest == "role":
+                args.role.append(value)
+            else:
+                name = value.split(":", 2)[0].strip()
+                args.role.append((name, ""))
 
     if args.role and (args.token or args.token_b):
         parser.error("--role and --token/--token-b are mutually exclusive -- use one mode or the other")
