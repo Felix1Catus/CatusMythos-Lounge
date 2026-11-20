@@ -123,19 +123,29 @@ protocols.
 
 ### Claude Code plugin
 
-The repository includes a native plugin manifest and marketplace catalog. Add
-the marketplace, install the plugin, then start a new session:
+This repository is packaged natively as a Claude Code plugin. From a shell,
+register its marketplace and install the plugin:
 
 ```bash
 claude plugin marketplace add Felix1Catus/CatusMythos-Lounge
 claude plugin install catusmythos-lounge@catusmythos-lounge-marketplace
 ```
 
+Alternatively, in a Claude Code session run:
+
+```text
+/plugin install catusmythos-lounge --marketplace Felix1Catus/CatusMythos-Lounge
+```
+
+Choose the install scope, then start or reload the session. See the
+[Claude Code plugin installation guide](https://code.claude.com/docs/en/plugins/install).
+
 ### Codex skills
 
-This repository's native plugin package is for Claude Code. Codex can load its
-skills from the standard project-local `.agents/skills/` directory. From the
-repository root in PowerShell:
+This repository does not currently include a native Codex plugin manifest.
+Codex can load its individual skills from the standard project-local
+`.agents/skills/` directory ([Codex skill installation reference](https://developers.openai.com/api/reference/cli)).
+From the repository root in PowerShell:
 
 ```powershell
 New-Item -ItemType Directory -Force .agents\skills | Out-Null
@@ -150,11 +160,12 @@ cp -R skills/. .agents/skills/
 ```
 
 Open the repository as the Codex project so its `scripts/`, `doctrine/`, and
-other shared files remain available, then start a new session. Codex discovers
-project skills under `.agents/skills/` ([Codex skill installation reference](https://developers.openai.com/api/reference/cli)).
-The existing skill instructions also use `CLAUDE_PLUGIN_ROOT` as the plugin
-root variable; set it to this checkout when running those instructions in
-Codex:
+other shared files remain available, then start a new session. For the full
+campaign CLI, run `scripts/assessment_campaign.py assess` from the repository
+root; copied skills alone do not install campaign infrastructure, hooks, or the
+`swarm-operator` agent entrypoint. Some bundled skill instructions still read
+`CLAUDE_PLUGIN_ROOT`; set it to this checkout when invoking those instructions
+from Codex:
 
 ```powershell
 $env:CLAUDE_PLUGIN_ROOT = (Resolve-Path .).Path
