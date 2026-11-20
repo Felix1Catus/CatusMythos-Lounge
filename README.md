@@ -1,12 +1,12 @@
 <p align="center">
   <h1 align="center">CatusMythos-Lounge</h1>
+  <p align="center">Created and maintained by <strong>Felix Catus</strong> (<a href="https://github.com/Felix1Catus">Felix1Catus</a>).</p>
   <p align="center">
-    <strong>A web, API, and cloud penetration-testing plugin for Claude Code — one recon-to-report pipeline, plus AI/LLM app security and PoC tooling.</strong>
+    <strong>A web, API, cloud, and AI/LLM security assessment toolkit with scoped scanners, campaign orchestration, and evidence-based reporting.</strong>
   </p>
   <p align="center">
     <img src="https://img.shields.io/badge/python-3.8+-blue.svg" alt="Python 3.8+">
     <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License: MIT">
-    <img src="https://img.shields.io/badge/Claude-Code-blueviolet.svg" alt="Claude Code">
     <img src="https://img.shields.io/badge/skills-10-orange.svg" alt="10 Skills">
     <img src="https://img.shields.io/badge/version-0.3.0-lightgrey.svg" alt="v0.3.0">
   </p>
@@ -21,10 +21,11 @@
 
 ## What this is
 
-CatusMythos-Lounge drives a full assessment of a web target — domain in,
-report out — through ten purpose-built skills and an orchestrator agent.
-It's stdlib-only (no `pip install` for the core pipeline), zero-config, and
-runs as a normal Claude Code plugin or skill set.
+CatusMythos-Lounge provides ten purpose-built security skills and a campaign
+runner for authorized web, API, and cloud assessments. Most command-line
+scanners use Python's standard library; browser-backed checks use Playwright
+and Chromium. Run a focused skill directly, or use a campaign manifest for
+scoped, budgeted testing with explicit coverage and incomplete-state reporting.
 
 - **A 6-stage pipeline**: recon → web/app exploitation → API testing →
   cloud pivoting → attack-path mapping → cross-finding correlation and
@@ -32,9 +33,8 @@ runs as a normal Claude Code plugin or skill set.
 - **Four specialist skills**: web-cache behavior auditing, HTTP/WebSocket
   protocol review, AI/LLM application security testing, and PoC/payload
   generation for turning a confirmed finding into a deliverable.
-- **Three ways to run it**: solo and sequential (default), a native
-  in-process multi-agent mode for partitionable surfaces, or a full
-  multi-seat "lounge" for true multi-model/multi-day engagements.
+- **Multiple operating modes**: run focused skills, use the campaign runner,
+  or coordinate a larger assessment through the orchestrator and lounge tools.
 - **A doctrine layer** underneath all three — evidence-first discipline,
   probe budgets, and report-only-when-real rules enforced regardless of
   which mode is running.
@@ -116,89 +116,55 @@ runs as a normal Claude Code plugin or skill set.
 | Lounge (multi-seat) | True multi-model or multi-day engagements | `lounge/seatlib.py` — claim/token/push coordination across independent processes, optionally different AI CLIs/accounts |
 
 A doctrine layer (`doctrine/`) enforces evidence-first discipline and probe
-budgets underneath all three modes — see `doctrine/CLAUDE_ENFORCEMENT.md`.
+budgets underneath all operating modes — see `doctrine/` for the policies and
+protocols.
 
 ## Installation
 
-### As a Claude Code plugin (recommended)
-
-```bash
-/plugin install catusmythos-lounge --marketplace Felix1Catus/CatusMythos-Lounge
-```
-
-Or as two steps:
-
-```bash
-claude plugin marketplace add Felix1Catus/CatusMythos-Lounge
-claude plugin install catusmythos-lounge@catusmythos-lounge-marketplace
-```
-
-### Skills only, without the plugin machinery
+Clone the repository and run the dependency preflight from its root:
 
 ```bash
 git clone https://github.com/Felix1Catus/CatusMythos-Lounge.git
 cd CatusMythos-Lounge
-
-mkdir -p ~/.claude/skills      # or .claude/skills for project-local
-cp -r skills/* ~/.claude/skills/
+python3 scripts/bootstrap.py --strict
 ```
 
-### Requirements
+The repository contains the `agents/`, `skills/`, and `scripts/` entrypoints.
+Load it with the plugin or skill mechanism supported by your agent host, or
+run the scripts directly. The strict preflight installs/verifies the complete
+managed tool stack and exits nonzero when a required dependency is unavailable.
 
-- Python 3.8+ (standard library only — no `pip install` needed for the
-  core pipeline)
-- Claude Code with skills support
-- Optional, for faster recon: `subfinder`, `httpx`, `puredns`, `naabu`,
-  `dig`, `whois`, `nmap`
-- Browser-backed testing: Playwright and its Chromium binary are managed by
-  the bootstrap.
-
-At session start, the plugin verifies and attempts to install missing Python
-dependencies, Chromium, Go, user-scoped Go recon tools, and the allowlisted
-system tools (`nmap`, `dig`, `whois`, and Perl). It uses package managers that
-are already installed: WinGet or Chocolatey on Windows, Homebrew on macOS, and
-apt, dnf, yum, or pacman on Linux. Installs are logged and noninteractive. A
-system manager may require administrator rights; if installation fails, the
-bootstrap reports the unresolved tools instead of treating them as ready.
-
-Before a full engagement, require the complete managed stack:
+For one focused task, use a smaller preflight instead of installing every
+optional recon tool:
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/bootstrap.py" --strict
+python3 scripts/bootstrap.py --require-tool chromium
+python3 scripts/bootstrap.py --require-python requests
 ```
 
-For a narrower task, require only its external tools or Python packages; the
-bootstrap installs those if missing and exits nonzero if they are still not
-available:
+Python scanner core uses the standard library; optional integrations need
+additional packages/tools. Browser checks require Playwright and Chromium.
+Faster recon may use `subfinder`, `httpx`, `puredns`, `naabu`, `dig`, `whois`,
+or `nmap`. The bootstrap uses package managers already installed on the host;
+system package installation may require administrator permission.
 
-```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/bootstrap.py" --require-tool dig --require-tool nmap
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/bootstrap.py" --require-python requests
-```
+`amass` remains manual until its installed CLI proves it can perform the
+required wordlist enumeration and produce structured results. See
+`scripts/bootstrap.py` for the current unblock criteria.
 
-If a Windows install adds a new directory to PATH, restart the parent
-PowerShell/terminal or desktop host, then Claude Code, and repeat the preflight
-before starting dependent checks. `amass` remains manual and is not in
-`GO_TOOLS`: v5 removed `enum`'s one-shot `-o`/`-json` output, and its
-database-readback CLI and wordlist brute-force behavior have shifted between
-v5.x releases. The bootstrap note records the exact reported behaviors and the
-unblock test: inspect the installed `amass --help` and `amass enum --help`,
-prove wordlist guesses on an owned-domain fixture, and prove structured output
-works before managing it automatically.
-
-HTTPS certificate verification is enabled by default. For an authorized
-target with a self-signed certificate, set `CATUS_INSECURE_TLS=1` in the
-process environment for that run; this disables certificate validation for
-the toolkit's HTTP probes and generated Python PoCs.
+HTTPS certificate checks are enabled by default. For an authorized
+self-signed target, set `CATUS_INSECURE_TLS=1` only for that run; this disables
+certificate validation for the toolkit's HTTP probes and generated Python
+PoCs.
 
 HTTP clients follow redirects only when scheme, host, and port stay the same.
 For an authorized target that redirects across origins (including HTTP to
-HTTPS), provide the final in-scope URL directly; the toolkit will not forward
-session headers to a different origin.
+HTTPS), supply the final in-scope URL directly; session headers are not
+forwarded to a different origin.
 
 ## Usage
 
-Talk to Claude naturally:
+Example requests for an agent host that has loaded these skills:
 
 ```
 Run full reconnaissance on target.com
@@ -211,15 +177,36 @@ Audit cache behavior on staging.example.com for unkeyed inputs
 Build a PoC for the file-upload RCE you just confirmed
 ```
 
-Or invoke the orchestrator for a full engagement:
+Or invoke the orchestrator agent for a full engagement:
 
 ```
-Use the swarm-operator agent to run a full assessment of target.com
+Run a full assessment of target.com with the swarm-operator agent
 ```
 
 For a repeatable core web/API pass, create a campaign from
 [`doctrine/templates/ASSESSMENT_CAMPAIGN.json`](doctrine/templates/ASSESSMENT_CAMPAIGN.json),
-set any declared credential environment variables, and run:
+then edit the engagement label, exact authorized origin, and role names. The
+template's credential fields are environment-variable **names**; put actual
+tokens/cookies in your shell or secret manager, never in the JSON file or
+scanner arguments. The core profile expects anonymous plus at least two
+credentialed identities, including the role ordering used by authorization
+checks.
+
+From the repository root:
+
+```bash
+mkdir -p targets/assessment
+cp doctrine/templates/ASSESSMENT_CAMPAIGN.json targets/assessment/campaign.json
+# Edit campaign.json to replace the example origin and engagement label.
+# Set APP_USER_A_AUTHORIZATION, APP_USER_B_AUTHORIZATION, and
+# APP_ADMIN_AUTHORIZATION in the current shell/secret manager first.
+python3 scripts/assessment_campaign.py plan \
+  --manifest targets/assessment/campaign.json \
+  --output targets/assessment/plan.json
+```
+
+Review the plan's origins, roles, dependencies, request budget, and
+state-change policy. Then execute:
 
 ```bash
 python3 scripts/assessment_campaign.py assess \
@@ -229,9 +216,15 @@ python3 scripts/assessment_campaign.py assess \
   --output targets/assessment/assessment.json
 ```
 
-The report distinguishes completed coverage from blocked or incomplete checks;
-an incomplete scan is not a clean result. Browser checks require the managed
-Chromium preflight. See [campaign usage](scripts/ASSESSMENT_CAMPAIGN.md).
+`assess` runs only the registered steps in the manifest and meters their
+requests in one local SQLite ledger. It writes a sanitized summary to
+`assessment.json` and per-tool JSON under `assessment_artifacts/`. Exit code
+`0` means all required steps completed; exit code `2` means a required step was
+blocked, failed, throttled, or incomplete. Incomplete is **not** a clean scan.
+The report shows which steps need credentials, input artifacts, or tools.
+Browser checks preflight Playwright/Chromium automatically. Active form writes
+remain off unless you explicitly opt into a scenario with scope authorization
+and cleanup. See [campaign usage](scripts/ASSESSMENT_CAMPAIGN.md).
 
 The `core_web_api_v1` campaign profile is the release-gated web/API baseline.
 It requires anonymous and authenticated tests for crawling, injection, LFI,
@@ -260,17 +253,18 @@ Optional contributor check (requires Ruff): `python3 -m ruff check .`.
 
 ## Status
 
-v0.3.0 — the nine automation skills provide stdlib-first scripts; the
-research-guided `web-protocol-auditor` adds a manual HTTP/WebSocket workflow
-for high-risk protocol cases. Each pipeline stage has had a research-driven
-depth pass with source notes (`research_notes/`, `reports/`). The regression
-suite covers cache auditing, DOM XSS source-to-sink leads, candidate-reporting
-semantics, and scoped API probes; a full end-to-end suite and a non-Claude
-engine variant are still future work.
+v0.3.0 — ten security skills, a campaign runner, and a pinned-lab release gate.
+The core web/API release profile covers anonymous and authenticated crawling,
+injection, LFI/path traversal, SSRF, browser checks, API inventory, and
+authorization. Each pull request runs the regression suite and the pinned
+DVWA/Juice Shop/crAPI lab matrix. Passing that labeled matrix is a reproducible
+baseline, not a guarantee that every vulnerability on an arbitrary target will
+be found.
 
 ## Credits
 
-CatusMythos-Lounge builds on prior work, used and adapted under MIT terms.
+CatusMythos-Lounge is created and maintained by **Felix Catus**. It builds on
+prior work used and adapted under their respective MIT terms.
 Full attribution and per-file provenance: [NOTICE.md](NOTICE.md),
 [CREDITS.md](CREDITS.md), [MERGE_MAP.md](MERGE_MAP.md).
 
